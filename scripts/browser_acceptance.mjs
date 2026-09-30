@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import net from 'node:net';
+import {isExpectedUnregisteredAccountTreeResponse, mayInitializeAccountTree} from './account_tree_acceptance.mjs';
 
 const timeoutMs = 20_000;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -125,7 +126,7 @@ async function main() {
   const options = args();
   activeOutDir = path.resolve(options.out);
   await fs.mkdir(activeOutDir, {recursive: true});
-  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], injectedSessionResponses: [], expectedPreAuth401: [], overflow: []};
+  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], injectedSessionResponses: [], expectedPreAuth401: [], expectedUnregisteredAccountTree: [], accountTreeFirstUse: null, overflow: []};
   const config = await privateConfig(options.config, options.caNickname);
   activeSecrets = [config.username, config.password].filter(Boolean);
   const chromePath = options.chrome || '/usr/bin/google-chrome';
@@ -152,8 +153,19 @@ async function main() {
   let cdp;
   let authenticated = false;
   const rowLoads = new Map();
+  const accountTreeRequests = new Map();
+  const pendingAccountTree404 = new Map();
+  const pendingIdentityResponses = new Map();
+  const pendingResponseBodyReads = new Set();
   const injectedNetworkIds = new Set();
   let injectedStatus = 0;
+  let desktopIdentity;
+  const bootstrapRequests = [];
+  const trackResponseBodyRead = promise => {
+    let tracked;
+    tracked = promise.finally(() => pendingResponseBodyReads.delete(tracked));
+    pendingResponseBodyReads.add(tracked);
+  };
   const report = activeReport;
   const redact = value => [config.username, config.password].filter(Boolean).reduce((text, secret) => text.replaceAll(secret, '[redacted]'), safeText(value));
   const check = (name, passed, detail = '') => report.checks.push({name, passed, ...(detail ? {detail: safeText(detail)} : {})});
@@ -173,14 +185,25 @@ async function main() {
     cdp.on('Runtime.exceptionThrown', event => report.pageExceptions.push(redact(event.exceptionDetails?.text || 'Uncaught page exception')));
     cdp.on('Network.requestWillBeSent', event => {
       const url = new URL(event.request.url);
+      if (url.pathname === '/api/v1/auth/accounts') accountTreeRequests.set(event.requestId, event.request.method);
       if (/\/api\/v1\/tables\/[^/]+\/rows$/.test(url.pathname)) {
         rowLoads.set(event.requestId, {path: url.pathname, done: false, status: null});
+      }
+      if (url.pathname === '/api/v1/auth/accounts/bootstrap') {
+        bootstrapRequests.push({method: event.request.method, url: url.pathname});
       }
     });
     cdp.on('Network.responseReceived', event => {
       const url = new URL(event.response.url);
       const rowLoad = rowLoads.get(event.requestId);
       if (rowLoad) rowLoad.status = event.response.status;
+      if (url.pathname === '/api/v1/auth/accounts' && event.response.status === 404 && accountTreeRequests.get(event.requestId) === 'GET') {
+        pendingAccountTree404.set(event.requestId, {method: 'GET', status: event.response.status, url: url.pathname});
+        return;
+      }
+      if (url.pathname === '/api/v1/users/me' && event.response.status < 400) {
+        pendingIdentityResponses.set(event.requestId, url.pathname);
+      }
       if (event.response.status === 401 && url.pathname === '/api/v1/auth/session/token' && !authenticated) {
         report.expectedPreAuth401.push({status: 401, url: url.pathname});
         return;
@@ -200,10 +223,37 @@ async function main() {
     cdp.on('Network.loadingFinished', event => {
       const rowLoad = rowLoads.get(event.requestId);
       if (rowLoad) rowLoad.done = true;
+      const accountTree404 = pendingAccountTree404.get(event.requestId);
+      if (accountTree404) {
+        pendingAccountTree404.delete(event.requestId);
+        trackResponseBody(cdp.call('Network.getResponseBody', {requestId: event.requestId}).then(response => {
+          const raw = response.base64Encoded ? Buffer.from(response.body, 'base64').toString('utf8') : response.body;
+          const payload = JSON.parse(raw);
+          if (isExpectedUnregisteredAccountTreeResponse(accountTree404.method, accountTree404.url, accountTree404.status, payload)) {
+            report.expectedUnregisteredAccountTree.push({method: accountTree404.method, status: accountTree404.status, code: payload.error.code, url: accountTree404.url});
+          } else {
+            report.httpErrors.push({status: accountTree404.status, url: accountTree404.url, code: safeText(payload?.error?.code || 'unrecognized account-tree response')});
+          }
+        }).catch(() => report.httpErrors.push({status: accountTree404.status, url: accountTree404.url, code: 'could not inspect response body'})));
+      }
+      if (pendingIdentityResponses.has(event.requestId)) {
+        pendingIdentityResponses.delete(event.requestId);
+        trackResponseBody(cdp.call('Network.getResponseBody', {requestId: event.requestId}).then(response => {
+          const raw = response.base64Encoded ? Buffer.from(response.body, 'base64').toString('utf8') : response.body;
+          const payload = JSON.parse(raw);
+          if (payload?.data?.kind && Array.isArray(payload.data.scopes)) desktopIdentity = payload.data;
+        }).catch(() => report.httpErrors.push({status: 200, url: '/api/v1/users/me', code: 'could not inspect identity response body'})));
+      }
     });
     cdp.on('Network.loadingFailed', event => {
       const rowLoad = rowLoads.get(event.requestId);
       if (rowLoad) {rowLoad.done = true; rowLoad.error = safeText(event.errorText);}
+      const accountTree404 = pendingAccountTree404.get(event.requestId);
+      if (accountTree404) {
+        pendingAccountTree404.delete(event.requestId);
+        report.httpErrors.push({status: accountTree404.status, url: accountTree404.url, code: 'response body unavailable'});
+      }
+      pendingIdentityResponses.delete(event.requestId);
     });
     await cdp.call('Page.enable');
     await cdp.call('Runtime.enable');
@@ -309,6 +359,28 @@ async function main() {
 
     await cdp.evaluate("[...document.querySelectorAll('button[title]')].find(e=>e.title==='系统设置')?.click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.settings-panel'))"), 'Settings page');
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.account-setup'))"), 'first-use account-tree setup state');
+    await waitFor(() => report.expectedUnregisteredAccountTree.length > 0 || report.httpErrors.some(item => item.url === '/api/v1/auth/accounts'), 'account-tree response classification');
+    const firstUseUI = await cdp.evaluate(`(()=>{const setup=document.querySelector('.account-setup');const text=setup?.innerText||'';const button=[...(setup?.querySelectorAll('button')||[])].find(e=>e.innerText.trim()==='初始化我的账号树');return {visible:Boolean(setup&&setup.getClientRects().length),heading:setup?.querySelector('h3')?.innerText.trim()||'',guidance:text.includes('当前登录身份尚未登记到受管账号树')&&text.includes('不会自动启用账号树或增加权限'),initializeButtonVisible:Boolean(button&&button.getClientRects().length),contactPromptVisible:text.includes('请联系具有桌面管理员权限的人工用户完成初始化'),raw404ErrorVisible:document.body.innerText.includes('account not registered')}})()`);
+    await waitFor(() => desktopIdentity !== undefined, '/users/me identity body inspection');
+    await waitFor(() => pendingResponseBodyReads.size === 0, 'first-use response body inspection');
+    const accountMayInitialize = mayInitializeAccountTree(desktopIdentity);
+    const recordedAccountTreeResponse = report.expectedUnregisteredAccountTree.at(-1) || null;
+    report.accountTreeFirstUse = {
+      response: recordedAccountTreeResponse,
+      setupVisible: firstUseUI.visible,
+      guidanceVisible: firstUseUI.guidance,
+      identityMayInitialize: accountMayInitialize,
+      initializeButtonVisible: firstUseUI.initializeButtonVisible,
+      contactPromptVisible: firstUseUI.contactPromptVisible,
+      bootstrapRequestCount: bootstrapRequests.length,
+    };
+    check('unregistered account-tree response recorded as expected', Boolean(recordedAccountTreeResponse), recordedAccountTreeResponse ? `${recordedAccountTreeResponse.status} ${recordedAccountTreeResponse.code}` : 'Expected GET /api/v1/auth/accounts to return 404 ACCOUNT_NOT_FOUND.');
+    check('first-use setup explanation visible without raw 404 error', firstUseUI.visible && firstUseUI.heading === '首次启用账号树' && firstUseUI.guidance && !firstUseUI.raw404ErrorVisible, firstUseUI.heading || 'Setup heading missing.');
+    check('initialization entry matches authenticated identity permissions', Boolean(desktopIdentity) && (accountMayInitialize ? firstUseUI.initializeButtonVisible && !firstUseUI.contactPromptVisible : !firstUseUI.initializeButtonVisible && firstUseUI.contactPromptVisible), desktopIdentity ? `eligible=${accountMayInitialize}` : 'Could not inspect /api/v1/users/me response.');
+    check('first-use browser check does not bootstrap or mutate the account tree', bootstrapRequests.length === 0, `${bootstrapRequests.length} bootstrap request(s) observed.`);
+    await measureOverflow('account-tree first-use setup');
+    await screenshot('06a-settings-account-tree-first-use.png');
     await clickTab('知识库 ACL');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.acl-manager'))"), 'ACL settings tab');
     await measureOverflow('ACL settings');
@@ -378,8 +450,9 @@ async function main() {
 
     check('browser console errors absent', report.consoleErrors.length === 0, `${report.consoleErrors.length} console error(s)`);
     check('uncaught page exceptions absent', report.pageExceptions.length === 0, `${report.pageExceptions.length} exception(s)`);
-    report.httpErrors = report.httpErrors.filter(item => !item.url.endsWith('/favicon.ico'));
-    check('HTTP error responses absent', report.httpErrors.length === 0, `${report.httpErrors.length} HTTP error response(s)`);
+    await waitFor(() => pendingResponseBodyReads.size === 0, 'final response body inspections');
+    report.httpErrors = report.httpErrors.filter(item => !(item.status === 404 && item.url === '/favicon.ico'));
+    check('unexpected HTTP error responses absent', report.httpErrors.length === 0, `${report.httpErrors.length} HTTP error response(s)`);
     report.state = report.checks.some(item => !item.passed) ? 'failed_checks' : 'completed';
     await fs.writeFile(path.join(outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, {mode: 0o600});
     process.stdout.write(JSON.stringify({state: report.state, screenshots: report.screenshots, checks: report.checks, report: path.join(outDir, 'report.json')}, null, 2) + '\n');
