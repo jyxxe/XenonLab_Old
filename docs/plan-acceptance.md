@@ -27,7 +27,7 @@
 | 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；协调器报告 `runtime/browser-private/issue41-results/report.json` 有 34+ 项真实 Chrome UI 检查。此证据覆盖 Issue #41 桌面路径，仍不等于本节所有 registry/API/security 条款都已验收。 |
 | 19 | OpenWebUI → XeLibrary Tool API | 部分实现 / 未做生产验收 | Tool Gateway 有 search/query/get 且转发用户 bearer；attachment/theorem/derive/proposal 工具缺少。 |
 | 20 | XeLibrary Catalog / Path API | 部分实现 / 未做生产验收 | 没有独立 path/catalog CRUD；路径是 table 的逻辑字段。 |
-| 21 | XeLibrary Table API | 部分实现 / 未做生产验收 | 建表、schema、move、list/get 已实现；新增管理员 + If-Match 保护的空表删除，并对行、附件、向量、索引任务和活动上传 fail closed。表统计等 API 仍缺，删除仅有本地隔离测试，未生产验收。 |
+| 21 | XeLibrary Table API | 部分实现 / 未做完整生产验收 | 建表、schema、move、list/get 已实现；管理员 + If-Match 保护的空表删除已随 `03adae4` 部署，并对行、附件、向量、索引任务和活动上传 fail closed。部署后已验证路由授权拦截与服务健康，但未用管理员身份实际删除隔离表。表统计等 API 仍缺。 |
 | 22 | XeLibrary Row API | 部分实现 / 未做生产验收 | 行 CRUD、分页、历史、restore、软删/管理员 purge 已实现。 |
 | 23 | XeLibrary Bulk API | 未实现 | 无通用 bulk insert/update/delete job API。 |
 | 24 | XeLibrary Import / Export API | 部分实现 / 未做生产验收 | 表导出/备份存在；用户导入与完整 import/export 契约缺失。 |
