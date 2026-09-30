@@ -1,123 +1,139 @@
-# 完整 Plan 验收追踪
+# 完整 Plan 逐章验收审计
 
-目标：上线完整 plan.md，不以现有 MVP 替代最终范围。
-用户已提供 Tunnel 并启用 xenon.jyxxe.com 单域名公网入口。
-本表覆盖全部编号章节；未逐项验收不表示没有实现，而表示证据不足以判定完整。
+> 审计基线：本 worktree 从 `16aa0d3` 建立；代码/文档逐项审阅于 2026-09-30。该表区分仓库证据与生产验收；除引用已有运行记录外，本轮没有访问生产服务或声称视觉/硬件验收。`部分实现` 不代表该章节完整达标。
 
-| 章节 | 要求 | 状态 | 证据 / 后续 |
-|---|---|---|---|
-| 0 | 项目摘要 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 1 | 固定硬件条件 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 2 | VM 规划 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 3 | SSD 与 HDD 布局 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 4 | 逻辑网络分区 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 5 | 逻辑组件关系 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 6 | 推荐代码仓库结构 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 7 | 初始技术栈 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 8 | `.xl` 文件格式 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 9 | XeLibrary 附件 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 10 | D100M-Embedding 固定参数 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 11 | Qwen3-VL-Embedding-2B 角色 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 12 | Chunk 设计 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 13 | 向量空间 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 14 | 默认查询策略 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 15 | 定理区数据模型 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 16 | API 总体规范 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 17 | 通用运维 API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 18 | Web-Server API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 19 | OpenWebUI → XeLibrary Tool API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 20 | XeLibrary Catalog / Path API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 21 | XeLibrary Table API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 22 | XeLibrary Row API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 23 | XeLibrary Bulk API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 24 | XeLibrary Import / Export API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 25 | XeLibrary Attachment API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 26 | XeLibrary Query DSL | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 27 | XeLibrary Query API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 28 | XeLibrary Search API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 29 | Search Result 统一返回字段 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 30 | XeLibrary Index API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 31 | XeLibrary Revision API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 32 | XeLibrary ACL API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 33 | XeLibrary Proposal API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 34 | Theorem API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 35 | Embedding API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 36 | Embedding 调度优先级 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 37 | HF-cache API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 38 | HF-cache 预测性 API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 39 | Library Agent API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 40 | Lean 验证接口 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 41 | LLM Gateway API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 42 | Network Server API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 43 | Forgejo 集成 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 44 | DevAgent API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 45 | 多 Agent 身份模型 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 46 | Deploy Gateway | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 47 | Deploy Lease API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 48 | Release API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 49 | Deployment API | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 50 | 部署状态机 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 51 | Deploy Gateway 内部执行 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 52 | `deployctl` CLI | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 53 | `xlctl` CLI | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 54 | `hf-cachectl` | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 55 | OpenWebUI 权限原则 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 56 | Web / iframe 安全 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 57 | 身份服务 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 58 | Secrets | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 59 | 审计 API / Audit Log | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 60 | Job API 统一规范 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 61 | Event / Webhook 设计 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 62 | Webhook 重试规则 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 63 | 监控 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 64 | 日志 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 65 | OpenTelemetry | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 66 | XeLibrary 内部一致性 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 67 | 删除语义 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 68 | 权限与向量查询 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 69 | fnOS 边界 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 70 | 备份 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 71 | XeLibrary 恢复顺序 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 72 | HF-cache 水位 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 73 | 开发权限 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 74 | Codex 开发规则 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 75 | Codex 发布规则 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 76 | OpenCode 角色 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 77 | 初始开发阶段 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 78 | Phase 1 — Repo / API Skeleton | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 79 | Phase 2 — XeLibrary Core | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 80 | Phase 3 — D100M Search | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 81 | Phase 4 — Qwen / Multimodal | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 82 | Phase 5 — Web / OpenWebUI | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 83 | Phase 6 — Library Agent | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 84 | Phase 7 — DevAgent | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 85 | Phase 8 — Deploy Gateway | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 86 | Phase 9 — HF-cache | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 87 | API 测试矩阵 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 88 | Query 测试 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 89 | D100M 评测 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 90 | API 稳定性 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 91 | OpenAPI | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 92 | API 客户端 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 93 | 数据 ID | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 94 | 时间 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 95 | 分页 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 96 | Rate Limit | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 97 | 上传限制 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 98 | 不允许的架构捷径 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 99 | V1 最低可用接口集合 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 100 | 推荐首批 Issues | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 101 | 初始 Codex 工作方式 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 102 | Definition of Done | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 103 | V1 成功标准 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 104 | 后续可扩展项 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
-| 105 | 最终架构原则 | 未逐项验收 | 需检查实现、生产状态与对应测试 |
+状态含义：`本地实现 / 测试通过 / 未发布` 为当前工作分支内证据；`部分实现` 表示代码只覆盖所述子集；`外部实测待证` 表示实现依赖 VM/PVE/存储/身份供应商等仓库外状态；`未实现` 表示代码库内缺少该能力。详细服务现状见 [implementation-status.md](implementation-status.md)，规则基线见 [plan.md](../plan.md) 与 [ADR](adr/)。
 
-## 当前推进
+| § | 章节 | 状态 | 源码/记录证据及实际缺口 |
+|---:|---|---|---|
+| 0 | 项目摘要 | 整体未达 V1 | 现有服务覆盖桌面、XeLibrary、D100M、网关、DevAgent 与 Deploy；《实施状态》声明 V1 未完成。 |
+| 1 | 固定硬件条件 | 外部实测待证 | 盘点与部署记录涉及 PVE，但仓库无当前硬件实测清单可证全项一致。 |
+| 2 | VM 规划 | 外部实测待证 | `infra/pve/desired-vms.json` 与部署记录覆盖部分 VM；不是计划中的完整 VM 拓扑。 |
+| 3 | SSD 与 HDD 布局 | 外部实测待证 | XeLibrary 备份/恢复脚本和 PVE 文档存在；盘/池水位与全部磁盘布局未自动验收。 |
+| 4 | 逻辑网络分区 | 外部实测待证 | 有 Network Server 防火墙配置与区间部署记录；计划四区隔离仍未逐条证明。 |
+| 5 | 逻辑组件关系 | 部分实现 / 未做生产验收 | 代码有 FastAPI 服务调用边界、Tool Gateway 与 Deploy Gateway；多项计划服务仍是 skeleton。 |
+| 6 | 推荐代码仓库结构 | 部分实现 / 未做生产验收 | 当前 Python package、React app、infra、docs、tests 可见；计划 package/service 布局未全部拆分。 |
+| 7 | 初始技术栈 | 部分实现 / 未做生产验收 | FastAPI/React/SQLite/OIDC 等已使用；PostgreSQL/Qdrant/异步队列等计划栈尚缺。 |
+| 8 | `.xl` 文件格式 | 部分实现 / 未做生产验收 | `xeonolab/library.py` 维护 SQLite `.xl` 文件、schema 与变更历史。 |
+| 9 | XeLibrary 附件 | 部分实现 / 未做生产验收 | 内容寻址对象、附件引用、上传/绑定/下载/备份路径在 `library.py` 与 `backup.py` 有实现。 |
+| 10 | D100M-Embedding 固定参数 | 部分实现 / 未做生产验收 | 真实 D100M 256D、token 上限、revision 与 CPU smoke 在 `embedding.py`/测试中实现。 |
+| 11 | Qwen3-VL-Embedding-2B 角色 | 部分实现 / 未做生产验收 | Qwen API 只报告 not_configured/503；没有模型 worker。 |
+| 12 | Chunk 设计 | 部分实现 / 未做生产验收 | `search.py` tokenizer-aware chunking 与 chunker 版本有测试；title 约定未落地。 |
+| 13 | 向量空间 | 部分实现 / 未做生产验收 | D100M 本地精确向量索引存在；计划中的多逻辑向量空间与 Qdrant 尚无。 |
+| 14 | 默认查询策略 | 部分实现 / 未做生产验收 | Fast semantic search 已实现且 ACL/行版本检查；quality 与 image 分支不可用。 |
+| 15 | 定理区数据模型 | 未实现 | 代码库没有 theorem 数据模型/API/Lean 验证器。 |
+| 16 | API 总体规范 | 部分实现 / 未做生产验收 | `common.py` 提供版本化 API、认证、request ID、错误格式、ETag；缺少完整兼容策略。 |
+| 17 | 通用运维 API | 部分实现 / 未做生产验收 | 四个运维端点由 `common.py` 提供；ready 目前只用可选 callable。 |
+| 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；前端实际视觉验收需独立结果。 |
+| 19 | OpenWebUI → XeLibrary Tool API | 部分实现 / 未做生产验收 | Tool Gateway 有 search/query/get 且转发用户 bearer；attachment/theorem/derive/proposal 工具缺少。 |
+| 20 | XeLibrary Catalog / Path API | 部分实现 / 未做生产验收 | 没有独立 path/catalog CRUD；路径是 table 的逻辑字段。 |
+| 21 | XeLibrary Table API | 部分实现 / 未做生产验收 | 建表、schema、move、list/get 实现；table delete/stats/API 全集不齐。 |
+| 22 | XeLibrary Row API | 部分实现 / 未做生产验收 | 行 CRUD、分页、历史、restore、软删/管理员 purge 已实现。 |
+| 23 | XeLibrary Bulk API | 未实现 | 无通用 bulk insert/update/delete job API。 |
+| 24 | XeLibrary Import / Export API | 部分实现 / 未做生产验收 | 表导出/备份存在；用户导入与完整 import/export 契约缺失。 |
+| 25 | XeLibrary Attachment API | 部分实现 / 未做生产验收 | 内容寻址上传、元数据、绑定解绑、ACL 保护存在；quarantine/scanning/预览隔离未有。 |
+| 26 | XeLibrary Query DSL | 部分实现 / 未做生产验收 | DSL parser/interpreter 有受限安全子集；EXISTS/SEARCH TEXT/HAS_ATTACHMENT/PATH_DEPTH 未实现。 |
+| 27 | XeLibrary Query API | 部分实现 / 未做生产验收 | 查询和 explain 可用；完整计划过滤、语义与异步 job 行为仍缺。 |
+| 28 | XeLibrary Search API | 部分实现 / 未做生产验收 | FTS/semantic endpoints 存在；Qwen/image/hybrid 仍不可用。 |
+| 29 | Search Result 统一返回字段 | 部分实现 / 未做生产验收 | 不同 endpoints 的响应 envelope 部分统一；search result schema 未统一完成。 |
+| 30 | XeLibrary Index API | 部分实现 / 未做生产验收 | 重建索引与持久化 job 状态实现；自动恢复/调度/Qdrant 未实现。 |
+| 31 | XeLibrary Revision API | 部分实现 / 未做生产验收 | 行 revisions、历史读取、restore 和 If-Match 有实现与测试。 |
+| 32 | XeLibrary ACL API | 部分实现 / 未做生产验收 | path/table/row ACL、继承、ETag/If-Match、审计 API 有实现与测试。 |
+| 33 | XeLibrary Proposal API | 未实现 | 没有 proposal 存储、审批或 API。 |
+| 34 | Theorem API | 未实现 | 没有 Theorem API。 |
+| 35 | Embedding API | 部分实现 / 未做生产验收 | Embedding D100M fast endpoint 有真实模型；Qwen/image 端点不可用。 |
+| 36 | Embedding 调度优先级 | 部分机制 / 关键能力缺失 | CPU worker busy 会 429；没有请求优先级/后台 ingestion 抢占队列。 |
+| 37 | HF-cache API | Skeleton / 关键能力未实现 | HF-cache 只有通用 service skeleton。 |
+| 38 | HF-cache 预测性 API | Skeleton / 关键能力未实现 | 无预测预取候选、pin/lease 与缓存管理 API。 |
+| 39 | Library Agent API | Skeleton / 关键能力未实现 | Library Agent 仅 skeleton；无 derive/evidence/proposal 流程。 |
+| 40 | Lean 验证接口 | 未实现 | 没有隔离的 Lean 编译/验证 sandbox。 |
+| 41 | LLM Gateway API | 部分实现 / 未做生产验收 | LLM Gateway 支持固定模型、服务端密钥与非流式转发；无计划全量能力。 |
+| 42 | Network Server API | 部分实现 / 未做生产验收 | `infra/network` 有防火墙、反代、Tunnel 健康服务；PVE 网络分区全项未证。 |
+| 43 | Forgejo 集成 | 部分实现 / 未做生产验收 | Forgejo signed webhook、去重与 issue work sync 有实现；PR/scope 自动化未完成。 |
+| 44 | DevAgent API | 部分实现 / 未做生产验收 | work queue、links、签名 webhook、规则 triage 已有；自动重复处理/LLM 分类未实现。 |
+| 45 | 多 Agent 身份模型 | 部分实现 / 未做生产验收 | 账号 authority、OIDC agent_kind、work/deploy fencing 有测试；多主体现实并发验证仅限专门报告。 |
+| 46 | Deploy Gateway | 部分实现 / 未做生产验收 | Deploy Gateway 有 release/approval/lease/deployment API；executor 安装与运行需生产证据。 |
+| 47 | Deploy Lease API | 部分实现 / 未做生产验收 | 单 lease、holder/epoch/renew/release、过期冻结均有测试。 |
+| 48 | Release API | 部分实现 / 未做生产验收 | release API 与人类审批有实现；签名 artifact inventory 完整性仍有限。 |
+| 49 | Deployment API | 部分实现 / 未做生产验收 | 部署状态接口与固定 executor 源码存在；SSE/cancel/rollback API 缺。 |
+| 50 | 部署状态机 | 部分实现 / 未做生产验收 | 关键 lease fence 实现；plan 完整状态机与生产故障转换未完整。 |
+| 51 | Deploy Gateway 内部执行 | 部分实现 / 未做生产验收 | 有受限 receiver、systemd staging/activation；发布流水线与 PVE 自动配置不等于已全验。 |
+| 52 | `deployctl` CLI | 部分实现 / 未做生产验收 | 没有 deployctl CLI 命令集。 |
+| 53 | `xlctl` CLI | 未实现 | `xlctl` 提供 API 客户端基础操作；import/export/theorem/完整索引命令未齐。 |
+| 54 | `hf-cachectl` | 未实现 | 没有 hf-cachectl。 |
+| 55 | OpenWebUI 权限原则 | 部分实现 / 未做生产验收 | Tool Gateway scopes 与 bearer passthrough 限制写操作；真实 OpenWebUI integration 未完成。 |
+| 56 | Web / iframe 安全 | 部分实现 / 未做生产验收 | iframe origin/source 校验、sandbox registry 有代码；所有独立 origins 的浏览器验证待完成。 |
+| 57 | 身份服务 | 部分实现 / 未做生产验收 | Keycloak OIDC、PKCE browser session、account authority 有实现；身份全生命周期/部署验证仍需。 |
+| 58 | Secrets | 部分实现 / 未做生产验收 | 源代码未纳入凭据；服务配置从 env/root-only paths 读取；秘密轮换流程仍待完善。 |
+| 59 | 审计 API / Audit Log | 部分实现 / 未做生产验收 | ACL、account、deploy、work、app、library 审计存在；缺单一统一分页 audit API。 |
+| 60 | Job API 统一规范 | 部分实现 / 未做生产验收 | index/work queue 状态 API 存在但 job 状态、取消、events 契约不统一。 |
+| 61 | Event / Webhook 设计 | 部分机制 / 关键能力缺失 | Forgejo webhook 接入签名/幂等；DB outbox 与跨服务事件总线未实现。 |
+| 62 | Webhook 重试规则 | 部分机制 / 关键能力缺失 | 已测试 Forgejo delivery 去重与乱序；通用重试/最少一次投递规则未实现。 |
+| 63 | 监控 | 部分实现 / 未做生产验收 | 只有 request/error counters 与健康端点；计划业务队列/存储/延迟指标与dashboard未齐。 |
+| 64 | 日志 | 部分实现 / 未做生产验收 | 标准 JSON request completion logging 存在；统一 timestamp/actor/event 字段与敏感数据策略需继续。 |
+| 65 | OpenTelemetry | 部分机制 / 关键能力缺失 | 计划明确 V1 可先有 request ID/log/metrics；distributed tracing 未实施。 |
+| 66 | XeLibrary 内部一致性 | 部分实现 / 未做生产验收 | `.xl` 事务、FTS、附件引用、index revisions 有实现；跨 catalogue/.xl 原子性及 outbox 未实现。 |
+| 67 | 删除语义 | 部分实现 / 未做生产验收 | 行软删除立即过滤、当前 ACL 和索引重检存在；附件对象 GC 尚未实现。 |
+| 68 | 权限与向量查询 | 部分实现 / 未做生产验收 | 检索候选返回前按当前 ACL/行状态复核；规模/严格 topK 生产保证未验证。 |
+| 69 | fnOS 边界 | 未实现 | 有 fnOS VM/数据边界记录；独立认证/平台停机时访问未在本轮实测。 |
+| 70 | 备份 | 部分实现 / 未做生产验收 | XeLibrary backup/verify/restore 有脚本与故障测试；独立物理备份目标未提供。 |
+| 71 | XeLibrary 恢复顺序 | 部分实现 / 未做生产验收 | 恢复脚本与 runbook 有顺序；生产灾难恢复演练未做。 |
+| 72 | HF-cache 水位 | 未实现 | 没有 HF-cache 物理水位计量/自动清退。 |
+| 73 | 开发权限 | 部分实现 / 未做生产验收 | 仓库贡献规则/API 边界文档存在；远端 Forgejo 权限矩阵需平台配置证据。 |
+| 74 | Codex 开发规则 | 部分实现 / 未做生产验收 | AGENTS/Agent workflow 有独立 worktree、测试与发布规则；PR required checks 需远端配置核实。 |
+| 75 | Codex 发布规则 | 部分实现 / 未做生产验收 | Deploy policy 限制 OpenCode；只有通过工作 API 可证明 API policy，不等同所有主机凭证盘点。 |
+| 76 | OpenCode 角色 | 部分实现 / 未做生产验收 | 独立 OpenCode 身份与 Codex/OpenCode lease 隔离有验证脚本；agent credentials 不纳入本审计。 |
+| 77 | 初始开发阶段 | 部分实现 / 未做生产验收 | 《实施状态》记载部分基础设施部署；完整 Phase 0 未达标。 |
+| 78 | Phase 1 — Repo / API Skeleton | 部分实现 / 未做生产验收 | 服务 skeleton、OpenAPI、统一 request ID 与 error 有实现；全服务 readiness/CI acceptance 未完。 |
+| 79 | Phase 2 — XeLibrary Core | 部分实现 / 未做生产验收 | 表/行/schema/附件/query ACL 已部分实现；path catalogue/import 全套缺。 |
+| 80 | Phase 3 — D100M Search | 部分实现 / 未做生产验收 | D100M 到精确向量搜索已有 smoke；Qdrant、队列、priority 尚缺。 |
+| 81 | Phase 4 — Qwen / Multimodal | 部分实现 / 未做生产验收 | Qwen worker、image、rerank、quality cache 均无。 |
+| 82 | Phase 5 — Web / OpenWebUI | 部分实现 / 未做生产验收 | Desktop shell/app registry/tool search-query-get 存在；OpenWebUI token exchange 缺。 |
+| 83 | Phase 6 — Library Agent | 部分实现 / 未做生产验收 | Library Agent 任务/evidence/theorem/proposal/Lean 闭环不存在。 |
+| 84 | Phase 7 — DevAgent | 部分实现 / 未做生产验收 | Webhook/work queue/links/triage 有组件；端到端自动 triage/duplicate 并未完成。 |
+| 85 | Phase 8 — Deploy Gateway | 部分实现 / 未做生产验收 | leases 与受限执行器代码存在；SSE/full rollback 状态机及全量 production acceptance 缺。 |
+| 86 | Phase 9 — HF-cache | 部分实现 / 未做生产验收 | HF cache ensure/pin/lease/GC/watermark/candidate 均缺。 |
+| 87 | API 测试矩阵 | 部分实现 / 未做生产验收 | 新增 429 身份/路由组回归；全 endpoint 状态码/幂等/并发矩阵并未完整。 |
+| 88 | Query 测试 | 部分实现 / 未做生产验收 | 中文/类型/嵌套布尔等 DSL tests 存在；attachment EXISTS/FTS/quality/stale/move 矩阵不完整。 |
+| 89 | D100M 评测 | 未实现 | 没有本领域独立 held-out retrieval evaluation 与 Recall@10/nDCG/MRR 基线。 |
+| 90 | API 稳定性 | 部分实现 / 未做生产验收 | 目前有 `/api/v1` 与 OpenAPI snapshots；破坏性 schema compatibility CI 未见。 |
+| 91 | OpenAPI | 部分实现 / 未做生产验收 | OpenAPI export script 与每服务文档存在；生产 docs access policy 未单独核验。 |
+| 92 | API 客户端 | 未实现 | 未见共享生成 client packages；前端 helper/各服务调用分散。 |
+| 93 | 数据 ID | 部分实现 / 未做生产验收 | UUID IDs 用于多个记录；不是普遍 UUIDv7/sortable。 |
+| 94 | 时间 | 部分实现 / 未做生产验收 | 时间字段为 ISO/epoch混合（如 `at` epoch/字符串）；全 API RFC3339 UTC 未统一。 |
+| 95 | 分页 | 部分实现 / 未做生产验收 | 多个 listing 支持 cursor（tables/rows/work/ACL）；其他 API 仍有 offset/limit。 |
+| 96 | Rate Limit | 本地实现 / 测试通过 / 未发布 | 本分支新实现 API 身份+路由组 SQLite sliding window、Retry-After 与 429 审计日志，生产默认启用；见 `tests/test_rate_limit.py`。 |
+| 97 | 上传限制 | 部分实现 / 未做生产验收 | 上传有 16MiB size、sniff/hash/name sanitize；quarantine/scanning 与独立 preview 隔离尚无。 |
+| 98 | 不允许的架构捷径 | 部分实现 / 未做生产验收 | 代码避免任意 SQL/eval，Tool Gateway/Bearer/Deploy API boundary 有测试；宿主和 CI secrets posture 未全量审计。 |
+| 99 | V1 最低可用接口集合 | 部分实现 / 未做生产验收 | 大部分 XeLibrary/D100M/desktop/tool/deploy/development minimum API 存在；theorem/HF cache/image/OpenWebUI 完整工具等缺。 |
+| 100 | 推荐首批 Issues | 部分实现 / 未做生产验收 | 初始 issue 目录/已建问题存在；推荐列表与当前实现状态未逐一同步。 |
+| 101 | 初始 Codex 工作方式 | 部分实现 / 未做生产验收 | 工作流程要求读计划/ADR、分支/测试/OpenAPI；本审计也是据此执行。 |
+| 102 | Definition of Done | 部分实现 / 未做生产验收 | 测试、权限、文档要求写入指导文件；大量缺功能意味着全局 Definition of Done 未满足。 |
+| 103 | V1 成功标准 | 部分实现 / 未做生产验收 | 核心桌面、知识库、D100M、Forgejo/Deploy 部分闭环在线；Library Agent/Qwen/HF-cache/备份等阻止 V1 成功判定。 |
+| 104 | 后续可扩展项 | 部分实现 / 未做生产验收 | 多租户、sharding、MCP 等可演进边界具备部分服务接口；尚未对全部扩展项做验证。 |
+| 105 | 最终架构原则 | 部分实现 / 未做生产验收 | 服务 API、.xl 数据边界、固定 Deploy Gateway、独立身份有结构性实现；备份、真实事实源、受限 Agent 与可靠恢复仍是阻断缺口。 |
 
-索引作业状态已改为 catalogue 中持久化；已完成状态跨进程重建保留，
-启动时将 queued/running 标记为 interrupted 失败，避免静默丢失或假成功。
-已有 owner 权限校验保留。此改动尚未发布；自动恢复/队列调度仍未完成。
+## 本轮限流实现的边界
 
-生产已有核心桌面、OIDC、XeLibrary bootstrap、真实 D100M 和受限部署网关。
-完整缺口见 implementation-status.md；该文件的较早测试数量不作为当前验收证据。
+Rate Limit 实现按每个服务 `DATA_DIR/rate-limits.sqlite3` 持久化滑动窗口；bucket key 为 SHA-256(subject) + 路由组，SQLite `BEGIN IMMEDIATE` 避免同一数据库的并发超发。已覆盖 interactive、bulk、admin、agent、embedding-fast、embedding-quality 默认策略；健康、就绪、版本、metrics 不走身份依赖。429 包含整数秒 `Retry-After` 和结构化 `rate_limit.rejected` 审计日志。生产默认启用；环境策略通过 `RATE_LIMIT_ENABLED` 与 `RATE_LIMIT_POLICIES_JSON` 控制。
+
+| 路由组 | 默认上限 | 路由选择 |
+|---|---:|---|
+| interactive | 120 / 60 秒 | 普通人类主体的 API |
+| bulk | 10 / 60 秒 | import/export/bulk/index 路径 |
+| admin | 60 / 60 秒 | accounts/deploy/releases/deployments/ACL/audit/apps/schema 路径 |
+| agent | 60 / 60 秒 | 其余 agent/codex/opencode 主体 API |
+| embedding-fast | 60 / 60 秒 | embed/embedding/embeddings 路径 |
+| embedding-quality | 6 / 60 秒 | semantic search 路径 |
+
+覆盖配置示例：`RATE_LIMIT_POLICIES_JSON='{"interactive":{"requests":90,"window_seconds":60}}'`；未覆盖路由组保留默认值。每服务共用其 `DATA_DIR` 下的 sqlite 文件；配置不支持跨服务的全局共享窗口。
+
+尚未做多机/共享数据库验证；不同 service `DATA_DIR` 之间不共享 bucket，这代表身份+路由组是 service-local 限流，不是跨全平台的全局额度。受保护的 `/api/v1/*` 与兼容 `/v1/*` 参与；不经 `identity()` 的无身份 browser-session 登录端点不在此限流实现范围。限流日志由运行时日志系统接收，本轮未验证生产日志保留与告警。Qwen/image worker 尚未上线，因此 `embedding-quality` 策略当前主要供 semantic search 路由使用，不代表 Qwen 生产限额已验收。
+
+## 本轮验证
+
+- `uv run pytest --basetemp runtime/pytest-tmp`：83 passed；Starlette/httpx 弃用提示 1 条。
+- `uv run pytest tests/test_rate_limit.py tests/test_auth.py -q`：6 passed。
+- `uv run ruff check xeonolab tests scripts`：通过。
+- `uv run python scripts/export_openapi.py`：通过；限流使用统一异常处理，不新增 endpoint/schema。
+- 还未执行生产阈值校准、跨进程外部服务压测、日志留存检查与真实 429 HTTP smoke。
