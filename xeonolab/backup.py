@@ -357,6 +357,10 @@ def restore_backup(backup: Path, restore_root: Path, name: str) -> Path:
         raise BackupError("restore target overlaps the backup")
     target.mkdir(mode=0o700)
     try:
+        # Empty directories are not represented by the file manifest, but both
+        # are required by the data-root contract (including an empty library).
+        (target / "tables").mkdir(mode=0o700)
+        (target / "objects" / "sha256").mkdir(mode=0o700, parents=True)
         for item in manifest["files"]:
             rel = PurePosixPath(item["path"])
             out = target.joinpath(*rel.parts)

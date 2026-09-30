@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from xeonolab.backup import BackupError, create_backup, restore_backup, verify_backup
+from xeonolab.backup import BackupError, create_backup, restore_backup, validate_data_root, verify_backup
 
 
 def sample(root):
@@ -45,6 +45,28 @@ def test_backup_verify_restore_permissions_and_content(tmp_path):
     assert verify_backup(backup)["tables"][0]["id"] == "t1"
     assert (restored / "tables/t1.xl").is_file()
     assert os.stat(restored / "catalogue.sqlite").st_mode & 0o777 == 0o600
+
+
+def test_restore_recreates_empty_tables_and_object_directories(tmp_path):
+    source = tmp_path / "source"
+    (source / "tables").mkdir(parents=True)
+    (source / "objects/sha256").mkdir(parents=True)
+    catalog = sqlite3.connect(source / "catalogue.sqlite")
+    catalog.execute("CREATE TABLE tables(id TEXT PRIMARY KEY,path TEXT,name TEXT,owner TEXT)")
+    catalog.commit()
+    catalog.close()
+
+    backup = create_backup(source, tmp_path / "backup", quiesced=True)
+    assert {item["path"] for item in verify_backup(backup)["files"]} == {"catalogue.sqlite"}
+    restore_root = tmp_path / "restore-parent"
+    restore_root.mkdir()
+    restored = restore_backup(backup, restore_root, "empty")
+
+    assert (restored / "tables").is_dir()
+    assert list((restored / "tables").iterdir()) == []
+    assert (restored / "objects/sha256").is_dir()
+    assert list((restored / "objects/sha256").iterdir()) == []
+    assert validate_data_root(restored) == []
 
 
 def test_committed_wal_state_is_snapshotted_without_sidecars(tmp_path):
