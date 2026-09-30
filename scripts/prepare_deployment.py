@@ -109,8 +109,8 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "migration_manifest": "additive-vector-chunker-version-column; reindex existing tables after activation",
-            "test_report": "55 tests; frontend build; three process failure-injection scenarios",
+            "migration_manifest": "additive ACL revision/explicit columns; pre-release quiesced backup and isolated restore verified; catalogue downgrade via rollback_acl_schema.py",
+            "test_report": "78 tests; Ruff; OpenAPI export; TypeScript/Vite build; quiesced backup and isolated restore",
         }
     )
 )
