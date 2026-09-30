@@ -87,12 +87,76 @@ def test_acl_move_and_attachment(library):
     )
     assert result.status_code == 201, result.text
     aid = result.json()["data"]["attachment_id"]
+    metadata = library.get("/api/v1/attachments/" + aid, params={"table_id": tid}, headers=auth("bob"))
+    assert metadata.status_code == 200
+    assert metadata.json()["data"]["filename"] == "proof.pdf"
+    assert metadata.json()["data"]["row_id"] == rid
+    assert library.get(
+        f"/api/v1/tables/{tid}/rows/{rid}/attachments", headers=auth("bob")
+    ).json()["data"][0]["attachment_id"] == aid
+    library.app.state.settings.dev_tokens["reader"] = {
+        "sub": "reader", "scope": "xelibrary:read", "agent_kind": "human"
+    }
+    denied_upload = library.post(
+        "/api/v1/attachments",
+        params={"table_id": tid, "row_id": rid},
+        headers=auth("reader"),
+        files={"upload": ("blocked.txt", b"no", "text/plain")},
+    )
+    assert denied_upload.status_code == 403
     assert (
         library.get(
             f"/api/v1/attachments/{aid}/content", params={"table_id": tid}, headers=auth("bob")
         ).content
         == b"%PDF-test"
     )
+    second = library.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"title": "第二条记录", "confidence": 0.5}},
+    )
+    rid2 = second.json()["data"]["_row_id"]
+    assert library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth("bob"),
+        json={"attachment_id": aid},
+    ).status_code == 403
+    linked = library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth(),
+        json={"attachment_id": aid},
+    )
+    assert linked.status_code == 201, linked.text
+    linked_id = linked.json()["data"]["attachment_id"]
+    assert library.get(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments", headers=auth()
+    ).json()["data"][0]["attachment_id"] == linked_id
+    assert library.get(
+        f"/api/v1/attachments/{linked_id}/content", params={"table_id": tid}, headers=auth("bob")
+    ).content == b"%PDF-test"
+    assert library.put(
+        f"/api/v1/acl/row/{tid}:{rid2}",
+        headers=auth("admin"),
+        json={"grants": {"alice": ["read", "attach"]}},
+    ).status_code == 200
+    assert library.get(
+        "/api/v1/attachments/" + linked_id, params={"table_id": tid}, headers=auth("bob")
+    ).status_code == 403
+    assert library.get(
+        f"/api/v1/attachments/{linked_id}/content", params={"table_id": tid}, headers=auth("bob")
+    ).status_code == 403
+    assert library.delete(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments/{linked_id}", headers=auth()
+    ).status_code == 200
+    assert library.get(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments", headers=auth()
+    ).json()["data"] == []
+    assert library.get(
+        f"/api/v1/attachments/{linked_id}/content", params={"table_id": tid}, headers=auth()
+    ).status_code == 404
+    assert library.get(
+        f"/api/v1/attachments/{aid}/content", params={"table_id": tid}, headers=auth("bob")
+    ).content == b"%PDF-test"
     meta = library.get(f"/api/v1/tables/{tid}", headers=auth())
     result = library.post(
         f"/api/v1/tables/{tid}/move",

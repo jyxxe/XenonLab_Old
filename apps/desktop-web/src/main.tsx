@@ -30,6 +30,19 @@ function Desktop(){
    return {data:result.data,meta:result.meta||{}};
  }
  async function api<T=any>(path:string, init:RequestInit={}):Promise<T>{return (await apiPage<T>(path,init)).data}
+ async function apiRaw(path:string, init:RequestInit={}):Promise<Response>{
+   const current=persistent?await sessionToken():{token};if(!current)throw Error('登录已撤销，请重新登录');
+   const headers=new Headers(init.headers);
+   if(typeof FormData!=='undefined'&&init.body instanceof FormData)headers.delete('Content-Type');
+   else if(init.body&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');
+   headers.set('Authorization',`Bearer ${current.token}`);
+   const response=await fetch(`/api/v1${path}`,{...init,headers});
+   if(!response.ok){
+     const result=await response.clone().json().catch(()=>null);
+     throw Error(result?.error?.message||result?.detail?.[0]?.msg||`HTTP ${response.status}`);
+   }
+   return response;
+ }
  function open(app:App){
    setWindows(old=>{
      const existing=old.find(w=>w.app_id===app.id);
@@ -77,7 +90,7 @@ function Desktop(){
    const end=()=>{removeEventListener('pointermove',move);removeEventListener('pointerup',end)};
    addEventListener('pointermove',move);addEventListener('pointerup',end);
  }
- if(libraryView&&connected)return <Knowledge api={api} apiPage={apiPage}/>;
+ if(libraryView&&connected)return <Knowledge api={api} apiPage={apiPage} apiRaw={apiRaw}/>;
  return <main>
    <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><time>{new Date().toLocaleDateString('zh-CN',{timeZone:preferences.timezone==='system'?undefined:preferences.timezone})}</time>{connected&&<button onClick={async()=>{try{if(persistent)await logout();setPersistent(false);setToken('');setConnected(false);setWindows([])}catch(e){setError(String(e))}}}>退出登录</button>}</header>
    {!connected&&<section className="intro"><small>YOUR KNOWLEDGE WORKSPACE</small><h1>让知识，有处可循。</h1><p>统一桌面 · 可追溯数据 · 受控工具</p></section>}
@@ -88,7 +101,7 @@ function Desktop(){
      return <section className="window" key={w.id} data-window-id={w.id} onPointerDown={()=>setWindows(old=>[...old.filter(item=>item.id!==w.id),old.find(item=>item.id===w.id)!])} style={{left:w.x,top:w.y,width:w.width,height:w.height,zIndex:10+windows.findIndex(item=>item.id===w.id)}}>
        <div className="bar" onPointerDown={e=>drag(e,w.id)}><button className="close" aria-label="关闭" onClick={()=>setWindows(ws=>ws.filter(x=>x.id!==w.id))}/><button className="min" aria-label="最小化" onClick={()=>update(w.id,{minimized:true})}/><button className="max" aria-label="最大化" onClick={()=>update(w.id,{x:20,y:45,width:innerWidth-40,height:innerHeight-140})}/><span>{w.title}</span></div>
        {builtins.some(b=>b.id===app.id)?<div className="window-body">
-         {app.id==='knowledge'?<Knowledge api={api} apiPage={apiPage}/>:app.id==='work'?<Work api={api} apiPage={apiPage}/>:<Settings api={api} preferences={preferences} applyPreferences={setPreferences} refreshApps={async()=>{await refreshApps()}} saveLayout={async()=>{
+         {app.id==='knowledge'?<Knowledge api={api} apiPage={apiPage} apiRaw={apiRaw}/>:app.id==='work'?<Work api={api} apiPage={apiPage}/>:<Settings api={api} preferences={preferences} applyPreferences={setPreferences} refreshApps={async()=>{await refreshApps()}} saveLayout={async()=>{
            await api('/users/me/layout',{method:'PUT',body:JSON.stringify({dock:dock.length?dock.filter(id=>apps.some(a=>a.id===id)):apps.map(a=>a.id),windows})});
          }}/>}</div>:<iframe onLoad={event=>{if(app.id==='xelibrary'&&app.origin==='https://library.xenon.lan')(event.currentTarget as HTMLIFrameElement).contentWindow?.postMessage({type:'auth.session_changed',access_token:token},app.origin)}} id={`frame-${w.id}`} title={w.title} src={new URL(app.entry,app.origin).href} sandbox={['allow-same-origin',...(app.sandbox?.allow_scripts===false?[]:['allow-scripts']),...(app.sandbox?.allow_forms===false?[]:['allow-forms']),...(app.sandbox?.allow_downloads?['allow-downloads']:[])].join(' ')} referrerPolicy="no-referrer"/>}
      </section>;
