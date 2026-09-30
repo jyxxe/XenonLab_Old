@@ -1,4 +1,7 @@
+import json
+import os
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -144,7 +147,7 @@ def test_disk_watermark_stops_speculative_and_evicts_low_priority(settings, monk
             # Model the shared disk dropping below 85% after the low-priority
             # cache item is removed; no host disk state is changed.
             used = 88 if low_path.exists() else 80
-            return SimpleNamespace(total=100, used=used, free=100 - used)
+            return SimpleNamespace(total=1_000_000, used=used * 10_000, free=(100 - used) * 10_000)
 
         monkeypatch.setattr(hf_cache.shutil, "disk_usage", disk_usage)
         assert (
@@ -362,3 +365,144 @@ def test_unavailable_physical_storage_provider_fails_closed(settings):
         result = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload())
         assert result.status_code == 503
         assert list((Path(settings.data_dir) / "snapshots").iterdir()) == []
+
+
+def write_pool_metrics(path, *, pool="aux-10t", total=10_000, used=1_000, observed_at=None):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "pool": pool,
+                "total": total,
+                "used": used,
+                "free": total - used,
+                "observed_at": (observed_at or datetime.now(timezone.utc)).isoformat(),
+            }
+        )
+    )
+    path.chmod(0o600)
+    return path
+
+
+def test_root_fed_pool_metrics_schema_owner_and_freshness(tmp_path):
+    path = write_pool_metrics(tmp_path / "pool.json")
+    owners = []
+    result = hf_cache.read_pool_metrics(
+        path,
+        expected_pool="aux-10t",
+        owner_validator=lambda info: owners.append(info.st_uid) or info.st_uid == os.getuid(),
+    )
+    assert result == {"pool": "aux-10t", "total": 10_000, "used": 1_000, "free": 9_000}
+    assert owners == [os.getuid()]
+    with pytest.raises(APIError, match="STORAGE_TELEMETRY_UNAVAILABLE"):
+        hf_cache.read_pool_metrics(path, owner_validator=lambda _info: False)
+
+
+@pytest.mark.parametrize("fault", ["stale", "wrong_pool", "inconsistent", "tampered", "writable", "symlink"])
+def test_root_fed_pool_metrics_rejects_untrusted_or_invalid_file(tmp_path, fault):
+    real_path = write_pool_metrics(tmp_path / "pool.json")
+    path = real_path
+    if fault == "stale":
+        write_pool_metrics(real_path, observed_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+    elif fault == "wrong_pool":
+        write_pool_metrics(real_path, pool="other-pool")
+    elif fault == "inconsistent":
+        real_path.write_text(
+            json.dumps(
+                {
+                    "pool": "aux-10t",
+                    "total": 10_000,
+                    "used": 1_000,
+                    "free": 8_000,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        )
+    elif fault == "tampered":
+        real_path.write_text('{"pool":"aux-10t","total":')
+    elif fault == "writable":
+        real_path.chmod(0o666)
+    elif fault == "symlink":
+        path = tmp_path / "link.json"
+        path.symlink_to(real_path)
+    with pytest.raises(APIError, match="STORAGE_TELEMETRY_UNAVAILABLE"):
+        hf_cache.read_pool_metrics(path, owner_validator=lambda _info: True)
+
+
+def test_root_pool_watermarks_and_guest_free_space_are_both_enforced(settings, monkeypatch, tmp_path):
+    metrics = write_pool_metrics(tmp_path / "pool.json", total=10_000, used=8_000)
+    monkeypatch.setenv("HF_CACHE_POOL_METRICS_FILE", str(metrics))
+    monkeypatch.setenv("HF_CACHE_EXPECTED_POOL", "aux-10t")
+
+    def constrained_guest(_path):
+        return SimpleNamespace(total=1_000, used=500, free=5)
+
+    monkeypatch.setattr(hf_cache.shutil, "disk_usage", constrained_guest)
+    api = TestClient(
+        hf_cache.create_app(
+            settings,
+            download_backend=local_download,
+            revision_resolver=lambda *_args: REV,
+            pool_metrics_owner_validator=lambda _info: True,
+        )
+    )
+    with api:
+        status = api.get("/api/v1/cache/storage", headers=auth()).json()["data"]
+        assert status["watermark"] == "stop_prefetch"
+        assert status["pool_free_bytes"] == 2_000 and status["guest_free_bytes"] == 5
+        assert status["free_bytes"] == 5 and status["used_percent"] == 80
+        rejected = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(priority="low"))
+        assert rejected.status_code == 507
+        rejected = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload())
+        assert rejected.status_code == 413
+        assert rejected.json()["error"]["code"] == "CACHE_QUOTA_EXCEEDED"
+
+
+def test_root_pool_85_90_watermarks_evict_low_and_stop_new_downloads(settings, monkeypatch, tmp_path):
+    metrics = write_pool_metrics(tmp_path / "pool.json", total=10_000, used=7_000)
+    monkeypatch.setenv("HF_CACHE_POOL_METRICS_FILE", str(metrics))
+    api = TestClient(
+        hf_cache.create_app(
+            settings,
+            download_backend=local_download,
+            revision_resolver=lambda *_args: REV,
+            pool_metrics_owner_validator=lambda _info: True,
+        )
+    )
+    with api:
+        low_id = api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/low", priority="low")
+        ).json()["data"]["id"]
+        write_pool_metrics(metrics, total=10_000, used=8_500)
+        status85 = api.get("/api/v1/cache/storage", headers=auth()).json()["data"]
+        assert status85["watermark"] == "evict_low_priority"
+        ensured = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/normal"))
+        assert ensured.status_code == 200
+        assert api.get(f"/api/v1/cache/items/{low_id}", headers=auth()).status_code == 404
+        write_pool_metrics(metrics, total=10_000, used=9_000)
+        status90 = api.get("/api/v1/cache/storage", headers=auth()).json()["data"]
+        assert status90["watermark"] == "retain_protected"
+        blocked = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/blocked"))
+        assert blocked.status_code == 507
+
+
+def test_stale_pool_metrics_preserve_cached_reads_but_block_downloads(settings, monkeypatch, tmp_path):
+    metrics = write_pool_metrics(tmp_path / "pool.json")
+    monkeypatch.setenv("HF_CACHE_POOL_METRICS_FILE", str(metrics))
+    api = TestClient(
+        hf_cache.create_app(
+            settings,
+            download_backend=local_download,
+            revision_resolver=lambda *_args: REV,
+            pool_metrics_owner_validator=lambda _info: True,
+        )
+    )
+    with api:
+        item_id = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]["id"]
+        write_pool_metrics(metrics, observed_at=datetime.now(timezone.utc) - timedelta(minutes=10))
+        assert api.get("/api/v1/cache/items", headers=auth()).status_code == 200
+        assert api.get(f"/api/v1/cache/items/{item_id}", headers=auth()).status_code == 200
+        assert api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).status_code == 200
+        new_item = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/new"))
+        assert new_item.status_code == 503
+        assert new_item.json()["error"]["code"] == "STORAGE_TELEMETRY_UNAVAILABLE"

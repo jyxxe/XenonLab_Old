@@ -5,10 +5,13 @@ import json
 import os
 import re
 import shutil
+import stat
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -20,6 +23,88 @@ from .common import APIError, base_app, connect, response, scope, transaction
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 _ENSURE_LOCK = threading.Lock()
 _PREFETCH_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hf-cache-prefetch")
+
+
+@dataclass(frozen=True)
+class StorageUsage:
+    pool: str | None
+    pool_total: int
+    pool_used: int
+    pool_free: int
+    guest_total: int
+    guest_used: int
+    guest_free: int
+
+    @property
+    def pressure_percent(self):
+        return max(self.pool_used * 100 / self.pool_total, self.guest_used * 100 / self.guest_total)
+
+    @property
+    def available_bytes(self):
+        return min(self.pool_free, self.guest_free)
+
+
+def read_pool_metrics(path, *, expected_pool="aux-10t", owner_validator=None, now=None, max_age_seconds=120):
+    """Read one root-fed atomic snapshot; never follow a symlink or trust stale data."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise APIError(503, "STORAGE_TELEMETRY_UNAVAILABLE", "metrics path must be absolute")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+            raise ValueError("metrics path must be a regular non-symlink file")
+        fd = os.open(path, flags)
+        try:
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino) or not stat.S_ISREG(info.st_mode):
+                raise ValueError("metrics file changed while opening")
+            if info.st_mode & 0o022:
+                raise ValueError("metrics file must not be group/world writable")
+            valid_owner = owner_validator(info) if owner_validator else info.st_uid == 0
+            if not valid_owner:
+                raise ValueError("metrics file must be root-owned")
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                raw = stream.read(16385)
+            if len(raw) > 16384:
+                raise ValueError("metrics file exceeds size limit")
+        finally:
+            os.close(fd)
+
+        def unique_object(pairs):
+            data = {}
+            for key, value in pairs:
+                if key in data:
+                    raise ValueError("duplicate JSON keys")
+                data[key] = value
+            return data
+
+        data = json.loads(raw, object_pairs_hook=unique_object)
+        if set(data) != {"pool", "total", "used", "free", "observed_at"}:
+            raise ValueError("unexpected metrics schema")
+        if data["pool"] != expected_pool:
+            raise ValueError("unexpected storage pool")
+        total, used, free = data["total"], data["used"], data["free"]
+        if any(type(value) is not int for value in (total, used, free)):
+            raise ValueError("storage byte values must be integers")
+        if total <= 0 or used < 0 or free < 0 or used + free != total:
+            raise ValueError("inconsistent storage byte values")
+        if not isinstance(data["observed_at"], str):
+            raise ValueError("observed_at must be an ISO timestamp")
+        observed = datetime.fromisoformat(data["observed_at"].replace("Z", "+00:00"))
+        if observed.tzinfo is None:
+            raise ValueError("observed_at must include a timezone")
+        now = now or datetime.now(timezone.utc)
+        age = (now - observed.astimezone(timezone.utc)).total_seconds()
+        if age < -30 or age > max_age_seconds:
+            raise ValueError("storage metrics are stale or from the future")
+        return {"pool": expected_pool, "total": total, "used": used, "free": free}
+    except APIError:
+        raise
+    except Exception:
+        raise APIError(
+            503, "STORAGE_TELEMETRY_UNAVAILABLE", "trusted storage telemetry unavailable"
+        ) from None
 
 
 class Ensure(BaseModel):
@@ -124,7 +209,14 @@ def _file_manifest(root):
     return result
 
 
-def create_app(settings=None, *, download_backend=None, revision_resolver=None, storage_usage_provider=None):
+def create_app(
+    settings=None,
+    *,
+    download_backend=None,
+    revision_resolver=None,
+    storage_usage_provider=None,
+    pool_metrics_owner_validator=None,
+):
     app = base_app("hf-cache", settings)
     root = app.state.settings.data_dir / "snapshots"
     root.mkdir(parents=True, exist_ok=True)
@@ -160,7 +252,30 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
 
     backend = download_backend or _hub_download
     resolve_revision = revision_resolver or _resolve_hf_revision
-    usage_provider = storage_usage_provider or (lambda path: shutil.disk_usage(path))
+    metrics_path = os.getenv("HF_CACHE_POOL_METRICS_FILE")
+    expected_pool = os.getenv("HF_CACHE_EXPECTED_POOL", "aux-10t")
+    try:
+        metrics_max_age = int(os.getenv("HF_CACHE_POOL_METRICS_MAX_AGE_SECONDS", "120"))
+    except ValueError:
+        raise RuntimeError("HF_CACHE_POOL_METRICS_MAX_AGE_SECONDS must be a positive integer") from None
+    if metrics_max_age <= 0:
+        raise RuntimeError("HF_CACHE_POOL_METRICS_MAX_AGE_SECONDS must be a positive integer")
+    if storage_usage_provider:
+        usage_provider = storage_usage_provider
+    elif metrics_path:
+
+        def usage_provider(_path):
+            return read_pool_metrics(
+                metrics_path,
+                expected_pool=expected_pool,
+                owner_validator=pool_metrics_owner_validator,
+                max_age_seconds=metrics_max_age,
+            )
+    else:
+
+        def usage_provider(path):
+            return shutil.disk_usage(path)
+
     try:
         cache_quota = int(os.getenv("HF_CACHE_MAX_BYTES", str(2 * 1024**4)))
     except ValueError:
@@ -171,10 +286,40 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
 
     def storage_usage():
         try:
-            usage = usage_provider(root)
-            if usage.total <= 0 or usage.used < 0 or usage.used > usage.total or usage.free < 0:
+            pool_usage = usage_provider(root)
+            guest_usage = shutil.disk_usage(root)
+            if isinstance(pool_usage, dict):
+                pool, total, used, free = (
+                    pool_usage.get("pool"),
+                    pool_usage.get("total"),
+                    pool_usage.get("used"),
+                    pool_usage.get("free"),
+                )
+            else:
+                pool = getattr(pool_usage, "pool", None)
+                total, used, free = pool_usage.total, pool_usage.used, pool_usage.free
+            if (
+                type(total) is not int
+                or type(used) is not int
+                or type(free) is not int
+                or total <= 0
+                or used < 0
+                or used > total
+                or free < 0
+                or guest_usage.total <= 0
+                or guest_usage.used < 0
+                or guest_usage.free < 0
+            ):
                 raise ValueError("invalid storage usage values")
-            return usage
+            return StorageUsage(
+                pool,
+                total,
+                used,
+                free,
+                guest_usage.total,
+                guest_usage.used,
+                guest_usage.free,
+            )
         except Exception:
             raise APIError(
                 503, "STORAGE_TELEMETRY_UNAVAILABLE", "trusted storage telemetry unavailable"
@@ -228,7 +373,7 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
                 ORDER BY CASE i.priority WHEN 'low' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, i.accessed ASC"""
             ).fetchall()
             for row in rows:
-                if usage.used * 100 / usage.total <= target_percent:
+                if usage.pressure_percent <= target_percent:
                     break
                 item_path = Path(row["path"])
                 if root not in item_path.parents or item_path.is_symlink():
@@ -271,7 +416,7 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
             staging = root / ("." + item_id + ".partial")
             try:
                 usage = storage_usage()
-                used_percent = usage.used * 100 / usage.total if usage.total else 100
+                used_percent = usage.pressure_percent
                 if used_percent >= 90:
                     raise APIError(
                         507, "DISK_WATERMARK", "cache downloads disabled above the 90% disk watermark"
@@ -283,14 +428,14 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
                 if used_percent >= 85:
                     collect(80, low_only=True)
                     usage = storage_usage()
-                    used_percent = usage.used * 100 / usage.total if usage.total else 100
+                    used_percent = usage.pressure_percent
                     if used_percent >= 90:
                         raise APIError(
                             507, "DISK_WATERMARK", "cache downloads disabled above the 90% disk watermark"
                         )
                 with connect(db_path) as db:
                     current_bytes = db.execute("SELECT COALESCE(SUM(bytes),0) FROM items").fetchone()[0]
-                remaining = cache_quota - current_bytes
+                remaining = min(cache_quota - current_bytes, usage.available_bytes)
                 if remaining <= 0:
                     raise APIError(507, "CACHE_QUOTA_EXCEEDED", "HF-cache byte quota is full")
                 progress(10, "downloading")
@@ -644,7 +789,7 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
     @app.get("/api/v1/cache/storage")
     def storage(request: Request, actor=Depends(scope("hf-cache:read"))):
         usage = storage_usage()
-        percent = usage.used * 100 / usage.total if usage.total else 100
+        percent = usage.pressure_percent
         level = (
             "normal"
             if percent < 80
@@ -660,9 +805,16 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
             request,
             {
                 "path": str(root),
-                "total_bytes": usage.total,
-                "used_bytes": usage.used,
-                "free_bytes": usage.free,
+                "pool": usage.pool,
+                "pool_total_bytes": usage.pool_total,
+                "pool_used_bytes": usage.pool_used,
+                "pool_free_bytes": usage.pool_free,
+                "guest_total_bytes": usage.guest_total,
+                "guest_used_bytes": usage.guest_used,
+                "guest_free_bytes": usage.guest_free,
+                "total_bytes": usage.pool_total,
+                "used_bytes": usage.pool_used,
+                "free_bytes": usage.available_bytes,
                 "used_percent": round(percent, 2),
                 "watermark": level,
                 "cached_bytes": cached_bytes,
@@ -677,9 +829,9 @@ def create_app(settings=None, *, download_backend=None, revision_resolver=None, 
             request,
             {
                 "evicted": removed,
-                "remaining_usage_percent": round(usage.used * 100 / usage.total, 2),
+                "remaining_usage_percent": round(usage.pressure_percent, 2),
                 "target_usage_percent": target_usage_percent,
-                "target_reached": usage.used * 100 / usage.total <= target_usage_percent,
+                "target_reached": usage.pressure_percent <= target_usage_percent,
             },
         )
 
