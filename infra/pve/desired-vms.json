@@ -1,0 +1,17 @@
+{
+  "system_storage": "local-lvm",
+  "mirror_storage": "zfs-mirror-18t",
+  "vms": [
+    {"name":"openwebui","cores":4,"memory_mib":16384,"system_gib":60,"data_gib":200},
+    {"name":"web-server","cores":2,"memory_mib":8192,"system_gib":50,"data_gib":500},
+    {"name":"fnos","cores":2,"memory_mib":8192,"system_gib":50,"data_gib":8192},
+    {"name":"hf-cache","cores":1,"memory_mib":4096,"system_gib":50,"data_gib":2048},
+    {"name":"xelibrary","cores":4,"memory_mib":16384,"system_gib":64,"data_gib":16384,"fast_gib":96},
+    {"name":"embedding","cores":8,"memory_mib":16384,"system_gib":50},
+    {"name":"library-agent","cores":2,"memory_mib":8192,"system_gib":50},
+    {"name":"network-server","cores":2,"memory_mib":8192,"system_gib":50},
+    {"name":"docker-server","cores":4,"memory_mib":16384,"system_gib":64},
+    {"name":"dev","cores":2,"memory_mib":4096,"system_gib":80},
+    {"name":"dev-agent","cores":4,"memory_mib":10240,"system_gib":64}
+  ]
+}

@@ -1,0 +1,565 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "XeonoLab deploy-gateway",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "summary": "Live",
+        "operationId": "live_health_live_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Ready",
+        "operationId": "ready_health_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "summary": "Version",
+        "operationId": "version_version_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Metrics",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/releases": {
+      "get": {
+        "summary": "Releases",
+        "operationId": "releases_api_v1_releases_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Release",
+        "operationId": "release_api_v1_releases_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Release"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/releases/{rid}/approve": {
+      "post": {
+        "summary": "Approve",
+        "operationId": "approve_api_v1_releases__rid__approve_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deploy/lease": {
+      "get": {
+        "summary": "Status",
+        "operationId": "status_api_v1_deploy_lease_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deploy/lease/acquire": {
+      "post": {
+        "summary": "Acquire",
+        "operationId": "acquire_api_v1_deploy_lease_acquire_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Acquire"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deploy/lease/{lid}/renew": {
+      "post": {
+        "summary": "Renew",
+        "operationId": "renew_api_v1_deploy_lease__lid__renew_post",
+        "parameters": [
+          {
+            "name": "lid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Lid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Renew"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deploy/lease/{lid}/release": {
+      "post": {
+        "summary": "Release Lease",
+        "operationId": "release_lease_api_v1_deploy_lease__lid__release_post",
+        "parameters": [
+          {
+            "name": "lid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Lid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments": {
+      "post": {
+        "summary": "Deploy",
+        "operationId": "deploy_api_v1_deployments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Deployment"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{did}": {
+      "get": {
+        "summary": "Deployment",
+        "operationId": "deployment_api_v1_deployments__did__get",
+        "parameters": [
+          {
+            "name": "did",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Did"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit/events": {
+      "get": {
+        "summary": "Audit Events",
+        "operationId": "audit_events_api_v1_audit_events_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Acquire": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "release_id": {
+            "type": "string",
+            "title": "Release Id"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "maximum": 300.0,
+            "minimum": 15.0,
+            "title": "Ttl Seconds",
+            "default": 60
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "release_id"
+        ],
+        "title": "Acquire"
+      },
+      "Artifact": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "title": "Name"
+          },
+          "digest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "title": "Digest"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "digest"
+        ],
+        "title": "Artifact"
+      },
+      "Deployment": {
+        "properties": {
+          "release_id": {
+            "type": "string",
+            "title": "Release Id"
+          },
+          "environment": {
+            "type": "string",
+            "pattern": "^production$",
+            "title": "Environment",
+            "default": "production"
+          },
+          "lease_id": {
+            "type": "string",
+            "title": "Lease Id"
+          },
+          "epoch": {
+            "type": "integer",
+            "title": "Epoch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "release_id",
+          "lease_id",
+          "epoch"
+        ],
+        "title": "Deployment"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Release": {
+        "properties": {
+          "commit": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$",
+            "title": "Commit"
+          },
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Artifacts"
+          },
+          "migration_manifest": {
+            "type": "string",
+            "title": "Migration Manifest"
+          },
+          "test_report": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Test Report"
+          }
+        },
+        "type": "object",
+        "required": [
+          "commit",
+          "artifacts",
+          "migration_manifest",
+          "test_report"
+        ],
+        "title": "Release"
+      },
+      "Renew": {
+        "properties": {
+          "ttl_seconds": {
+            "type": "integer",
+            "maximum": 300.0,
+            "minimum": 15.0,
+            "title": "Ttl Seconds",
+            "default": 60
+          }
+        },
+        "type": "object",
+        "title": "Renew"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
