@@ -32,3 +32,30 @@ Cloudflare connector 位于 VM 105，已建立连接。Token 仅存 /etc/cloudfl
 
 为恢复内网登录，已回退 canonical issuer 到 IP 9444；公网 /auth 配置保留，
 待 Tunnel 连通稳定后同步切换，不将当前公网登录视为可用。Forgejo IP 9445 仍可管理。
+
+## DevAgent work queue 上线
+
+VM 111 提供 DevAgent 8106，仅 VM 101 代理与本机可访问，防火墙设置开机应用。
+桌面“任务队列”展示 30 个真实 Forgejo Plan Issues，可领取、释放、标记队列完成。
+队列完成不自动关闭 Forgejo Issue；Issue 关闭仍需要实际验收证据。
+
+独立 OAuth client codex-dev-01 与 opencode-01：client_credentials、audience xeonolab，
+dev:read / dev:write / desktop:read，不含任何 deploy scope。凭据只在操作主机
+runtime/deploy-secrets/harness-clients.json（600），管理员分别分发，禁止共用超级 token。
+这些 OIDC 身份与 Forgejo 本地账户尚未做统一登录关联。
+
+经过桌面入口访问以下接口，Authorization Bearer 必须携带对应 OIDC access token：
+
+- GET/POST /api/v1/work
+- POST /api/v1/work/{id}/claim，body ttl_seconds（30–3600）
+- POST /api/v1/work/{id}/release，body epoch、completed
+- GET/POST /api/v1/issues/{issue_id}/links，repository 与目标 issue/type
+
+领取原子互斥、带 TTL 和递增 epoch；过期持有者不能完成重新领取后的任务。
+Issue 关联以 repository 为命名空间；production 默认仅 xenon-admin/XeonoLab；
+自关联和 duplicate_of 环路被拒绝。元数据持久化到 work.sqlite，独立于 Forgejo facts。
+Forgejo webhook 自动同步、triage、自动评论/标签联动和任务续租接口仍待实现。
+
+发布 commit c1effc8d463522084dae818e1742d06890442116；deployment
+8460739e-1805-4c1a-87b7-297e9786b034 completed，lease 已释放。
+22 项测试、TypeScript build、真实双身份并发与 holder 检查通过。
