@@ -19,6 +19,46 @@ class IndexRequest(BaseModel):
     table_id: str
 
 
+CHUNKER_VERSION = "chunker-v2"
+CHUNK_TARGET_TOKENS = 108
+CHUNK_OVERLAP_TOKENS = 16
+CHUNK_HARD_LIMIT = 126
+CHUNK_CONTEXT_LIMIT = 18
+
+
+def chunk_tokens(tokenizer, text, prefix_ids):
+    """Yield decoded token windows over text with the context prefix included.
+
+    Windows overlap by CHUNK_OVERLAP_TOKENS; decode/re-encode may move token
+    boundaries, so the hard limit is enforced on the re-encoded model input.
+    """
+    tokens = tokenizer.encode(text).ids
+    if not tokens:
+        return
+    stride = CHUNK_TARGET_TOKENS - CHUNK_OVERLAP_TOKENS
+    for offset in range(0, len(tokens), stride):
+        window = prefix_ids + tokens[offset : offset + CHUNK_TARGET_TOKENS]
+        encoded = tokenizer.encode(tokenizer.decode(window)).ids
+        yield tokenizer.decode(encoded[:CHUNK_HARD_LIMIT])
+        if offset + CHUNK_TARGET_TOKENS >= len(tokens):
+            break
+
+
+def chunk_documents(tokenizer, values, path, table_name):
+    """Yield (column, chunk) for every non-empty string row value.
+
+    Context follows plan.md §12: [PATH] [TABLE] [COLUMN] [TEXT]; [TITLE] stays
+    unimplemented until a schema-level title convention exists.
+    """
+    context = tokenizer.encode(f"[PATH] {path} [TABLE] {table_name} ").ids
+    for column, value in values.items():
+        if not isinstance(value, str) or not value.strip():
+            continue
+        prefix = (context + tokenizer.encode(f"[COLUMN] {column} [TEXT] ").ids)[:CHUNK_CONTEXT_LIMIT]
+        for chunk in chunk_tokens(tokenizer, value, prefix):
+            yield column, chunk
+
+
 def install(app, catalogue, file, authorize, allowed, load_row):
     lock = threading.Lock()
     jobs = JobStore(catalogue)
@@ -46,28 +86,13 @@ def install(app, catalogue, file, authorize, allowed, load_row):
         result = result.json()
         return [r["embedding"] for r in result["data"]], result["model_revision"]
 
-    def chunks(values, path):
-        from tokenizers import Tokenizer
-
-        tokenizer = Tokenizer.from_file(tokenizer_path)
-        for column, value in values.items():
-            if not isinstance(value, str) or not value.strip():
-                continue
-            prefix = tokenizer.encode(f"[PATH] {path} [COLUMN] {column} [TEXT] ").ids[:18]
-            tokens = tokenizer.encode(value).ids
-            budget = 108
-            for offset in range(0, len(tokens), budget - 16):
-                chunk = tokenizer.decode(prefix + tokens[offset : offset + budget])
-                # Decode/reencode may change token boundaries; enforce before inference.
-                encoded = tokenizer.encode(chunk).ids
-                yield column, tokenizer.decode(encoded[:126])
-                if offset + budget >= len(tokens):
-                    break
-
     def initialize(tid):
         with transaction(file(tid)) as db:
             db.execute("""CREATE TABLE IF NOT EXISTS __xl_vectors(row_id TEXT,revision INTEGER,
-                       chunk_id TEXT PRIMARY KEY,column_name TEXT,body TEXT,vector TEXT,model_revision TEXT)""")
+                       chunk_id TEXT PRIMARY KEY,column_name TEXT,body TEXT,vector TEXT,model_revision TEXT,
+                       chunker_version TEXT)""")
+            if "chunker_version" not in {row[1] for row in db.execute("PRAGMA table_info(__xl_vectors)")}:
+                db.execute("ALTER TABLE __xl_vectors ADD COLUMN chunker_version TEXT")
 
     def run(job_id, tid, actor):
         if not lock.acquire(blocking=False):
@@ -75,8 +100,11 @@ def install(app, catalogue, file, authorize, allowed, load_row):
             return
         jobs.update(job_id, status="running")
         try:
+            from tokenizers import Tokenizer
+
             table = authorize(actor, tid, "read")
             initialize(tid)
+            tokenizer = Tokenizer.from_file(tokenizer_path)
             with connect(file(tid)) as db:
                 ids = [r[0] for r in db.execute("SELECT _row_id FROM data WHERE _deleted_at IS NULL")]
             for rid in ids:
@@ -85,17 +113,26 @@ def install(app, catalogue, file, authorize, allowed, load_row):
                 with connect(file(tid)) as db:
                     row = load_row(db, rid)
                 encoded = []
-                for column, chunk in chunks(row["values"], table["path"]):
+                for column, chunk in chunk_documents(tokenizer, row["values"], table["path"], table["name"]):
                     vectors, revision = embedding([chunk])
                     encoded.append(
-                        (rid, row["_revision"], str(uuid4()), column, chunk, json.dumps(vectors[0]), revision)
+                        (
+                            rid,
+                            row["_revision"],
+                            str(uuid4()),
+                            column,
+                            chunk,
+                            json.dumps(vectors[0]),
+                            revision,
+                            CHUNKER_VERSION,
+                        )
                     )
                 with transaction(file(tid)) as db:
                     current = load_row(db, rid)
                     if current["_revision"] != row["_revision"]:
                         continue
                     db.execute("DELETE FROM __xl_vectors WHERE row_id=?", (rid,))
-                    db.executemany("INSERT INTO __xl_vectors VALUES(?,?,?,?,?,?,?)", encoded)
+                    db.executemany("INSERT INTO __xl_vectors VALUES(?,?,?,?,?,?,?,?)", encoded)
                     db.execute(
                         "UPDATE __xl_changes SET indexed_revision=? WHERE row_id=? AND revision<=?",
                         (row["_revision"], rid, row["_revision"]),
@@ -152,8 +189,9 @@ def install(app, catalogue, file, authorize, allowed, load_row):
                     if any(row["values"].get(k) != v for k, v in body.filters.items()):
                         continue
                     hits = db.execute(
-                        "SELECT * FROM __xl_vectors WHERE row_id=? AND revision=? AND model_revision=?",
-                        (rid, row["_revision"], model_revision),
+                        "SELECT * FROM __xl_vectors WHERE row_id=? AND revision=? AND model_revision=?"
+                        " AND chunker_version=?",
+                        (rid, row["_revision"], model_revision, CHUNKER_VERSION),
                     ).fetchall()
                     if not hits:
                         missing += 1

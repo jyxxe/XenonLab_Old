@@ -14,7 +14,9 @@
   unsupported 操作拒绝，不执行原始 SQL、eval、脚本或命令。
 - SHA-256 附件存储、大小限制、文件名清理、基础 PDF/PNG sniff、下载权限与删除行检查。
 - D100M 真实权重 CPU 加载；256D/L2、128 token 上限、模型+tokenizer revision hash。
-- 真实 HTTP embedding → 分块 → 本地精确向量索引 → semantic search → 删除过滤已通过 smoke。
+- 真实 HTTP embedding → tokenizer 分块（[PATH]/[TABLE]/[COLUMN]/[TEXT] 上下文，目标 108 token、
+  overlap 16、hard limit 126，chunker_version 参与向量匹配）→ 本地精确向量索引 → semantic search →
+  删除过滤已通过 smoke。
 - 精确搜索过滤当前 ACL/行版本/删除状态，索引缺失返回 partial/missing_embeddings。
 - Deploy release/人工审批/原子单租约/holder/epoch/renew/release/审计。
   即使 lease 过期，未确认结束的 deployment 仍阻止获取新 lease；OpenCode 无法部署。
@@ -44,6 +46,7 @@
 Catalogue 为 SQLite bootstrap，生产 PostgreSQL 迁移另见 ADR 0001。Catalogue 与每个 `.xl`
 文件之间没有分布式原子事务，进程崩溃可能产生未登记的孤立 `.xl` 文件；生产发布前须实现
 manifest/outbox 与一致性扫描。索引作业状态已在 catalogue 持久化（待发布）；重启中断明确标为失败，自动恢复仍未实现；向量可重新生成。
+分块器版本进入向量匹配键（chunker_version），版本升级后旧向量不再命中，需要重新索引。
 表导出用 SQLite backup API 生成一致性快照。独立备份位置尚未提供，mirror 不被视为备份。
 
 所有外部 secrets 只从环境读取；用户提供的 PVE/LLM/password 不写入仓库。
