@@ -232,6 +232,9 @@ def create_app(
         db.execute("""CREATE TABLE IF NOT EXISTS leases (
             id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
             owner TEXT NOT NULL, created REAL NOT NULL)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS pending_evictions (
+            id TEXT PRIMARY KEY, path TEXT NOT NULL, bytes INTEGER NOT NULL,
+            priority TEXT NOT NULL, accessed REAL NOT NULL, created REAL NOT NULL)""")
         db.execute("""CREATE TABLE IF NOT EXISTS prefetch_jobs (
             id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL,
             progress INTEGER NOT NULL, phase TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
@@ -305,15 +308,26 @@ def create_app(
         with cache_metrics_lock:
             cache_counters[name] += amount
 
+    def accounted_bytes(db):
+        # Pending deletions remain reserved until cleanup and journal clearance commit.
+        return db.execute(
+            "SELECT COALESCE(SUM(bytes),0) FROM "
+            "(SELECT bytes FROM items UNION ALL SELECT bytes FROM pending_evictions)"
+        ).fetchone()[0]
+
     def cache_metrics():
         with connect(db_path) as db:
-            usage_bytes = db.execute("SELECT COALESCE(SUM(bytes),0) FROM items").fetchone()[0]
+            usage_bytes = accounted_bytes(db)
+            pending_bytes = db.execute("SELECT COALESCE(SUM(bytes),0) FROM pending_evictions").fetchone()[0]
         with cache_metrics_lock:
             counters = dict(cache_counters)
         return (
-            "# HELP hfcache_usage_bytes Bytes currently stored in verified HF-cache items.\n"
+            "# HELP hfcache_usage_bytes Tracked snapshot bytes including conservatively reserved pending deletions.\n"
             "# TYPE hfcache_usage_bytes gauge\n"
             f"hfcache_usage_bytes {usage_bytes}\n"
+            "# HELP hfcache_pending_eviction_bytes Bytes reserved by unfinished eviction journal records.\n"
+            "# TYPE hfcache_pending_eviction_bytes gauge\n"
+            f"hfcache_pending_eviction_bytes {pending_bytes}\n"
             "# HELP hfcache_download_bytes_total Bytes in successfully downloaded snapshots.\n"
             "# TYPE hfcache_download_bytes_total counter\n"
             f"hfcache_download_bytes_total {counters['download_bytes_total']}\n"
@@ -412,6 +426,9 @@ def create_app(
 
     def storage_ready():
         storage_usage()
+        with connect(db_path) as db:
+            if db.execute("SELECT 1 FROM pending_evictions LIMIT 1").fetchone():
+                raise APIError(503, "CACHE_EVICTION_PENDING", "cache eviction cleanup is pending")
         return True
 
     app.state.ready_check = storage_ready
@@ -453,6 +470,53 @@ def create_app(
         except (OSError, ValueError, KeyError, TypeError):
             return False
 
+    def eviction_path(row):
+        item_path = Path(row["path"])
+        if item_path.parent != root or item_path != root / row["id"] or item_path.is_symlink():
+            raise APIError(500, "CACHE_PATH_INVALID", "refusing to delete outside cache root")
+        return item_path
+
+    def begin_eviction(db, row):
+        # No file mutation until BOTH the journal insert and catalog removal commit.
+        eviction_path(row)
+        db.execute(
+            "INSERT INTO pending_evictions(id,path,bytes,priority,accessed,created) VALUES(?,?,?,?,?,?)",
+            (row["id"], row["path"], row["bytes"], row["priority"], row["accessed"], time.time()),
+        )
+        db.execute("DELETE FROM items WHERE id=?", (row["id"],))
+
+    def finish_eviction(item_id):
+        try:
+            # SQLite serializes cleanup across workers. A failure rolls back only
+            # the journal clearance: the item is already absent from the catalog.
+            with transaction(db_path) as db:
+                pending = db.execute("SELECT * FROM pending_evictions WHERE id=?", (item_id,)).fetchone()
+                if pending is None:
+                    return 0
+                item_path = eviction_path(pending)
+                try:
+                    shutil.rmtree(item_path)
+                except FileNotFoundError:
+                    # Recovery after deletion but before journal clearance is idempotent.
+                    if item_path.exists():
+                        raise
+                db.execute("DELETE FROM pending_evictions WHERE id=?", (item_id,))
+        except APIError:
+            raise
+        except Exception:
+            log_cache_event("cache.eviction.pending", level=logging.WARNING, item_id=item_id)
+            raise APIError(503, "CACHE_EVICTION_PENDING", "cache eviction cleanup is pending") from None
+        add_counter("evicted_bytes_total", pending["bytes"])
+        log_cache_event("cache.item.evicted", item_id=item_id, bytes=pending["bytes"])
+        return pending["bytes"]
+
+    def recover_pending_evictions():
+        with connect(db_path) as db:
+            pending = db.execute("SELECT id FROM pending_evictions ORDER BY created").fetchall()
+        for row in pending:
+            finish_eviction(row["id"])
+        return bool(pending)
+
     def collect(target_percent, *, low_only=False, request=None):
         usage = storage_usage(request)
         removed = []
@@ -460,35 +524,36 @@ def create_app(
         priority_filter = "AND i.priority='low'" if low_only else ""
         with connect(db_path) as db:
             candidates = db.execute(
-                f"""SELECT i.id FROM items i WHERE i.pinned=0 {priority_filter}
-                AND NOT EXISTS (SELECT 1 FROM leases l WHERE l.item_id=i.id)
+                f"""SELECT i.id FROM (
+                    SELECT id,priority,accessed FROM pending_evictions
+                    UNION ALL
+                    SELECT id,priority,accessed FROM items WHERE pinned=0
+                    AND NOT EXISTS (SELECT 1 FROM leases l WHERE l.item_id=items.id)
+                ) i WHERE 1=1 {priority_filter}
                 ORDER BY CASE i.priority WHEN 'low' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, i.accessed ASC"""
             ).fetchall()
         for candidate in candidates:
             if usage.pressure_percent <= target_percent:
                 break
-            # Commit each eviction before a telemetry refresh. A failed refresh must
-            # never roll back metadata for files that have already been removed.
             with transaction(db_path) as db:
+                pending = db.execute(
+                    "SELECT 1 FROM pending_evictions WHERE id=?", (candidate["id"],)
+                ).fetchone()
                 row = db.execute(
                     f"""SELECT i.* FROM items i WHERE i.id=? AND i.pinned=0 {priority_filter}
                     AND NOT EXISTS (SELECT 1 FROM leases l WHERE l.item_id=i.id)""",
                     (candidate["id"],),
                 ).fetchone()
-                if row is None:
+                if pending is None and row is None:
                     continue
-                usage = storage_usage(request)  # validate immediately before removing files
+                usage = storage_usage(request)
                 if usage.pressure_percent <= target_percent:
                     break
-                item_path = Path(row["path"])
-                if root not in item_path.parents or item_path.is_symlink():
-                    raise APIError(500, "CACHE_PATH_INVALID", "refusing to delete outside cache root")
-                shutil.rmtree(item_path)
-                db.execute("DELETE FROM items WHERE id=?", (row["id"],))
-            removed.append(row["id"])
-            removed_bytes += row["bytes"]
-            add_counter("evicted_bytes_total", row["bytes"])
-            log_cache_event("cache.item.evicted", item_id=row["id"], bytes=row["bytes"])
+                if pending is None:
+                    begin_eviction(db, row)
+            item_bytes = finish_eviction(candidate["id"])
+            removed.append(candidate["id"])
+            removed_bytes += item_bytes
             previous = usage
             usage = storage_usage(request)
             if (usage.pool, usage.pool_total, usage.pool_used, usage.pool_free) == (
@@ -541,6 +606,8 @@ def create_app(
             staging = root / ("." + item_id + ".partial")
             try:
                 usage = storage_usage(request)
+                if recover_pending_evictions():
+                    usage = storage_usage(request)
                 used_percent = usage.pressure_percent
                 if used_percent >= 90:
                     raise APIError(
@@ -559,7 +626,7 @@ def create_app(
                             507, "DISK_WATERMARK", "cache downloads disabled above the 90% disk watermark"
                         )
                 with connect(db_path) as db:
-                    current_bytes = db.execute("SELECT COALESCE(SUM(bytes),0) FROM items").fetchone()[0]
+                    current_bytes = accounted_bytes(db)
                 remaining = min(cache_quota - current_bytes, usage.available_bytes)
                 if remaining <= 0:
                     raise APIError(507, "CACHE_QUOTA_EXCEEDED", "HF-cache byte quota is full")
@@ -729,6 +796,12 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application):
+        try:
+            recover_pending_evictions()
+        except APIError:
+            # Keep verified cache reads available; readiness and new downloads
+            # remain blocked until the durable pending cleanup can finish.
+            log_cache_event("cache.eviction.recovery_pending", level=logging.WARNING)
         resume_prefetch_jobs()
         async with existing_lifespan(application):
             yield
@@ -883,19 +956,15 @@ def create_app(
     @app.post("/api/v1/cache/items/{item_id}/evict")
     def evict(item_id: str, request: Request, actor=Depends(scope("hf-cache:write"))):
         with transaction(db_path) as db:
-            row = get_item(db, item_id)
-            if row["pinned"]:
-                raise APIError(409, "CACHE_ITEM_PROTECTED", "pinned cache items cannot be evicted")
-            if db.execute("SELECT 1 FROM leases WHERE item_id=? LIMIT 1", (item_id,)).fetchone():
-                raise APIError(409, "CACHE_ITEM_IN_USE", "active cache leases prevent eviction")
-            item_path = Path(row["path"])
-            if root not in item_path.parents or item_path.is_symlink():
-                raise APIError(500, "CACHE_PATH_INVALID", "refusing to delete outside cache root")
-            shutil.rmtree(item_path)
-            db.execute("DELETE FROM items WHERE id=?", (item_id,))
-            item_bytes = row["bytes"]
-        add_counter("evicted_bytes_total", item_bytes)
-        log_cache_event("cache.item.evicted", item_id=item_id, bytes=item_bytes)
+            pending = db.execute("SELECT 1 FROM pending_evictions WHERE id=?", (item_id,)).fetchone()
+            if pending is None:
+                row = get_item(db, item_id)
+                if row["pinned"]:
+                    raise APIError(409, "CACHE_ITEM_PROTECTED", "pinned cache items cannot be evicted")
+                if db.execute("SELECT 1 FROM leases WHERE item_id=? LIMIT 1", (item_id,)).fetchone():
+                    raise APIError(409, "CACHE_ITEM_IN_USE", "active cache leases prevent eviction")
+                begin_eviction(db, row)
+        finish_eviction(item_id)
         return response(request, {"id": item_id, "evicted": True})
 
     @app.post("/api/v1/cache/items/{item_id}/leases")
@@ -925,7 +994,7 @@ def create_app(
         percent = usage.pressure_percent
         level = watermark(usage)
         with connect(db_path) as db:
-            cached_bytes = db.execute("SELECT COALESCE(SUM(bytes),0) FROM items").fetchone()[0]
+            cached_bytes = accounted_bytes(db)
         return response(
             request,
             {

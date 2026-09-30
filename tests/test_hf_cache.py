@@ -1,7 +1,11 @@
 import json
 import logging
 import os
+import sqlite3
+import subprocess
+import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -755,3 +759,204 @@ def test_watermark_transitions_emit_plan_storage_warning_once(settings, caplog):
         assert event["type"] == "hfcache.storage.warning"
         assert event["source"] == "hf-cache" and event["actor"] == "system"
         assert event["occurred_at"] and event["request_id"]
+
+
+
+@pytest.mark.parametrize("operation", ["evict", "gc"])
+def test_eviction_catalog_commit_failure_preserves_files_and_cache(settings, monkeypatch, operation):
+    app = hf_cache.create_app(
+        settings, download_backend=local_download, revision_resolver=lambda *_args: REV,
+    )
+    with TestClient(app, raise_server_exceptions=False) as api:
+        item = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        original_transaction = hf_cache.transaction
+        injected = []
+
+        @contextmanager
+        def fail_catalog_commit(path):
+            with original_transaction(path) as db:
+                yield db
+                if not injected and db.execute("SELECT 1 FROM pending_evictions LIMIT 1").fetchone():
+                    injected.append(True)
+                    raise sqlite3.OperationalError("fixture catalog commit failure")
+
+        monkeypatch.setattr(hf_cache, "transaction", fail_catalog_commit)
+        if operation == "gc":
+            monkeypatch.setattr(
+                hf_cache.shutil, "disk_usage",
+                lambda _path: SimpleNamespace(total=10_000, used=9_500, free=500),
+            )
+            result = api.post("/api/v1/cache/gc", headers=auth(), json={"target_usage_percent": 75})
+        else:
+            result = api.post(f"/api/v1/cache/items/{item['id']}/evict", headers=auth())
+        assert result.status_code == 500 and injected == [True]
+        with hf_cache.connect(settings.data_dir / "hf-cache.sqlite") as db:
+            assert db.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+            assert db.execute("SELECT COUNT(*) FROM pending_evictions").fetchone()[0] == 0
+        assert (settings.data_dir / "snapshots" / item["id"] / "weights.bin").is_file()
+        cached = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload())
+        assert cached.status_code == 200 and cached.json()["data"]["status"] == "cached"
+
+
+def test_process_crash_after_eviction_journal_commit_recovers_on_restart(settings):
+    with client(settings) as api:
+        item = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+    crash_code = """
+import os
+import sys
+from pathlib import Path
+from fastapi.testclient import TestClient
+from xeonolab import hf_cache
+from xeonolab.common import Settings
+settings = Settings(Path(sys.argv[1]), "development", dev_tokens={
+    "operator": {"sub": "operator", "scope": "hf-cache:write"}
+})
+app = hf_cache.create_app(settings)
+with TestClient(app) as api:
+    hf_cache.shutil.rmtree = lambda *_args, **_kwargs: os._exit(77)
+    api.post("/api/v1/cache/items/" + sys.argv[2] + "/evict",
+             headers={"Authorization": "Bearer operator"})
+"""
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_code, str(settings.data_dir), item["id"]],
+        capture_output=True, timeout=15,
+    )
+    assert crashed.returncode == 77, crashed.stderr.decode()
+    folder = settings.data_dir / "snapshots" / item["id"]
+    assert folder.is_dir()
+    with hf_cache.connect(settings.data_dir / "hf-cache.sqlite") as db:
+        assert db.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+        assert db.execute("SELECT bytes FROM pending_evictions").fetchone()[0] == item["bytes"]
+    with client(settings) as api:
+        assert not folder.exists()
+        assert api.get("/api/v1/cache/items", headers=auth()).json()["data"] == []
+        metrics = api.get("/metrics").text
+        assert "hfcache_usage_bytes 0\n" in metrics
+        assert "hfcache_pending_eviction_bytes 0\n" in metrics
+        assert f"hfcache_evicted_bytes_total {item['bytes']}\n" in metrics
+    with hf_cache.connect(settings.data_dir / "hf-cache.sqlite") as db:
+        assert db.execute("SELECT COUNT(*) FROM pending_evictions").fetchone()[0] == 0
+    with client(settings) as api:
+        # A second restart has nothing to clean and does not recount the eviction.
+        assert "hfcache_evicted_bytes_total 0\n" in api.get("/metrics").text
+
+
+def test_partial_eviction_cleanup_failure_reserves_bytes_blocks_downloads_and_retries(settings, monkeypatch):
+    downloads = []
+
+    def counted_download(*args):
+        downloads.append(args)
+        local_download(*args)
+
+    def make_app():
+        return hf_cache.create_app(
+            settings, download_backend=counted_download, revision_resolver=lambda *_args: REV,
+        )
+
+    with TestClient(make_app()) as api:
+        doomed = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        kept = api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/kept", pin=True)
+        ).json()["data"]
+        original_rmtree = hf_cache.shutil.rmtree
+
+        def partial_failure(path, *args, **kwargs):
+            if path != settings.data_dir / "snapshots" / doomed["id"]:
+                return original_rmtree(path, *args, **kwargs)
+            weights = path / "weights.bin"
+            if weights.exists():
+                weights.unlink()
+            raise OSError("fixture disk failure")
+
+        monkeypatch.setattr(hf_cache.shutil, "rmtree", partial_failure)
+        failed = api.post(f"/api/v1/cache/items/{doomed['id']}/evict", headers=auth())
+        assert failed.status_code == 503
+        assert failed.json()["error"]["code"] == "CACHE_EVICTION_PENDING"
+        assert api.get(f"/api/v1/cache/items/{doomed['id']}", headers=auth()).status_code == 404
+        assert (settings.data_dir / "snapshots" / doomed["id"]).is_dir()
+        reserved = doomed["bytes"] + kept["bytes"]
+        assert api.get("/api/v1/cache/storage", headers=auth()).json()["data"]["cached_bytes"] == reserved
+        assert f"hfcache_usage_bytes {reserved}\n" in api.get("/metrics").text
+        assert f"hfcache_pending_eviction_bytes {doomed['bytes']}\n" in api.get("/metrics").text
+    # A failed startup cleanup keeps verified cache reads usable, but blocks allocation.
+    with TestClient(make_app()) as api:
+        assert api.get("/health/ready").status_code == 503
+        cached = api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/kept")
+        )
+        assert cached.status_code == 200 and cached.json()["data"]["status"] == "cached"
+        blocked = api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/new")
+        )
+        assert blocked.status_code == 503 and blocked.json()["error"]["code"] == "CACHE_EVICTION_PENDING"
+        assert len(downloads) == 2
+        monkeypatch.setattr(hf_cache.shutil, "rmtree", original_rmtree)
+        retried = api.post(f"/api/v1/cache/items/{doomed['id']}/evict", headers=auth())
+        assert retried.status_code == 200
+        assert not (settings.data_dir / "snapshots" / doomed["id"]).exists()
+        assert api.get("/health/ready").status_code == 200
+        assert api.get("/api/v1/cache/storage", headers=auth()).json()["data"]["cached_bytes"] == kept["bytes"]
+        assert f"hfcache_evicted_bytes_total {doomed['bytes']}\n" in api.get("/metrics").text
+        with hf_cache.connect(settings.data_dir / "hf-cache.sqlite") as db:
+            assert db.execute("SELECT COUNT(*) FROM pending_evictions").fetchone()[0] == 0
+        assert api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/new")
+        ).status_code == 200
+        assert len(downloads) == 3
+
+
+def test_eviction_journal_clear_commit_failure_recovers_after_files_are_gone(settings, monkeypatch):
+    with client(settings) as api:
+        item = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        original_transaction = hf_cache.transaction
+        injected = []
+
+        @contextmanager
+        def fail_journal_clear_commit(path):
+            with original_transaction(path) as db:
+                had_pending = bool(db.execute("SELECT 1 FROM pending_evictions LIMIT 1").fetchone())
+                yield db
+                if had_pending and not injected and not db.execute(
+                    "SELECT 1 FROM pending_evictions LIMIT 1"
+                ).fetchone():
+                    injected.append(True)
+                    raise sqlite3.OperationalError("fixture journal clearance commit failure")
+
+        monkeypatch.setattr(hf_cache, "transaction", fail_journal_clear_commit)
+        failed = api.post(f"/api/v1/cache/items/{item['id']}/evict", headers=auth())
+        assert failed.status_code == 503 and injected == [True]
+        assert not (settings.data_dir / "snapshots" / item["id"]).exists()
+        with hf_cache.connect(settings.data_dir / "hf-cache.sqlite") as db:
+            assert db.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+            assert db.execute("SELECT bytes FROM pending_evictions").fetchone()[0] == item["bytes"]
+        # Conservatively keep the reservation until the durable journal is cleared.
+        assert f"hfcache_usage_bytes {item['bytes']}\n" in api.get("/metrics").text
+        assert "hfcache_evicted_bytes_total 0\n" in api.get("/metrics").text
+        retried = api.post(f"/api/v1/cache/items/{item['id']}/evict", headers=auth())
+        assert retried.status_code == 200
+        assert "hfcache_usage_bytes 0\n" in api.get("/metrics").text
+        assert f"hfcache_evicted_bytes_total {item['bytes']}\n" in api.get("/metrics").text
+
+
+def test_eviction_recovery_refuses_snapshot_symlink(settings, monkeypatch, tmp_path):
+    with client(settings) as api:
+        item = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        original_rmtree = hf_cache.shutil.rmtree
+        def unavailable(*_args):
+            raise OSError("fixture deletion unavailable")
+
+        monkeypatch.setattr(hf_cache.shutil, "rmtree", unavailable)
+        assert api.post(f"/api/v1/cache/items/{item['id']}/evict", headers=auth()).status_code == 503
+        monkeypatch.setattr(hf_cache.shutil, "rmtree", original_rmtree)
+    folder = settings.data_dir / "snapshots" / item["id"]
+    original_rmtree(folder)
+    outside = tmp_path / "unrelated-data"
+    outside.mkdir()
+    (outside / "keep").write_text("keep")
+    folder.symlink_to(outside, target_is_directory=True)
+    with client(settings) as api:
+        assert (outside / "keep").read_text() == "keep"
+        assert api.get("/health/ready").status_code == 503
+        assert api.post(f"/api/v1/cache/items/{item['id']}/evict", headers=auth()).status_code == 500
+        with hf_cache.connect(settings.data_dir / "hf-cache.sqlite") as db:
+            assert db.execute("SELECT COUNT(*) FROM pending_evictions").fetchone()[0] == 1
