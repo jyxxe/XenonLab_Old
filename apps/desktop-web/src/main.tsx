@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './style.css';
 import {login,callback,sessionToken,logout,SessionFailure} from './auth';
-import {initialSessionState,transitionSession} from './session-state.js';
+import {initialSessionState,transitionSession,mayUseCachedToken} from './session-state.js';
 import {Settings} from './Settings';
 import {defaultPreferences,Preferences} from './DesktopPreferences';
 import {Work} from './Work';
@@ -51,8 +51,8 @@ function Desktop(){
  }
  async function accessToken(){
    if(!persistent)return token?{token}:null;
-   try{const current=await sessionToken();if(current){setToken(current.token);return current}transition({type:'reauthorization-required',message:'登录凭据已失效，需要重新授权'});return token?{token}:null}
-   catch(e){const failure=e instanceof SessionFailure?e:new SessionFailure('temporary',String(e));transition({type:failure.kind==='reauthorize'?'reauthorization-required':'temporary-failure',message:failure.message});if(failure.kind==='reauthorize')return token?{token}:null;if(token)return {token};throw failure}
+   try{const current=await sessionToken();if(current){setToken(current.token);return current}const failure=new SessionFailure('reauthorize','登录凭据已失效，需要重新授权');transition({type:'reauthorization-required',message:failure.message});throw failure}
+   catch(e){const failure=e instanceof SessionFailure?e:new SessionFailure('temporary',String(e));transition({type:failure.kind==='reauthorize'?'reauthorization-required':'temporary-failure',message:failure.message});if(mayUseCachedToken(failure.kind,Boolean(token)))return {token};throw failure}
  }
  function open(app:App){
    setWindows(old=>{

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {initialSessionState, transitionSession} from '../src/session-state.js';
+import {initialSessionState, mayUseCachedToken, transitionSession} from '../src/session-state.js';
 
 test('temporary failures preserve the connected workspace and cached token', () => {
   const current = {
@@ -44,4 +44,11 @@ test('only the explicit logout event clears the session and workspace', () => {
   assert.equal(loggedOut.token, '');
   assert.equal(loggedOut.persistent, false);
   assert.deepEqual(loggedOut.windows, []);
+});
+
+test('revoked sessions never use a cached bearer token for API requests', () => {
+  assert.equal(mayUseCachedToken('reauthorize', true), false);
+  assert.equal(mayUseCachedToken('reauthorize', false), false);
+  assert.equal(mayUseCachedToken('temporary', true), true);
+  assert.equal(mayUseCachedToken('temporary', false), false);
 });

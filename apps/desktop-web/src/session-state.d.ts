@@ -3,3 +3,4 @@ export type SessionStatus = {phase: SessionPhase; message: string; [key: string]
 export type SessionEvent = {type: string; message?: string};
 export const initialSessionState: SessionStatus;
 export function transitionSession(state: SessionStatus, event: SessionEvent): SessionStatus;
+export function mayUseCachedToken(failureKind: 'temporary' | 'reauthorize', hasToken: boolean): boolean;

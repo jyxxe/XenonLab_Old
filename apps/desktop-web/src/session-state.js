@@ -1,5 +1,9 @@
 export const initialSessionState = Object.freeze({phase: 'restoring', message: ''});
 
+export function mayUseCachedToken(failureKind, hasToken) {
+  return failureKind === 'temporary' && hasToken;
+}
+
 export function transitionSession(state, event) {
   switch (event.type) {
     case 'restore-started':
