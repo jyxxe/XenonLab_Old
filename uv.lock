@@ -900,6 +900,7 @@ dependencies = [
     { name = "lark" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
+    { name = "tokenizers" },
     { name = "uvicorn" },
 ]
 
@@ -927,6 +928,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "pyyaml", marker = "extra == 'inference'", specifier = ">=6" },
     { name = "safetensors", marker = "extra == 'inference'", specifier = ">=0.4" },
+    { name = "tokenizers", specifier = ">=0.20,<1" },
     { name = "tokenizers", marker = "extra == 'inference'", specifier = ">=0.20" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'inference'", specifier = ">=2.6", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'inference'", specifier = ">=2.6" },
