@@ -1,8 +1,15 @@
 type Config = {issuer:string;client_id:string};
 export class SessionFailure extends Error { constructor(public kind:'temporary'|'reauthorize', message:string){super(message);this.name='SessionFailure';} }
 const encode=(bytes:Uint8Array)=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-async function config():Promise<Config>{const r=await fetch('/api/v1/auth/config');if(!r.ok)throw Error('身份服务配置不可用');return r.json();}
-async function discovery(c:Config){const r=await fetch(c.issuer+'/.well-known/openid-configuration');if(!r.ok)throw Error('身份服务不可用');const d=await r.json();if(d.issuer!==c.issuer)throw Error('身份服务 issuer 不一致');return d;}
+async function config():Promise<Config>{const r=await fetch('/api/v1/auth/config?origin='+encodeURIComponent(location.origin));if(!r.ok)throw Error('身份服务配置不可用');return r.json();}
+async function discovery(c:Config){
+ const issuer=new URL(c.issuer);
+ if(issuer.protocol!=='https:'||issuer.username||issuer.password||issuer.search||issuer.hash)throw Error('身份服务 issuer 无效');
+ const r=await fetch(c.issuer+'/.well-known/openid-configuration');if(!r.ok)throw Error('身份服务不可用');const d=await r.json();
+ if(d.issuer!==c.issuer)throw Error('身份服务 issuer 不一致');
+ const endpoint=(value:unknown)=>{if(typeof value!=='string')throw Error('身份服务配置无效');const url=new URL(value);if(url.protocol!=='https:'||url.username||url.password||url.origin!==issuer.origin||!url.pathname.startsWith(issuer.pathname.replace(/\/$/,'')+'/')||url.search||url.hash)throw Error('身份服务端点不一致');return url;};
+ endpoint(d.authorization_endpoint);endpoint(d.token_endpoint);endpoint(d.jwks_uri);return d;
+}
 export async function login(){
  const c=await config(),d=await discovery(c);
  const verifier=encode(crypto.getRandomValues(new Uint8Array(32))),state=encode(crypto.getRandomValues(new Uint8Array(24)));
@@ -15,7 +22,7 @@ export async function callback():Promise<{token:string;expires:number}|null>{
  const saved=sessionStorage.getItem('xeonolab-oauth');sessionStorage.removeItem('xeonolab-oauth');
  history.replaceState(null,'',location.pathname);
  if(parameters.has('error'))throw Error('登录未完成');if(!saved)throw Error('登录请求已失效');
- const data=JSON.parse(saved);if(parameters.get('state')!==data.state||Date.now()-data.created>600000)throw Error('登录状态校验失败');
+ const data=JSON.parse(saved);const age=Date.now()-data.created;if(typeof data.state!=='string'||typeof data.verifier!=='string'||data.verifier.length<43||data.verifier.length>128||data.redirect!==location.origin+'/'||!Number.isFinite(data.created)||age<0||age>600000||parameters.get('state')!==data.state)throw Error('登录状态校验失败');
  let r:Response;try{r=await fetch('/api/v1/auth/session/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:parameters.get('code'),redirect:data.redirect,verifier:data.verifier})})}catch{throw new SessionFailure('temporary','身份服务暂时不可用，请重试')}
  const result=await r.json().catch(()=>({}));if(!r.ok){if(r.status>=500||r.status===429)throw new SessionFailure('temporary',result.error?.message||'身份服务暂时不可用，请重试');throw new SessionFailure('reauthorize',result.error?.message||'登录令牌交换失败，请重新授权')}return result;
 }

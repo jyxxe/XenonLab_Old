@@ -36,7 +36,10 @@ https://library.xenon.lan {
 }
 https://auth.xenon.lan, https://192.168.0.101:9444 {
   tls internal
-  reverse_proxy 192.168.0.109:8180
+  reverse_proxy 192.168.0.109:8180 {
+    header_up X-Forwarded-Host {host}
+    header_up X-Forwarded-Proto https
+  }
 }
 https://tools.xenon.lan {
   tls internal

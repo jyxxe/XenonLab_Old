@@ -100,7 +100,7 @@ realm = {
             "publicClient": True,
             "standardFlowEnabled": True,
             "directAccessGrantsEnabled": False,
-            "redirectUris": ["https://xenon.lan/*", "https://xenon.jyxxe.com/*", "https://192.168.0.101:9443/*"],
+            "redirectUris": ["https://xenon.lan/", "https://xenon.jyxxe.com/", "https://192.168.0.101:9443/"],
             "webOrigins": ["https://xenon.lan", "https://xenon.jyxxe.com", "https://192.168.0.101:9443"],
             "optionalClientScopes": ["offline_access"],
             "attributes": {"pkce.code.challenge.method": "S256"},
@@ -147,9 +147,14 @@ os.chmod(root / "xeonolab-realm.json", 0o600)
             "KC_DB_PASSWORD=" + credentials["postgres"],
             "KC_BOOTSTRAP_ADMIN_USERNAME=bootstrap-admin",
             "KC_BOOTSTRAP_ADMIN_PASSWORD=" + credentials["keycloak_admin"],
-            "KC_HOSTNAME=https://192.168.0.101:9444",
+            # Exact public, LAN, and IP issuers are allowlisted in each API
+            # service. Keycloak derives browser endpoints from its trusted Caddy
+            # forwarded host so each desktop origin receives its matching issuer.
+            "KC_HOSTNAME_STRICT=false",
             "KC_HTTP_ENABLED=true",
             "KC_PROXY_HEADERS=xforwarded",
+            # Only Caddy on Web 101 is permitted to influence dynamic issuer URLs.
+            "KC_PROXY_TRUSTED_ADDRESSES=192.168.0.101",
             "KC_HEALTH_ENABLED=true",
             "JAVA_OPTS_APPEND=-Xms256m -Xmx1536m",
         ]

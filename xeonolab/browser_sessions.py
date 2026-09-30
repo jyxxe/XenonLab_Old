@@ -5,6 +5,7 @@ import os
 import secrets
 import ssl
 import time
+from urllib.parse import urlsplit
 
 import httpx
 import jwt
@@ -21,7 +22,41 @@ ORIGINS = {"https://xenon.lan", "https://xenon.jyxxe.com", "https://192.168.0.10
 class Exchange(BaseModel):
     code: str = Field(min_length=1, max_length=4096)
     verifier: str = Field(min_length=43, max_length=128)
-    redirect: str
+    redirect: str = Field(min_length=1, max_length=2048)
+
+
+def _token_endpoint(app, issuer):
+    """Resolve an operator-configured endpoint for one exact, allowlisted issuer."""
+    if issuer not in app.state.settings.allowed_issuers:
+        raise APIError(503, "AUTH_NOT_CONFIGURED", "token endpoint unavailable")
+    configured = app.state.settings.oidc_token_urls.get(issuer)
+    if configured is None and issuer == app.state.settings.issuer:
+        configured = os.getenv("OIDC_TOKEN_URL")
+    if configured is None:
+        configured = issuer.rstrip("/") + "/protocol/openid-connect/token"
+    parts = urlsplit(configured)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+        or parts.hostname != urlsplit(issuer).hostname
+        or parts.port != urlsplit(issuer).port
+        or parts.path != urlsplit(issuer).path.rstrip("/") + "/protocol/openid-connect/token"
+    ):
+        raise APIError(503, "AUTH_NOT_CONFIGURED", "token endpoint unavailable")
+    return configured
+
+
+def _issuer_for_origin(settings, value):
+    if value not in ORIGINS:
+        raise APIError(403, "INVALID_ORIGIN", "same-origin browser request required")
+    issuer = settings.oidc_issuers_by_origin.get(value, settings.issuer)
+    if issuer not in settings.allowed_issuers or not issuer.startswith("https://"):
+        raise APIError(503, "AUTH_NOT_CONFIGURED", "identity issuer unavailable")
+    return issuer
 
 
 def install(app):
@@ -29,7 +64,10 @@ def install(app):
     with transaction(path) as db:
         db.execute("""CREATE TABLE IF NOT EXISTS sessions(
             id TEXT PRIMARY KEY, subject TEXT NOT NULL, refresh TEXT NOT NULL,
-            access TEXT NOT NULL, expires REAL NOT NULL)""")
+            access TEXT NOT NULL, expires REAL NOT NULL, issuer TEXT NOT NULL DEFAULT '')""")
+        if "issuer" not in {row[1] for row in db.execute("PRAGMA table_info(sessions)")}:
+            db.execute("ALTER TABLE sessions ADD COLUMN issuer TEXT NOT NULL DEFAULT ''")
+        db.execute("UPDATE sessions SET issuer=? WHERE issuer=''", (app.state.settings.issuer,))
     path.chmod(0o600)
 
     def origin(request):
@@ -38,10 +76,8 @@ def install(app):
             raise APIError(403, "INVALID_ORIGIN", "same-origin browser request required")
         return value
 
-    def exchange(data):
-        endpoint = os.getenv("OIDC_TOKEN_URL")
-        if not endpoint:
-            raise APIError(503, "AUTH_NOT_CONFIGURED", "token endpoint unavailable")
+    def exchange(data, issuer):
+        endpoint = _token_endpoint(app, issuer)
         try:
             context = ssl.create_default_context(cafile=os.getenv("OIDC_CA_FILE"))
             with httpx.Client(verify=context, trust_env=False, timeout=20) as client:
@@ -61,7 +97,7 @@ def install(app):
                 body["access_token"],
                 app.state.settings.public_key,
                 algorithms=["RS256"],
-                issuer=app.state.settings.issuer,
+                issuer=issuer,
                 audience=app.state.settings.audience,
                 options={"require": ["exp", "sub", "iss", "aud"]},
             )
@@ -83,15 +119,18 @@ def install(app):
 
     @app.post("/api/v1/auth/session/exchange")
     def create(body: Exchange, request: Request):
-        if body.redirect != origin(request) + "/":
+        request_origin = origin(request)
+        if body.redirect != request_origin + "/":
             raise APIError(422, "INVALID_REDIRECT", "desktop callback required")
+        issuer = _issuer_for_origin(app.state.settings, request_origin)
         tokens, claims = exchange(
             {
                 "grant_type": "authorization_code",
                 "code": body.code,
                 "code_verifier": body.verifier,
                 "redirect_uri": body.redirect,
-            }
+            },
+            issuer,
         )
         if not tokens.get("refresh_token"):
             raise APIError(503, "REFRESH_UNAVAILABLE", "persistent login unavailable")
@@ -102,13 +141,14 @@ def install(app):
             if old:
                 db.execute("DELETE FROM sessions WHERE id=?", (hashlib.sha256(old.encode()).hexdigest(),))
             db.execute(
-                "INSERT INTO sessions VALUES(?,?,?,?,?)",
+                "INSERT INTO sessions(id,subject,refresh,access,expires,issuer) VALUES(?,?,?,?,?,?)",
                 (
                     session_id,
                     claims["sub"],
                     tokens["refresh_token"],
                     tokens["access_token"],
                     claims["exp"],
+                    issuer,
                 ),
             )
         result = output(tokens["access_token"], claims["exp"])
@@ -146,7 +186,10 @@ def install(app):
                     return output(row["access"], row["expires"], cookie)
             else:
                 try:
-                    tokens, claims = exchange({"grant_type": "refresh_token", "refresh_token": row["refresh"]})
+                    session_issuer = row["issuer"] or app.state.settings.issuer
+                    tokens, claims = exchange(
+                        {"grant_type": "refresh_token", "refresh_token": row["refresh"]}, session_issuer
+                    )
                 except APIError as exc:
                     if exc.code != "SESSION_REVOKED":
                         raise
