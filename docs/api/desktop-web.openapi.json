@@ -495,12 +495,35 @@
       "get": {
         "summary": "Auth Config",
         "operationId": "auth_config_api_v1_auth_config_get",
+        "parameters": [
+          {
+            "name": "origin",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 256,
+              "default": "",
+              "title": "Origin"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -1087,6 +1110,8 @@
           },
           "redirect": {
             "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
             "title": "Redirect"
           }
         },

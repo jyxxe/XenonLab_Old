@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import Depends, Request
+from fastapi import Depends, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
@@ -172,8 +172,18 @@ def create_app(settings=None):
         )
 
     @app.get("/api/v1/auth/config")
-    def auth_config():
-        return {"issuer": app.state.settings.issuer, "client_id": "desktop"}
+    def auth_config(origin: str = Query(default="", max_length=256)):
+        from .browser_sessions import _issuer_for_origin
+
+        # The SPA supplies its own exact origin. This lets the public hostname and
+        # direct LAN/IP entry use separately configured, strictly verified issuers.
+        browser_origin = origin
+        issuer = (
+            app.state.settings.issuer
+            if not browser_origin and not app.state.settings.oidc_issuers_by_origin
+            else _issuer_for_origin(app.state.settings, browser_origin)
+        )
+        return {"issuer": issuer, "client_id": "desktop"}
 
     @app.get("/api/v1/users/me")
     def me(request: Request, actor=Depends(scope("desktop:read"))):

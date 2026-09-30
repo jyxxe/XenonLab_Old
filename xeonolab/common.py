@@ -10,6 +10,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -200,6 +201,63 @@ class Settings:
     role_scopes: dict | None = None
     rate_limit_enabled: bool = True
     rate_limit_policies: dict = field(default_factory=lambda: json.loads(json.dumps(DEFAULT_RATE_LIMITS)))
+    oidc_issuers_by_origin: dict[str, str] = field(default_factory=dict)
+    oidc_token_urls: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not isinstance(self.oidc_issuers_by_origin, dict) or not isinstance(self.oidc_token_urls, dict):
+            raise ValueError("OIDC issuer and token URL settings must be JSON objects")
+        issuers = {self.issuer, *self.oidc_issuers_by_origin.values()} - {""}
+        for origin, issuer in self.oidc_issuers_by_origin.items():
+            origin_parts = urlsplit(origin) if isinstance(origin, str) else None
+            if (
+                not origin_parts
+                or origin_parts.scheme != "https"
+                or not origin_parts.hostname
+                or origin_parts.username
+                or origin_parts.password
+                or origin_parts.path
+                or origin_parts.query
+                or origin_parts.fragment
+                or not isinstance(issuer, str)
+            ):
+                raise ValueError("invalid OIDC issuer origin mapping")
+        for issuer in issuers:
+            parts = urlsplit(issuer) if isinstance(issuer, str) else None
+            if (
+                not parts
+                or parts.scheme != "https"
+                or not parts.hostname
+                or parts.username
+                or parts.password
+                or (parts.path and not parts.path.startswith("/"))
+                or parts.query
+                or parts.fragment
+            ):
+                raise ValueError("OIDC issuers must be exact HTTPS URLs")
+        if not set(self.oidc_token_urls) <= issuers:
+            raise ValueError("OIDC token URL keys must match configured issuers")
+        for issuer, endpoint in self.oidc_token_urls.items():
+            issuer_parts = urlsplit(issuer)
+            parts = urlsplit(endpoint) if isinstance(endpoint, str) else None
+            if (
+                not parts
+                or parts.scheme != "https"
+                or not parts.hostname
+                or parts.username
+                or parts.password
+                or parts.query
+                or parts.fragment
+                or parts.hostname != issuer_parts.hostname
+                or parts.port != issuer_parts.port
+                or parts.path != issuer_parts.path.rstrip("/") + "/protocol/openid-connect/token"
+            ):
+                raise ValueError("OIDC token endpoints must match their exact HTTPS issuer")
+
+    @property
+    def allowed_issuers(self):
+        """Exact issuer values accepted by API JWT verifiers."""
+        return frozenset({self.issuer, *self.oidc_issuers_by_origin.values()} - {""})
 
     @classmethod
     def environment(cls, service):
@@ -225,6 +283,8 @@ class Settings:
             json.loads(os.getenv("OIDC_ROLE_SCOPES_JSON", "{}")),
             os.getenv("RATE_LIMIT_ENABLED", "true").lower() in ("1", "true", "yes", "on"),
             policies,
+            json.loads(os.getenv("OIDC_ISSUERS_BY_ORIGIN_JSON", "{}")),
+            json.loads(os.getenv("OIDC_TOKEN_URLS_JSON", "{}")),
         )
 
 
@@ -239,7 +299,7 @@ def token_identity(token, settings):
                 token,
                 settings.public_key,
                 algorithms=["RS256"],
-                issuer=settings.issuer,
+                issuer=list(settings.allowed_issuers) if settings.allowed_issuers else settings.issuer,
                 audience=settings.audience,
                 options={"require": ["exp", "sub", "iss", "aud"]},
             )

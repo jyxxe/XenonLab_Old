@@ -33,6 +33,13 @@ Cloudflare connector 位于 VM 105，已建立连接。Token 仅存 /etc/cloudfl
 为恢复内网登录，已回退 canonical issuer 到 IP 9444；公网 /auth 配置保留，
 待 Tunnel 连通稳定后同步切换，不将当前公网登录视为可用。Forgejo IP 9445 仍可管理。
 
+Issue #68 local implementation now supports explicit per-desktop-origin public,
+LAN and IP issuers while retaining exact JWT issuer checks and issuer-pinned
+server sessions. Keycloak multi-host config and exact callback URIs are prepared
+by the bootstrap generator. This code/config has not been applied or accepted in
+production; see `docs/runbooks/oidc-public-issuer.md` for operator prerequisites,
+staged verification and rollback.
+
 ## DevAgent work queue 上线
 
 VM 111 提供 DevAgent 8106，仅 VM 101 代理与本机可访问，防火墙设置开机应用。

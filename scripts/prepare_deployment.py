@@ -13,6 +13,14 @@ public = (root / "deploy-key.pub").read_text().strip()
 roles = {
     "platform-admin": "accounts:manage dev:read dev:write desktop:read desktop:admin xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:admin deploy:read llm:use".split()
 }
+issuer_by_origin = {
+    "https://xenon.jyxxe.com": "https://xenon.jyxxe.com/auth/realms/xeonolab",
+    "https://xenon.lan": "https://auth.xenon.lan/realms/xeonolab",
+    "https://192.168.0.101:9443": "https://192.168.0.101:9444/realms/xeonolab",
+}
+token_urls = {
+    issuer: issuer + "/protocol/openid-connect/token" for issuer in issuer_by_origin.values()
+}
 services = {
     "101": {"desktop-web": 8101},
     "104": {"xelibrary": 8100},
@@ -52,6 +60,8 @@ for node, entries in services.items():
             "OIDC_ROLE_SCOPES_JSON='" + json.dumps(roles) + "'",
             "OIDC_CA_FILE=/etc/xeonolab/lan-root-ca.crt",
             "OIDC_TOKEN_URL=https://192.168.0.101:9444/realms/xeonolab/protocol/openid-connect/token",
+            "OIDC_ISSUERS_BY_ORIGIN_JSON='" + json.dumps(issuer_by_origin, separators=(",", ":")) + "'",
+            "OIDC_TOKEN_URLS_JSON='" + json.dumps(token_urls, separators=(",", ":")) + "'",
         ]
         if service == "desktop-web":
             lines += [
