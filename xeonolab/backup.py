@@ -294,6 +294,12 @@ def verify_backup(backup: Path) -> dict:
         upload_path = False
         if len(pure.parts) == 3 and pure.parts[:2] == ("objects", ".uploads"):
             upload_path = re.fullmatch(r"\.[0-9a-f-]{36}\.[0-9a-f-]{36}\.tmp", pure.name) is not None
+        elif len(pure.parts) == 4 and pure.parts[:3] == ("objects", ".uploads", ".locks"):
+            try:
+                lock_id = str(UUID(pure.name.removesuffix(".lock")))
+            except ValueError:
+                lock_id = ""
+            upload_path = pure.name == f"{lock_id}.lock" and bool(lock_id)
         elif len(pure.parts) == 4 and pure.parts[:2] == ("objects", ".uploads"):
             try:
                 session_valid = str(UUID(pure.parts[2])) == pure.parts[2]

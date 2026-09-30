@@ -197,6 +197,9 @@ def test_upload_database_and_staged_parts_are_in_manifest(tmp_path):
     staged = source / "objects/.uploads" / upload_id / "00000001.part"
     staged.parent.mkdir(parents=True)
     staged.write_bytes(b"partial upload")
+    lock = source / "objects/.uploads/.locks" / f"{upload_id}.lock"
+    lock.parent.mkdir(parents=True)
+    lock.touch()
     uploads = sqlite3.connect(source / "uploads.sqlite")
     uploads.execute("CREATE TABLE upload_sessions(payload TEXT)")
     uploads.execute("INSERT INTO upload_sessions VALUES('synthetic test fixture')")
@@ -207,8 +210,10 @@ def test_upload_database_and_staged_parts_are_in_manifest(tmp_path):
     manifest_paths = {entry["path"] for entry in verify_backup(backup)["files"]}
     assert "uploads.sqlite" in manifest_paths
     assert f"objects/.uploads/{upload_id}/00000001.part" in manifest_paths
+    assert f"objects/.uploads/.locks/{upload_id}.lock" in manifest_paths
     restore_root = tmp_path / "restore-parent"
     restore_root.mkdir()
     restored = restore_backup(backup, restore_root, "snapshot")
     assert (restored / "uploads.sqlite").is_file()
     assert (restored / f"objects/.uploads/{upload_id}/00000001.part").read_bytes() == b"partial upload"
+    assert (restored / f"objects/.uploads/.locks/{upload_id}.lock").is_file()
