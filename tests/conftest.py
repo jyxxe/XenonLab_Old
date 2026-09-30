@@ -34,3 +34,14 @@ def library(settings):
 
 def auth(token="alice", **extra):
     return {"Authorization": f"Bearer {token}", **extra}
+
+
+def put_acl(client, resource_type, resource_id, grants, token="admin"):
+    path = f"/api/v1/acl/{resource_type}/{resource_id}"
+    current = client.get(path, headers=auth(token))
+    assert current.status_code == 200, current.text
+    return client.put(
+        path,
+        headers=auth(token, **{"If-Match": current.headers["ETag"]}),
+        json={"grants": grants},
+    )

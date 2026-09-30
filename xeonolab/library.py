@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from uuid import uuid4
 
-from fastapi import Depends, Request, UploadFile
+from fastapi import Depends, Header, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -90,6 +90,11 @@ def create_app(settings=None):
           PRIMARY KEY(resource_type,resource_id));
         CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY, actor TEXT, event TEXT, resource TEXT, at TEXT);
         """)
+        acl_columns = {row[1] for row in db.execute("PRAGMA table_info(acl)")}
+        if "revision" not in acl_columns:
+            db.execute("ALTER TABLE acl ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        if "explicit" not in acl_columns:
+            db.execute("ALTER TABLE acl ADD COLUMN explicit INTEGER NOT NULL DEFAULT 1")
 
     def audit(actor, event, resource):
         with transaction(catalogue) as db:
@@ -123,9 +128,9 @@ def create_app(settings=None):
                 path = str(PurePosixPath(path).parent)
             for kind, rid in resources:
                 acl = db.execute(
-                    "SELECT grants FROM acl WHERE resource_type=? AND resource_id=?", (kind, rid)
+                    "SELECT grants,explicit FROM acl WHERE resource_type=? AND resource_id=?", (kind, rid)
                 ).fetchone()
-                if acl:
+                if acl and acl["explicit"]:
                     grants = json.loads(acl[0])
                     for principal in (actor.sub, *actor.ancestors):
                         if principal in grants:
@@ -564,7 +569,10 @@ def create_app(settings=None):
             },
         )
 
-    @app.get("/api/v1/acl/{resource_type}/{resource_id:path}")
+    @app.get(
+        "/api/v1/acl/{resource_type}/{resource_id:path}",
+        responses={200: {"headers": {"ETag": {"description": "Current ACL revision", "schema": {"type": "string"}}}}},
+    )
     def get_acl(
         resource_type: str, resource_id: str, request: Request, actor=Depends(scope("xelibrary:admin"))
     ):
@@ -572,17 +580,45 @@ def create_app(settings=None):
             raise APIError(422, "INVALID_RESOURCE", "unsupported ACL resource")
         with connect(catalogue) as db:
             row = db.execute(
-                "SELECT grants FROM acl WHERE resource_type=? AND resource_id=?", (resource_type, resource_id)
+                "SELECT grants,revision,explicit FROM acl WHERE resource_type=? AND resource_id=?",
+                (resource_type, resource_id),
             ).fetchone()
-        return response(
-            request,
-            {
-                "resource_type": resource_type,
-                "resource_id": resource_id,
-                "explicit": row is not None,
-                "grants": json.loads(row[0]) if row else {},
-            },
+        revision = row["revision"] if row else 0
+        data = {
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "explicit": bool(row["explicit"]) if row else False,
+            "grants": json.loads(row["grants"]) if row and row["explicit"] else {},
+            "revision": revision,
+        }
+        return JSONResponse(response(request, data), headers={"ETag": etag(revision)})
+
+    @app.get("/api/v1/acl")
+    def list_acls(
+        request: Request, limit: int = 100, cursor: str = "", actor=Depends(scope("xelibrary:admin"))
+    ):
+        if not 1 <= limit <= 1000:
+            raise APIError(422, "INVALID_LIMIT", "limit outside range")
+        with connect(catalogue) as db:
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT resource_type,resource_id,grants,revision FROM acl "
+                    "WHERE explicit=1 AND resource_type || ':' || resource_id>? "
+                    "ORDER BY resource_type,resource_id LIMIT ?",
+                    (cursor, limit + 1),
+                )
+            ]
+        entries = rows[:limit]
+        for entry in entries:
+            entry["explicit"] = True
+            entry["grants"] = json.loads(entry["grants"])
+        next_cursor = (
+            entries[-1]["resource_type"] + ":" + entries[-1]["resource_id"]
+            if len(rows) > limit
+            else None
         )
+        return response(request, entries, next_cursor=next_cursor)
 
     @app.get("/api/v1/audit")
     def audit_list(
@@ -599,12 +635,16 @@ def create_app(settings=None):
             request, rows[:limit], next_cursor=rows[limit - 1]["id"] if len(rows) > limit else None
         )
 
-    @app.put("/api/v1/acl/{resource_type}/{resource_id:path}")
+    @app.put(
+        "/api/v1/acl/{resource_type}/{resource_id:path}",
+        responses={200: {"headers": {"ETag": {"description": "Updated ACL revision", "schema": {"type": "string"}}}}},
+    )
     def put_acl(
         resource_type: str,
         resource_id: str,
         body: ACLWrite,
         request: Request,
+        if_match: str | None = Header(default=None, alias="If-Match"),
         actor=Depends(scope("xelibrary:admin")),
     ):
         if resource_type not in ("path", "table", "row"):
@@ -612,12 +652,65 @@ def create_app(settings=None):
         if any(set(actions) - {"read", "write", "attach"} for actions in body.grants.values()):
             raise APIError(422, "INVALID_GRANTS", "invalid ACL action")
         with transaction(catalogue) as db:
+            current = db.execute(
+                "SELECT revision FROM acl WHERE resource_type=? AND resource_id=?", (resource_type, resource_id)
+            ).fetchone()
+            current_revision = current["revision"] if current else 0
+            if if_match != etag(current_revision):
+                raise APIError(412, "STALE_REVISION", "If-Match must equal the current ETag")
+            revision = current_revision + 1
             db.execute(
-                "INSERT OR REPLACE INTO acl VALUES(?,?,?)",
-                (resource_type, resource_id, json.dumps(body.grants)),
+                "INSERT INTO acl(resource_type,resource_id,grants,revision,explicit) VALUES(?,?,?,?,1) "
+                "ON CONFLICT(resource_type,resource_id) DO UPDATE SET "
+                "grants=excluded.grants,revision=excluded.revision,explicit=1",
+                (resource_type, resource_id, json.dumps(body.grants), revision),
             )
         audit(actor, "acl.changed", f"{resource_type}:{resource_id}")
-        return response(request, body.grants)
+        result = {
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "explicit": True,
+            "grants": body.grants,
+            "revision": revision,
+        }
+        return JSONResponse(response(request, result), headers={"ETag": etag(revision)})
+
+    @app.delete(
+        "/api/v1/acl/{resource_type}/{resource_id:path}",
+        responses={200: {"headers": {"ETag": {"description": "Updated ACL revision", "schema": {"type": "string"}}}}},
+    )
+    def clear_acl(
+        resource_type: str,
+        resource_id: str,
+        request: Request,
+        if_match: str | None = Header(default=None, alias="If-Match"),
+        actor=Depends(scope("xelibrary:admin")),
+    ):
+        if resource_type not in ("path", "table", "row"):
+            raise APIError(422, "INVALID_RESOURCE", "unsupported ACL resource")
+        with transaction(catalogue) as db:
+            current = db.execute(
+                "SELECT revision FROM acl WHERE resource_type=? AND resource_id=?", (resource_type, resource_id)
+            ).fetchone()
+            current_revision = current["revision"] if current else 0
+            if if_match != etag(current_revision):
+                raise APIError(412, "STALE_REVISION", "If-Match must equal the current ETag")
+            revision = current_revision + 1
+            db.execute(
+                "INSERT INTO acl(resource_type,resource_id,grants,revision,explicit) VALUES(?,?, '{}', ?,0) "
+                "ON CONFLICT(resource_type,resource_id) DO UPDATE SET "
+                "grants='{}',revision=excluded.revision,explicit=0",
+                (resource_type, resource_id, revision),
+            )
+        audit(actor, "acl.inherited", f"{resource_type}:{resource_id}")
+        result = {
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "explicit": False,
+            "grants": {},
+            "revision": revision,
+        }
+        return JSONResponse(response(request, result), headers={"ETag": etag(revision)})
 
     @app.post("/api/v1/attachments", status_code=201)
     async def upload(
