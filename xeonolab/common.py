@@ -555,7 +555,27 @@ def base_app(service, settings=None):
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def metrics():
-        return app.state.metrics.render()
+        extra = getattr(app.state, "metrics_extra", None)
+        extra_text = ""
+        if extra:
+            available = 1
+            try:
+                extra_text = extra()
+            except Exception:
+                available = 0
+                logging.getLogger("xeonolab").warning(
+                    json.dumps({"service": service, "event": "metrics.extra_failed"})
+                )
+            app.state.metrics.gauge(
+                "xeonolab_metrics_extra_available",
+                available,
+                help="Whether the additional service metrics were available on this scrape.",
+                service=service,
+            )
+        return PlainTextResponse(
+            app.state.metrics.render() + extra_text,
+            media_type="text/plain; version=0.0.4",
+        )
 
     return app
 

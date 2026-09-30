@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from xeonolab.common import Settings
 from xeonolab.services import create_app
 
-SCOPES = "xelibrary:read xelibrary:write xelibrary:query xelibrary:attach deploy:read deploy:release deploy:execute"
+SCOPES = "xelibrary:read xelibrary:write xelibrary:query xelibrary:attach deploy:read deploy:release deploy:execute hf-cache:read hf-cache:write"
 
 
 @pytest.fixture
@@ -20,7 +20,7 @@ def settings(tmp_path):
             "opencode": {"sub": "opencode", "scope": SCOPES, "agent_kind": "opencode"},
             "admin": {
                 "sub": "admin",
-                "scope": SCOPES + " xelibrary:admin deploy:approve",
+                "scope": SCOPES + " xelibrary:admin deploy:approve hf-cache:admin",
                 "agent_kind": "human",
             },
         },
