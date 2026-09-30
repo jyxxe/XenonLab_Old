@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
 from .query import evaluate, json_ast, parse, path_matches, sort_key
+from .uploads import register_upload_routes
 
 TYPES = {
     "string",
@@ -765,6 +766,18 @@ def create_app(settings=None):
             "created_at": row["created_at"],
             "metadata": json.loads(row["metadata_json"]),
         }
+
+    register_upload_routes(
+        app,
+        root=root,
+        authorize=authorize,
+        file=file,
+        load_row=load_row,
+        audit=audit,
+        attachment_metadata=attachment_metadata,
+        response=response,
+        now=now,
+    )
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
     def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):

@@ -1295,6 +1295,8 @@ POST /api/v1/uploads/{upload_id}/complete
 DELETE /api/v1/uploads/{upload_id}
 ```
 
+分片上传的创建请求为 JSON：`{ "table_id", "row_id", "filename", "size" }`；`part` 从 1 开始，分片内容使用 `application/octet-stream`。当前实现每片最多 8 MiB、单文件最多 2 GiB，单主体最多 3 个活动会话，主体预留上限为 4 GiB、全局预留上限为 20 GiB。会话绑定创建者和目标行，24 小时后过期；重复提交相同分片或重复完成是幂等的，重复分片内容不一致会冲突。完成前不会创建附件引用，取消会删除未完成分片。会话状态保存于 `DATA_DIR/uploads.sqlite`，分片和完成锁暂存于 `DATA_DIR/objects/.uploads/`；备份需将两处与现有 `.xl` 和对象存储一并纳入快照。
+
 ## 25.2 附件查询
 
 ```text
