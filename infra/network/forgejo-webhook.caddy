@@ -1,0 +1,14 @@
+http://192.168.0.101:8081 {
+  bind 192.168.0.101
+  @forgejo {
+    remote_ip 192.168.0.110
+    path /api/v1/webhooks/forgejo
+    method POST
+  }
+  handle @forgejo {
+    reverse_proxy 192.168.0.111:8106
+  }
+  handle {
+    respond "Forbidden" 403
+  }
+}

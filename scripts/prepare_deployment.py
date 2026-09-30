@@ -61,6 +61,8 @@ for node, entries in services.items():
                 "D100M_TOKENIZER_PATH=/opt/xeonolab/d100m-tokenizer.json",
             ]
             (dest / "embedding-client-secret").write_text(credentials["embedding_secret"])
+        if service == "dev-agent":
+            lines += ["FORGEJO_WEBHOOK_SECRET_FILE=/etc/xeonolab/forgejo-webhook-secret"]
         if service == "tool-gateway":
             lines += ["XELIBRARY_URL=http://192.168.0.104:8100"]
         if service == "deploy-gateway":
