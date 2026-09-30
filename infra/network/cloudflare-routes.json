@@ -1,0 +1,12 @@
+{
+  "config": {
+    "ingress": [
+      {"hostname": "xenon.jyxxe.com", "service": "http://192.168.0.101:8080"},
+      {"hostname": "auth.xenon.jyxxe.com", "service": "http://192.168.0.101:8080"},
+      {"hostname": "dev.xenon.jyxxe.com", "service": "http://192.168.0.101:8080"},
+      {"hostname": "library.xenon.jyxxe.com", "service": "http://192.168.0.101:8080"},
+      {"service": "http_status:404"}
+    ],
+    "warp-routing": {"enabled": true}
+  }
+}

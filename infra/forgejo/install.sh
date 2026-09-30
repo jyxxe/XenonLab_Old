@@ -34,7 +34,7 @@ REQUIRE_SIGNIN_VIEW = false
 MODE = console
 LEVEL = Info
 INI
- chown root:forgejo /etc/forgejo/app.ini
+ chown forgejo:forgejo /etc/forgejo/app.ini
  chmod 640 /etc/forgejo/app.ini
 fi
 install -m 644 /tmp/forgejo.service /etc/systemd/system/forgejo.service

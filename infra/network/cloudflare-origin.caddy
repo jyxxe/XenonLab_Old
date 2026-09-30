@@ -1,0 +1,34 @@
+http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
+  bind 192.168.0.101
+  @outside not remote_ip 192.168.0.105
+  handle @outside {
+    respond "Tunnel connector required" 403
+  }
+  @auth host auth.xenon.jyxxe.com
+  handle @auth {
+    reverse_proxy 192.168.0.109:8180 {
+      header_up X-Forwarded-Proto https
+    }
+  }
+  @dev host dev.xenon.jyxxe.com
+  handle @dev {
+    reverse_proxy 192.168.0.110:3000 {
+      header_up X-Forwarded-Proto https
+    }
+  }
+  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/*
+  handle @desktop_api {
+    reverse_proxy 127.0.0.1:8101
+  }
+  handle /api/v1/* {
+    reverse_proxy 192.168.0.104:8100
+  }
+  handle /health/* {
+    reverse_proxy 127.0.0.1:8101
+  }
+  handle {
+    root * /opt/xeonolab/current/apps/desktop-web/dist
+    try_files {path} /index.html
+    file_server
+  }
+}
