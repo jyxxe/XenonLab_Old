@@ -46,3 +46,9 @@ manifest/outbox 与一致性扫描。索引作业状态暂存进程内，重启�
 
 所有外部 secrets 只从环境读取；用户提供的 PVE/LLM/password 不写入仓库。
 没有生产上线、没有删除 VM，没有创建远端 PR。完整 V1 还不能视为验收完成。
+
+## 验证记录
+
+13 项后端测试通过；10 个服务均以独立进程通过 HTTP live/version/OpenAPI 检查。
+D100M 实际模型端到端 smoke 通过；React/TypeScript production build 与 Ruff 检查通过。
+本机缺少 Docker Compose 插件，尚未执行容器拓扑启动和容器健康检查。
