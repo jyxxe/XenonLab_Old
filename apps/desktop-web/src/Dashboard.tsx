@@ -1,4 +1,4 @@
-import React,{useEffect,useState} from 'react';
+import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Bars,Legend,Meter,Ring,chartColor} from './MacCharts';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{request_id?:string;next_cursor?:string|null;[key:string]:any}}>;
 type WorkItem={id:string;repository:string;issue_id:number;title:string;status:string;holder:string|null;claim_active:boolean};
@@ -32,6 +32,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
   const [work,setWork]=useState<WorkItem[]>([]),[workTruncated,setWorkTruncated]=useState(false),[jobs,setJobs]=useState<Job[]>([]),[tables,setTables]=useState<Table[]>([]),[tablesTruncated,setTablesTruncated]=useState(false),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null);
   const [notes,setNotes]=useState<Record<string,string>>({}),[health,setHealth]=useState<{service:string;ready:boolean;latency:number}|null>(null);
   const [stamp,setStamp]=useState(0),[tick,setTick]=useState(0);
+  const gridRef=useRef<HTMLDivElement>(null);
   useEffect(()=>{
     let active=true;
     const optional=async(key:string,load:()=>Promise<void>)=>{try{await load();if(active)setNotes(old=>{const next={...old};delete next[key];return next})}catch(error){if(active)setNotes(old=>({...old,[key]:String(error)}))}};
@@ -47,6 +48,25 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
     const next=setTimeout(()=>{if(active)setTick(value=>value+1)},30000);
     return ()=>{active=false;clearTimeout(next)};
   },[tick]);
+  useLayoutEffect(()=>{
+    const grid=gridRef.current;
+    if(!grid)return;
+    const cards=Array.from(grid.children) as HTMLElement[];
+    const layout=()=>{
+      const gap=parseFloat(getComputedStyle(grid).getPropertyValue('--dashboard-card-gap'))||0;
+      // One-pixel grid tracks let each column pack independently, preserving DOM order.
+      cards.forEach(card=>{
+        const span=Math.ceil(card.getBoundingClientRect().height+gap);
+        const rowEnd=`span ${Math.max(1,span)}`;
+        if(card.style.gridRowEnd!==rowEnd)card.style.gridRowEnd=rowEnd;
+      });
+    };
+    layout();
+    const resize=new ResizeObserver(layout);
+    resize.observe(grid);
+    cards.forEach(card=>resize.observe(card,{box:'border-box'}));
+    return()=>resize.disconnect();
+  },[]);
   const tableName=(id:string)=>{const table=tables.find(item=>item.id===id);return table?table.path+'/'+table.name:id.slice(0,8)};
   const jobSegments=jobOrder.map(status=>({label:jobLabels[status],value:jobCounts?.[status]??jobs.filter(job=>job.status===status).length,color:jobColors[status]}));
   const workSegments=workOrder.map((status,index)=>({label:workLabels[status],value:work.filter(item=>item.status===status).length,color:chartColor(index)}));
@@ -56,7 +76,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
   return <section className="dashboard">
     <header className="dashboard-head"><div><h2>系统面板</h2><p>Embedding 索引队列、Harness 任务与知识库概览</p></div>
       <div className="dashboard-actions"><small>{stamp?`更新于 ${new Date(stamp).toLocaleTimeString('zh-CN')}`:'加载中…'}</small><button onClick={()=>setTick(value=>value+1)}>刷新</button></div></header>
-    <div className="dashboard-grid">
+    <div className="dashboard-grid" ref={gridRef}>
       <article className="mac-card"><header><h3>我的 Embedding 索引</h3><span className="mac-badge">最近 {jobs.length} 条</span></header>
         {notes.jobs?<p className="muted">{notes.jobs}</p>:<>
           <Meter segments={jobSegments}/>
