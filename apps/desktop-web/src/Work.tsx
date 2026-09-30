@@ -54,7 +54,7 @@ export function Work({api,apiPage}:{api:API;apiPage:APIPage}){
    <small>筛选范围：当前已加载的 {items.length} 项任务</small><p role="status">{loading?'正在读取任务…':message}</p>
    <table><thead><tr><th>任务</th><th>状态</th><th>领取身份</th><th>操作</th></tr></thead><tbody>{visible.map(item=>{
      const href=issueUrl(item);
-     return <tr key={item.id}><td>{href?<a href={href} target="_blank" rel="noopener noreferrer">#{item.issue_id} {item.title}</a>:<>#{item.issue_id} {item.title}</>}</td><td>{item.status}{item.claim_active?' · 领取有效':''}</td><td>{item.holder||'—'}</td>
+     return <tr key={item.id} data-work-id={item.id}><td>{href?<a href={href} target="_blank" rel="noopener noreferrer">#{item.issue_id} {item.title}</a>:<>#{item.issue_id} {item.title}</>}</td><td>{item.status}{item.claim_active?' · 领取有效':''}</td><td>{item.holder||'—'}</td>
        <td>{item.status!=='completed'&&!item.claim_active&&<button disabled={actionId===item.id} onClick={()=>void action(item,'claim')}>领取</button>}
        {item.claim_active&&item.holder===subject&&<><button disabled={actionId===item.id} onClick={()=>void action(item,'release')}>释放</button><button disabled={actionId===item.id} onClick={()=>void action(item,'release',true)}>标记完成</button></>}</td>
      </tr>;
