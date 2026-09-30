@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh physical pool capacity for HF-cache
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=2s
+RandomizedDelaySec=2s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
