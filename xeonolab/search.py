@@ -371,12 +371,19 @@ def install(
         by_row, stale_rows = {}, set()
         for candidate in candidates:
             payload = candidate.get("payload") if isinstance(candidate, dict) else None
-            score = candidate.get("score") if isinstance(candidate, dict) else None
+            raw_score = candidate.get("score") if isinstance(candidate, dict) else None
             if (
                 not isinstance(payload, dict)
-                or isinstance(score, bool)
-                or not isinstance(score, (int, float))
-                or not math.isfinite(score)
+                or isinstance(raw_score, bool)
+                or not isinstance(raw_score, (int, float))
+            ):
+                continue
+            try:
+                score = float(raw_score)
+            except (OverflowError, ValueError):
+                continue
+            if (
+                not math.isfinite(score)
                 or score < -1.0 - COSINE_SCORE_TOLERANCE
                 or score > 1.0 + COSINE_SCORE_TOLERANCE
             ):

@@ -405,6 +405,10 @@ def test_qdrant_search_discards_model_and_chunker_mismatch(settings, tmp_path, m
         pytest.param("invalid_score", id="invalid-score"),
         pytest.param("score_above_cosine_range", id="score-above-cosine-range"),
         pytest.param("score_below_cosine_range", id="score-below-cosine-range"),
+        pytest.param("score_positive_infinity", id="score-positive-infinity"),
+        pytest.param("score_negative_infinity", id="score-negative-infinity"),
+        pytest.param("score_huge_integer", id="score-huge-integer"),
+        pytest.param("score_within_float_tolerance", id="score-within-float-tolerance"),
     ],
 )
 def test_qdrant_search_rejects_forged_candidate_identity_column_and_score(
@@ -435,6 +439,14 @@ def test_qdrant_search_rejects_forged_candidate_identity_column_and_score(
                 point["candidate_score"] = 1.01
             elif candidate_mutation == "score_below_cosine_range":
                 point["candidate_score"] = -1.01
+            elif candidate_mutation == "score_positive_infinity":
+                point["candidate_score"] = float("inf")
+            elif candidate_mutation == "score_negative_infinity":
+                point["candidate_score"] = float("-inf")
+            elif candidate_mutation == "score_huge_integer":
+                point["candidate_score"] = 10**400
+            elif candidate_mutation == "score_within_float_tolerance":
+                point["candidate_score"] = 1.0 + 0.5e-6
             changed.append(point)
         return changed
 
@@ -467,7 +479,11 @@ def test_qdrant_search_rejects_forged_candidate_identity_column_and_score(
 
     result = client.post("/api/v1/search/semantic", headers=auth(), json={"query": "ordinary", "limit": 1})
     assert result.status_code == 200, result.text
-    assert result.json()["data"] == []
+    if candidate_mutation == "score_within_float_tolerance":
+        assert len(result.json()["data"]) == 1
+        assert result.json()["data"][0]["score"] == 1.0
+    else:
+        assert result.json()["data"] == []
     assert "PRIVATE-SNIPPET" not in result.text
 
 
@@ -578,3 +594,30 @@ def test_live_acceptance_script_cleans_collection_when_validation_fails(monkeypa
         acceptance.main()
     assert len(adapters) == 1
     assert adapters[0].deleted and adapters[0].closed and not adapters[0].exists
+
+
+def test_live_acceptance_script_does_not_delete_collection_when_creation_fails(monkeypatch):
+    from scripts import accept_qdrant_fast_text as acceptance
+
+    class CreateConflictAdapter:
+        def __init__(self, *, collection):
+            self.deleted = False
+            self.closed = False
+
+        def collection_info(self):
+            return None
+
+        def create_collection(self):
+            raise RuntimeError("collection creation failed")
+
+        def delete_collection(self):
+            self.deleted = True
+
+        def close(self):
+            self.closed = True
+
+    adapter = CreateConflictAdapter(collection="ignored")
+    monkeypatch.setattr(acceptance, "QdrantAdapter", lambda **kwargs: adapter)
+    with pytest.raises(RuntimeError, match="collection creation failed"):
+        acceptance.main()
+    assert not adapter.deleted and adapter.closed

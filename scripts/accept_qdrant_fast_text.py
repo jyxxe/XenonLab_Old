@@ -18,8 +18,8 @@ def main():
     try:
         if client.collection_info() is not None:
             raise RuntimeError("generated Qdrant acceptance collection already exists")
-        owned = True
         client.create_collection()
+        owned = True
         vector = [0.0] * 256
         vector[0] = 1.0
         point_id = str(uuid4())
