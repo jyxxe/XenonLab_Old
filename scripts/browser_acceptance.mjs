@@ -252,25 +252,25 @@ async function main() {
     await screenshot('03-desktop.png');
 
     if (options.sessionResilience) {
-      if (!await cdp.evaluate("(()=>{if(document.querySelector('.window'))return true;const b=document.querySelector('nav.dock button[title=\\\"系统面板\\\"]');if(!b)return false;b.click();return true})()")) throw new Error('Could not open a workspace window for session resilience checks.');
+      if (!await cdp.evaluate("(()=>{if(document.querySelector('.window'))return true;const b=document.querySelector('nav.dock button[title=\"系统面板\"]');if(!b)return false;b.click();return true})()")) throw new Error('Could not open a workspace window for session resilience checks.');
       await waitFor(()=>cdp.evaluate("Boolean(document.querySelector('.window'))"),'workspace window before session resilience checks');
       await cdp.call('Fetch.enable',{patterns:[{urlPattern:'*://*/api/v1/auth/session/token',requestStage:'Request'}]});
       injectedStatus=503;
       await cdp.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
-      await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\\\"session-status\\\"][data-phase=\\\"retrying\\\"]')"),'temporary session recovery status');
+      await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\"session-status\"]')?.getAttribute('data-phase') === 'retrying'"),'temporary session recovery status');
       const preserved503=await cdp.evaluate("Boolean(document.querySelector('nav.dock')&&document.querySelector('.window'))");
       check('temporary 503 preserves dock and open windows',preserved503,'Injected only at /api/v1/auth/session/token.');
       await screenshot('03a-session-503-preserved.png');
       injectedStatus=401;
       await cdp.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
-      await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\\\"session-status\\\"][data-phase=\\\"reauthorize\\\"]')"),'reauthorization state after session 401');
-      const preserved401=await cdp.evaluate("Boolean(document.querySelector('nav.dock')&&document.querySelector('.window')&&document.querySelector('[data-testid=\\\"session-reauthorize\\\"]'))");
+      await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\"session-status\"]')?.getAttribute('data-phase') === 'reauthorize'"),'reauthorization state after session 401');
+      const preserved401=await cdp.evaluate("Boolean(document.querySelector('nav.dock')&&document.querySelector('.window')&&document.querySelector('[data-testid=\"session-reauthorize\"]'))");
       check('session 401 keeps workspace and offers explicit reauthorization',preserved401,'Injected only at /api/v1/auth/session/token.');
       await screenshot('03b-session-401-preserved.png');
       injectedStatus=0;
       await cdp.call('Fetch.disable');
       await cdp.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
-      const resumed=await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\\\"session-status\\\"][data-phase=\\\"connected\\\"]')"),'session recovery after removing injected responses').catch(()=>false);
+      const resumed=await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\"session-status\"]')?.getAttribute('data-phase') === 'connected'"),'session recovery after removing injected responses').catch(()=>false);
       check('normal session endpoint resumes after injection is removed',Boolean(resumed),'Intercept is removed and regular response handling remains enabled.');
     }
 
