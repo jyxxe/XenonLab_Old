@@ -69,10 +69,19 @@ first take protected, restorable copies of the current Keycloak environment and
 realm files, Web 101 service configuration, and the relevant service
 configuration files. Do not print secret-bearing files into a terminal log.
 
-1. Stage the application update and dual issuer/token maps on the desktop API
-   and every API service before changing Keycloak. Verify each service health
-   check and confirm that JWTs signed by the existing IP issuer still pass while
-   an unconfigured issuer is rejected.
+1. Save protected, restorable copies of the six current service env files before
+   staging. Run the normal `scripts/stage_release.py` path. It extracts only
+   `OIDC_ISSUERS_BY_ORIGIN_JSON` and `OIDC_TOKEN_URLS_JSON` from the generated
+   desktop-web env file, sends that map-only payload to the fixed service nodes,
+   and atomically updates those two variables in `desktop-web`, `xelibrary`,
+   `tool-gateway`, `llm-gateway`, `embedding`, and `dev-agent`. All other env
+   entries and file ownership/mode are preserved. Each file replacement is
+   atomic, but the six files and multiple nodes are not one transaction. If any
+   staging step fails, do not activate: rerun staging to completion or restore
+   the saved configuration snapshots first. Staging does not restart services;
+   activation restarts them on the new release. Verify each health check and
+   confirm that JWTs from the existing IP issuer still pass while an
+   unconfigured issuer is rejected.
 2. On the separate Auth 109 deployment, apply the dynamic-host Keycloak
    configuration and exact realm callback URIs through the authorized operator
    process, then restart Keycloak. This VM is outside the generic application
@@ -85,11 +94,12 @@ configuration files. Do not print secret-bearing files into a terminal log.
    browser origin, TLS, and API authorization at each entry point. A static
    discovery fetch alone does not constitute login acceptance.
 4. Roll back by restoring the saved Keycloak environment and realm configuration
-   first, restarting Auth 109, then restoring the previous application
-   configuration and release through the authorized release process. Existing
-   IP-issued sessions remain usable. Sessions created under a public or LAN
-   alias may require users to sign in again after rollback; do not loosen issuer
-   checks to preserve them.
+   first, restarting Auth 109, then restoring the saved six service env files
+   and previous application release through the authorized release process.
+   Restore env files with their original root ownership and permissions, then
+   restart the affected services. Existing IP-issued sessions remain usable.
+   Sessions created under a public or LAN alias may require users to sign in
+   again after rollback; do not loosen issuer checks to preserve them.
 
 Do not remove the explicit legacy IP issuer from service validation until the
 operator has verified session migration/expiry and approved a separate cleanup.
