@@ -41,6 +41,12 @@ class Release(BaseModel):
     completed: bool = False
 
 
+def repository_allowed(settings, repository):
+    allowed = os.getenv("DEV_REPOSITORIES", "xenon-admin/XeonoLab").split(",")
+    if settings.mode == "production" and repository not in allowed:
+        raise APIError(403, "REPOSITORY_FORBIDDEN", "repository outside service scope")
+
+
 def install(app):
     database = app.state.settings.data_dir / "work.sqlite"
     with transaction(database) as db:
@@ -57,11 +63,6 @@ def install(app):
         CREATE TABLE IF NOT EXISTS work_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,
           work_id TEXT,epoch INTEGER,at REAL);
         """)
-
-    def repository_allowed(repository):
-        allowed = os.getenv("DEV_REPOSITORIES", "xenon-admin/XeonoLab").split(",")
-        if app.state.settings.mode == "production" and repository not in allowed:
-            raise APIError(403, "REPOSITORY_FORBIDDEN", "repository outside service scope")
 
     def load(db, work_id):
         row = db.execute("SELECT * FROM work WHERE id=?", (work_id,)).fetchone()
@@ -190,7 +191,7 @@ def install(app):
 
     @app.post("/api/v1/issues/{issue_id}/reconcile")
     def reconcile(issue_id: int, body: Reconcile, request: Request, actor=Depends(scope("dev:write"))):
-        repository_allowed(body.repository)
+        repository_allowed(app.state.settings, body.repository)
         if issue_id < 1:
             raise APIError(422, "INVALID_ISSUE", "positive issue number required")
         endpoint = os.getenv("FORGEJO_URL")
@@ -220,7 +221,7 @@ def install(app):
 
     @app.post("/api/v1/work", status_code=201)
     def create(body: WorkCreate, request: Request, actor=Depends(scope("dev:write"))):
-        repository_allowed(body.repository)
+        repository_allowed(app.state.settings, body.repository)
         with transaction(database) as db:
             old = db.execute(
                 "SELECT * FROM work WHERE repository=? AND issue_id=?", (body.repository, body.issue_id)
@@ -283,7 +284,7 @@ def install(app):
 
     @app.post("/api/v1/issues/{issue_id}/links", status_code=201)
     def link(issue_id: int, body: IssueLink, request: Request, actor=Depends(scope("dev:write"))):
-        repository_allowed(body.repository)
+        repository_allowed(app.state.settings, body.repository)
         if issue_id == body.target_issue_id:
             raise APIError(422, "SELF_LINK", "cannot link an issue to itself")
         with transaction(database) as db:
@@ -322,7 +323,7 @@ def install(app):
 
     @app.get("/api/v1/issues/{issue_id}/links")
     def links(issue_id: int, repository: str, request: Request, actor=Depends(scope("dev:read"))):
-        repository_allowed(repository)
+        repository_allowed(app.state.settings, repository)
         with connect(database) as db:
             rows = [
                 dict(row)
