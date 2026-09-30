@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import os
 import threading
 from typing import Literal
@@ -369,7 +370,13 @@ def install(
         by_row, stale_rows = {}, set()
         for candidate in candidates:
             payload = candidate.get("payload") if isinstance(candidate, dict) else None
-            if not isinstance(payload, dict):
+            score = candidate.get("score") if isinstance(candidate, dict) else None
+            if (
+                not isinstance(payload, dict)
+                or isinstance(score, bool)
+                or not isinstance(score, (int, float))
+                or not math.isfinite(score)
+            ):
                 continue
             tid, rid = payload.get("table_id"), payload.get("row_id")
             row_revision = payload.get("row_revision")
@@ -380,6 +387,7 @@ def install(
                 or not isinstance(row_revision, int)
                 or not isinstance(chunk_id, str)
                 or not isinstance(column, str)
+                or candidate.get("id") != chunk_id
                 or payload.get("model_revision") != model_revision
                 or payload.get("chunker_version") != CHUNKER_VERSION
             ):
@@ -399,8 +407,8 @@ def install(
                         continue
                     indexed = db.execute(
                         "SELECT 1 FROM __xl_vectors WHERE row_id=? AND revision=? AND chunk_id=? "
-                        "AND model_revision=? AND chunker_version=?",
-                        (rid, row_revision, chunk_id, model_revision, CHUNKER_VERSION),
+                        "AND column_name=? AND model_revision=? AND chunker_version=?",
+                        (rid, row_revision, chunk_id, column, model_revision, CHUNKER_VERSION),
                     ).fetchone()
                     if not indexed or column not in row["values"]:
                         stale_rows.add((tid, rid))
@@ -423,7 +431,7 @@ def install(
                 "row_id": rid,
                 "row_revision": row_revision,
                 "path": table["path"],
-                "score": float(candidate.get("score", 0)),
+                "score": float(score),
                 "score_type": "d100m_cosine",
                 "snippet": str(current["values"][column])[:240],
                 "matched_chunks": [{"chunk_id": chunk_id, "column": column}],

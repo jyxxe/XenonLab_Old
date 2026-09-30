@@ -72,17 +72,23 @@ def qdrant_transport(*, fail_upsert=False, fail_delete=False, mutate_query=None)
             points = state["points"]
             if mutate_query:
                 points = mutate_query(points)
-            return httpx.Response(
-                200,
-                json={
+            payload = {
                     "status": "ok",
                     "result": {
                         "points": [
-                            {"id": p["id"], "score": 0.9, "payload": p["payload"]}
+                            {
+                                "id": p.get("candidate_id", p["id"]),
+                                "score": p.get("candidate_score", 0.9),
+                                "payload": p["payload"],
+                            }
                             for p in points[: query["limit"]]
                         ]
                     },
-                },
+                }
+            return httpx.Response(
+                200,
+                content=json.dumps(payload, allow_nan=True),
+                headers={"content-type": "application/json"},
             )
         if request.method == "POST" and path.endswith("/points/delete"):
             if state["fail_delete"]:
@@ -388,6 +394,75 @@ def test_qdrant_search_discards_model_and_chunker_mismatch(settings, tmp_path, m
     client.post("/api/v1/index/reindex", headers=auth("admin"), json={"table_id": tid})
     found = client.post("/api/v1/search/semantic", headers=auth(), json={"query": "fast"})
     assert found.json()["data"] == []
+
+
+@pytest.mark.parametrize(
+    "candidate_mutation",
+    [
+        pytest.param("forged_id", id="point-id-does-not-match-payload"),
+        pytest.param("wrong_column", id="column-does-not-match-indexed-chunk"),
+        pytest.param("nonfinite_score", id="non-finite-score"),
+        pytest.param("invalid_score", id="invalid-score"),
+    ],
+)
+def test_qdrant_search_rejects_forged_candidate_identity_column_and_score(
+    settings, tmp_path, monkeypatch, candidate_mutation
+):
+    path, _ = __import__("tests.test_search", fromlist=["tiny_tokenizer"]).tiny_tokenizer(tmp_path)
+    monkeypatch.setenv("D100M_TOKENIZER_PATH", str(path))
+    monkeypatch.setenv("EMBEDDING_URL", "http://embedding.invalid")
+    monkeypatch.setenv("EMBEDDING_SERVICE_TOKEN", "fake")
+
+    def malicious(points):
+        selected = [point for point in points if point["payload"]["column"] == "body"]
+        changed = []
+        for point in selected:
+            point = {**point, "payload": dict(point["payload"])}
+            # These deliberately dominant candidates must never select another
+            # chunk's text or distort ranking for the valid row.
+            point["candidate_score"] = 1_000_000.0
+            if candidate_mutation == "forged_id":
+                point["candidate_id"] = "not-the-payload-chunk-id"
+            elif candidate_mutation == "wrong_column":
+                point["payload"]["column"] = "secret"
+            elif candidate_mutation == "nonfinite_score":
+                point["candidate_score"] = float("nan")
+            elif candidate_mutation == "invalid_score":
+                point["candidate_score"] = "highest"
+            changed.append(point)
+        return changed
+
+    configure_qdrant(tmp_path, monkeypatch, mutate_query=malicious)
+    client = TestClient(create_app("xelibrary", settings))
+    created = client.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/检索/Candidate integrity",
+            "name": "Candidate integrity",
+            "columns": [
+                {"name": "body", "type": "string", "nullable": False},
+                {"name": "secret", "type": "string", "nullable": False},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    tid = created.json()["data"]["table_id"]
+    row = client.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"body": "ordinary indexed text", "secret": "PRIVATE-SNIPPET"}},
+    )
+    assert row.status_code == 201, row.text
+    indexed = client.post("/api/v1/index/reindex", headers=auth("admin"), json={"table_id": tid})
+    assert client.get(f"/api/v1/jobs/{indexed.json()['data']['job_id']}", headers=auth("admin")).json()[
+        "data"
+    ]["status"] == "completed"
+
+    result = client.post("/api/v1/search/semantic", headers=auth(), json={"query": "ordinary", "limit": 1})
+    assert result.status_code == 200, result.text
+    assert result.json()["data"] == []
+    assert "PRIVATE-SNIPPET" not in result.text
 
 
 def test_qdrant_write_failure_fails_job_and_does_not_mark_indexed(settings, tmp_path, monkeypatch):
