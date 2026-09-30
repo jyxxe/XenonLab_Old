@@ -65,7 +65,7 @@ def client(cid, scope, kind, secret):
         "serviceAccountsEnabled": True,
         "standardFlowEnabled": False,
         "directAccessGrantsEnabled": False,
-        "protocolMappers": [audience(), hardcoded("scope", scope), hardcoded("agent_kind", kind)],
+        "protocolMappers": [audience(), hardcoded("platform_scopes", scope), hardcoded("agent_kind", kind)],
     }
 
 

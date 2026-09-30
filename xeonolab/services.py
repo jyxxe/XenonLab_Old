@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 
 import httpx
 from fastapi import Depends, Request
@@ -169,7 +170,13 @@ def create_app(service=None, settings=None):
             return response(request, {"event_id": event_id, "duplicate": bool(old), "status": "received"})
 
     elif service == "llm-gateway":
-        app.state.ready_check = lambda: bool(os.getenv("LLM_API_KEY"))
+
+        def provider_key():
+            if os.getenv("LLM_API_KEY_FILE"):
+                return Path(os.environ["LLM_API_KEY_FILE"]).read_text().strip()
+            return os.getenv("LLM_API_KEY")
+
+        app.state.ready_check = lambda: bool(provider_key())
 
         @app.get("/v1/models")
         def models(actor=Depends(scope("llm:use"))):
@@ -177,7 +184,7 @@ def create_app(service=None, settings=None):
 
         @app.post("/v1/chat/completions")
         async def chat(request: Request, actor=Depends(scope("llm:use"))):
-            key = os.getenv("LLM_API_KEY")
+            key = provider_key()
             if not key:
                 raise APIError(503, "PROVIDER_NOT_CONFIGURED", "LLM provider credential required")
             body = await request.json()

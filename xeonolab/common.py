@@ -80,7 +80,7 @@ def identity(request: Request):
             )
         except jwt.PyJWTError:
             raise APIError(401, "INVALID_TOKEN", "invalid access token") from None
-    scopes = set(claims.get("scope", "").split())
+    scopes = set(claims.get("scope", "").split()) | set(claims.get("platform_scopes", "").split())
     for role in claims.get("realm_access", {}).get("roles", []):
         scopes.update((settings.role_scopes or {}).get(role, []))
     return Identity(claims["sub"], scopes, claims.get("agent_kind", "human"))
