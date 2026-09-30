@@ -10,17 +10,23 @@ function issueUrl(item:Item){
 }
 
 export function Work({api,apiPage}:{api:API;apiPage:APIPage}){
- const [items,setItems]=useState<Item[]>([]),[message,setMessage]=useState(''),[subject,setSubject]=useState('');
+ const [items,setItems]=useState<Item[]>([]),[message,setMessage]=useState(''),[subject,setSubject]=useState(''),[endReached,setEndReached]=useState(false);
  const [filter,setFilter]=useState(''),[cursor,setCursor]=useState<string|null>(null),[loading,setLoading]=useState(false),[loadingMore,setLoadingMore]=useState(false),[actionId,setActionId]=useState('');
- const generation=useRef(0),loadingMoreRef=useRef(false),cursorRef=useRef<string|null>(null);
+ const generation=useRef(0),loadingMoreRef=useRef(false),cursorRef=useRef<string|null>(null),seenCursors=useRef(new Set<string>());
+
+ function uniqueItems(pageItems:Item[]){
+   const seen=new Set<string>(),unique:Item[]=[];
+   for(const item of pageItems){if(!seen.has(item.id)){seen.add(item.id);unique.push(item)}}
+   return unique;
+ }
 
  async function refresh(){
    const current=++generation.current;
-   loadingMoreRef.current=false;cursorRef.current=null;setCursor(null);setLoading(true);setLoadingMore(false);setMessage('');
+   loadingMoreRef.current=false;cursorRef.current=null;seenCursors.current.clear();setCursor(null);setEndReached(false);setLoading(true);setLoadingMore(false);setMessage('');
    try{
      const page=await apiPage('/work?limit=100');
      if(current!==generation.current)return;
-     setItems(page.data);const next=page.meta.next_cursor||null;cursorRef.current=next;setCursor(next);
+     setItems(uniqueItems(page.data));const next=page.meta.next_cursor||null;cursorRef.current=next;setCursor(next);setEndReached(!next);
    }catch(e){if(current===generation.current)setMessage(String(e))}
    finally{if(current===generation.current)setLoading(false)}
  }
@@ -28,13 +34,13 @@ export function Work({api,apiPage}:{api:API;apiPage:APIPage}){
  async function loadMore(){
    const current= generation.current, requestedCursor=cursorRef.current;
    if(!requestedCursor||loadingMoreRef.current)return;
-   loadingMoreRef.current=true;setLoadingMore(true);setMessage('');
+   seenCursors.current.add(requestedCursor);loadingMoreRef.current=true;setLoadingMore(true);setMessage('');
    try{
      const page=await apiPage(`/work?limit=100&cursor=${encodeURIComponent(requestedCursor)}`);
      if(current!==generation.current)return;
      setItems(old=>{const seen=new Set(old.map(item=>item.id)),added:Item[]=[];for(const item of page.data){if(!seen.has(item.id)){seen.add(item.id);added.push(item)}}return [...old,...added]});
      const next=page.meta.next_cursor||null;
-     if(next===requestedCursor){cursorRef.current=null;setCursor(null);setMessage('任务列表分页游标未前进，请刷新后重试')}else{cursorRef.current=next;setCursor(next)}
+     if(next&&seenCursors.current.has(next)){cursorRef.current=null;setCursor(null);setEndReached(false);setMessage('任务列表分页游标重复，已停止分页；请刷新后重试')}else{cursorRef.current=next;setCursor(next);setEndReached(!next)}
    }catch(e){if(current===generation.current)setMessage(String(e))}
    finally{if(current===generation.current){loadingMoreRef.current=false;setLoadingMore(false)}}
  }
@@ -61,5 +67,6 @@ export function Work({api,apiPage}:{api:API;apiPage:APIPage}){
    })}</tbody></table>
    {!loading&&!visible.length&&<p>{items.length?'没有匹配的已加载任务。':'队列暂无任务。'}</p>}
    {cursor&&<button onClick={()=>void loadMore()} disabled={loading||loadingMore}>{loadingMore?'正在加载…':'加载更多任务'}</button>}
+   {!loading&&endReached&&<small role="status">已到任务列表末尾</small>}
  </section>
 }

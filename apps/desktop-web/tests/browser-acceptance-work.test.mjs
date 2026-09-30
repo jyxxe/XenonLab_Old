@@ -84,7 +84,7 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
     assert.equal(new Set(twoPages.ids).size,twoPages.rows,'every rendered Work item ID is unique');
     assert.match(twoPages.loaded,/当前已加载的 194 项任务/);
     await cdp.evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent.includes('加载更多'))?.click()");
-    await waitFor(()=>cdp.evaluate('window.workFixture.delayedPageStarted'),'delayed page request');
+    await waitFor(()=>cdp.evaluate('window.workFixture.delayedPageRequests===1'),'delayed page request');
     await cdp.evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent==='刷新队列')?.click()");
     await waitFor(()=>cdp.evaluate("window.workFixture.refreshCount===2 && document.querySelectorAll('tbody tr').length===100"),'refresh to replace list');
     await cdp.evaluate('window.workFixture.resolveDelayedPage()');
@@ -96,6 +96,12 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
     await sleep(80);
     const filtered=await cdp.evaluate("({matches:document.querySelectorAll('tbody tr').length,empty:document.body.innerText.includes('没有匹配的已加载任务'),loaded:document.querySelector('small')?.textContent})");
     assert.equal(filtered.matches,0);assert.equal(filtered.empty,true);assert.match(filtered.loaded,/当前已加载的 100 项任务/);
+    await cdp.evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent.includes('加载更多'))?.click()");
+    await waitFor(()=>cdp.evaluate('window.workFixture.delayedPageRequests===2'),'final page request');
+    await cdp.evaluate('window.workFixture.resolveDelayedPage([])');
+    await waitFor(()=>cdp.evaluate("document.body.innerText.includes('已到任务列表末尾')"),'explicit cursor end');
+    const ended=await cdp.evaluate("({more:[...document.querySelectorAll('button')].some(button=>button.textContent.includes('加载更多')),end:document.body.innerText.includes('已到任务列表末尾')})");
+    assert.equal(ended.more,false);assert.equal(ended.end,true);
     assert.ok(version.Browser,'connected to a local Chrome DevTools browser');
   }finally{
     cdp?.socket.close();chrome.kill();await server.close();await fs.rm(tempDir,{recursive:true,force:true});
