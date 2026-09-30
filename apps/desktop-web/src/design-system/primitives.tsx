@@ -97,14 +97,16 @@ export function Checkbox({
   description,
   className,
   ...rest
-}: React.InputHTMLAttributes<HTMLInputElement> & {label: React.ReactNode; description?: React.ReactNode}) {
+}: React.InputHTMLAttributes<HTMLInputElement> & {label?: React.ReactNode; description?: React.ReactNode}) {
   return (
     <label className={cx('ds-check', className)}>
       <input {...rest} type="checkbox" />
-      <span>
-        {label}
-        {description ? <small>{description}</small> : null}
-      </span>
+      {label !== undefined || description ? (
+        <span>
+          {label}
+          {description ? <small>{description}</small> : null}
+        </span>
+      ) : null}
     </label>
   );
 }
