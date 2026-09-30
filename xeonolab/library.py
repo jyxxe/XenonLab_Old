@@ -901,8 +901,10 @@ def create_app(settings=None):
 
     from .search import install
     from .services import Search
+    from .theorems import install as install_theorems
 
     install(app, catalogue, file, authorize, allowed, load_row)
+    install_theorems(app, catalogue, allowed, audit)
 
     @app.post("/api/v1/search/hybrid")
     def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
