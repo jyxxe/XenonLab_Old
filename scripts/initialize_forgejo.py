@@ -8,8 +8,8 @@ import httpx
 
 root = Path("runtime/deploy-secrets")
 users = json.loads((root / "forgejo-users.json").read_text())
-base = "https://192.168.0.101:9445"
-context = ssl.create_default_context(cafile=root / "lan-root-ca.crt")
+base = "https://xenon.jyxxe.com/dev"
+context = ssl.create_default_context()
 with httpx.Client(
     base_url=base + "/api/v1",
     verify=context,

@@ -4,6 +4,17 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
   handle @outside {
     respond "Tunnel connector required" 403
   }
+  handle_path /auth/* {
+    reverse_proxy 192.168.0.109:8180 {
+      header_up X-Forwarded-Proto https
+    }
+  }
+  handle_path /dev/* {
+    reverse_proxy 192.168.0.110:3000 {
+      header_up X-Forwarded-Proto https
+    }
+  }
+  redir /dev /dev/ 308
   @auth host auth.xenon.jyxxe.com
   handle @auth {
     reverse_proxy 192.168.0.109:8180 {

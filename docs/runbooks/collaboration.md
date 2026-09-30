@@ -2,7 +2,7 @@
 
 Forgejo 16.0.5 部署在 VM 110，以非 root 用户运行，独立持久化数据位于 /var/lib/forgejo。
 二进制已与官方发布 SHA-256 核对。临时入口：https://192.168.0.101:9445。
-正式域名计划为 https://dev.xenon.jyxxe.com，等待 Cloudflare hostname 路由配置。
+正式入口为 https://xenon.jyxxe.com/dev/，使用单域名子路径。认证入口 /auth/。
 
 仓库：/xenon-admin/XeonoLab，源码公开。Issues 页面包含评论、标签、指派、里程碑、关联与状态管理。
 API 根路径 /api/v1；Swagger 位于 /api/swagger。仓库 Issue 接口：
@@ -19,5 +19,5 @@ GET/POST /api/v1/repos/xenon-admin/XeonoLab/issues，单条 PATCH /issues/{index
 
 Cloudflare connector 位于 VM 105，已建立连接。Token 仅存 /etc/cloudflared/tunnel-token，权限 600。
 公网 hostname xenon.jyxxe.com 与 *.xenon.jyxxe.com 的 Service： http://192.168.0.101:8080。
-保留 Host，origin 不使用 TLS；该监听仅接受 VM 105 来源。当前 remote configuration 无 hostname ingress。
+保留 Host，origin 不使用 TLS；该监听仅接受 VM 105 来源。单域名 Tunnel 路由已通过公网健康检查；origin 按 /auth 与 /dev 分发。
 公网 OIDC issuer 切换必须与 callback、iframe origin 和服务端 JWT verifier 一起验证，不能仅改 DNS。

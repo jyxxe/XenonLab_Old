@@ -54,7 +54,7 @@ function Desktop(){
  }
  async function search(){try{const data=await api('/query',{method:'POST',body:JSON.stringify({expression:query})});setResults(data);setError('')}catch(e){setError(String(e))}}
  return <main>
-   <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><time>{new Date().toLocaleDateString('zh-CN')}</time></header>
+   <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><time>{new Date().toLocaleDateString('zh-CN')}</time></header>
    <section className="intro"><small>YOUR KNOWLEDGE WORKSPACE</small><h1>让知识，有处可循。</h1><p>统一桌面 · 可追溯数据 · 受控工具</p></section>
    {!connected?<section className="login"><h2>连接工作空间</h2><p>通过统一身份服务登录。</p><button onClick={()=>login().catch(e=>setError(String(e)))}>登录 XeonoLab</button><details><summary>API 访问令牌</summary><input type="password" aria-label="访问令牌" value={token} onChange={e=>setToken(e.target.value)} placeholder="OIDC access token"/><button onClick={connect}>连接</button></details><p className="error">{error}</p></section>:
    <><Permissions api={api}/><section className="query"><h2>XeLibrary 查询</h2><textarea aria-label="查询表达式" value={query} onChange={e=>setQuery(e.target.value)}/><button onClick={search}>执行查询</button><button onClick={async()=>{try{await api('/users/me/layout',{method:'PUT',body:JSON.stringify({dock:apps.map(a=>a.id),windows})});setNotice('桌面布局已保存')}catch(e){setError(String(e))}}}>保存桌面</button><p className="error">{error}</p>{results.length>0&&<pre>{JSON.stringify(results,null,2)}</pre>}</section>

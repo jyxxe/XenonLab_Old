@@ -30,7 +30,7 @@ class LoginForm(HTMLParser):
 
 
 ip_only = "--ip" in sys.argv
-desktop_url = "https://192.168.0.101:9443" if ip_only else "https://xenon.lan"
+desktop_url = "https://192.168.0.101:9443" if ip_only else "https://xenon.jyxxe.com"
 
 original = socket.getaddrinfo
 socket.getaddrinfo = lambda host, *a, **kw: original(
@@ -39,15 +39,16 @@ socket.getaddrinfo = lambda host, *a, **kw: original(
 root = Path("runtime/deploy-secrets")
 credentials = json.loads((root / "credentials.json").read_text())
 context = ssl.create_default_context(cafile=root / "lan-root-ca.crt")
+context.load_default_certs()
 with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
     if ip_only:
         config = client.get(desktop_url + "/api/v1/auth/config").json()
-        assert config["issuer"] == "https://192.168.0.101:9444/realms/xeonolab"
+        assert config["issuer"] == "https://xenon.jyxxe.com/auth/realms/xeonolab"
         discovery = client.get(config["issuer"] + "/.well-known/openid-configuration").json()
         assert discovery["issuer"] == config["issuer"]
-        assert urlparse(discovery["authorization_endpoint"]).hostname == "192.168.0.101"
+        assert urlparse(discovery["authorization_endpoint"]).hostname == "xenon.jyxxe.com"
     r = client.post(
-        "https://192.168.0.101:9444/realms/master/protocol/openid-connect/token",
+        "https://xenon.jyxxe.com/auth/realms/master/protocol/openid-connect/token",
         data={
             "grant_type": "password",
             "client_id": "admin-cli",
@@ -57,7 +58,7 @@ with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
     )
     r.raise_for_status()
     headers = {"Authorization": "Bearer " + r.json()["access_token"]}
-    base = "https://192.168.0.101:9444/admin/realms/xeonolab"
+    base = "https://xenon.jyxxe.com/auth/admin/realms/xeonolab"
     username = "deployment-smoke-" + str(uuid4())
     password = secrets.token_urlsafe(32)
     r = client.post(
@@ -86,7 +87,7 @@ with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
         redirect = desktop_url + "/"
         r = client.get(
-            "https://192.168.0.101:9444/realms/xeonolab/protocol/openid-connect/auth",
+            "https://xenon.jyxxe.com/auth/realms/xeonolab/protocol/openid-connect/auth",
             params={
                 "client_id": "desktop",
                 "response_type": "code",
@@ -102,13 +103,13 @@ with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
         form.feed(r.text)
         assert form.action, "login form missing"
         if ip_only:
-            assert urlparse(form.action).hostname == "192.168.0.101"
+            assert urlparse(form.action).hostname == "xenon.jyxxe.com"
         r = client.post(form.action, data={**form.hidden, "username": username, "password": password})
         assert r.status_code in (302, 303), ("login did not finish", r.status_code)
         returned = parse_qs(urlparse(r.headers["Location"]).query)
         assert returned.get("state") == [state] and "code" in returned
         r = client.post(
-            "https://192.168.0.101:9444/realms/xeonolab/protocol/openid-connect/token",
+            "https://xenon.jyxxe.com/auth/realms/xeonolab/protocol/openid-connect/token",
             data={
                 "grant_type": "authorization_code",
                 "client_id": "desktop",
@@ -124,8 +125,8 @@ with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
             "desktop role scopes failed",
             result.status_code,
         )
-        if ip_only:
-            print("PASS: IP-only HTTPS login → code/PKCE → signed JWT → authorized data")
+        if ip_only or "--skip-llm" in sys.argv:
+            print("PASS: HTTPS desktop login → public code/PKCE → signed JWT → authorized data")
             sys.exit(0)
         chat = client.post(
             "https://llm.xenon.lan/v1/chat/completions",

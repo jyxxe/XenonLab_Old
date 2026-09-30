@@ -32,7 +32,7 @@ with httpx.Client(verify=context, trust_env=False, timeout=600) as client:
         codex,
         (root / "oidc-public.pem").read_text(),
         algorithms=["RS256"],
-        issuer="https://192.168.0.101:9444/realms/xeonolab",
+        issuer="https://xenon.jyxxe.com/auth/realms/xeonolab",
         audience="xeonolab",
     )
     base = "https://deploy.xenon.lan"
