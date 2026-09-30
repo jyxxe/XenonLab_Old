@@ -897,6 +897,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx", extra = ["socks"] },
+    { name = "huggingface-hub" },
     { name = "lark" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
@@ -923,6 +924,7 @@ dev = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28,<1" },
+    { name = "huggingface-hub", specifier = ">=1.0,<2" },
     { name = "lark", specifier = ">=1.2,<2" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "python-multipart", specifier = ">=0.0.20" },
