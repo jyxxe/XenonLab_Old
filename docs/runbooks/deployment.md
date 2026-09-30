@@ -1,7 +1,7 @@
-# PVE LAN 上线记录 — 2026-09-30
+# PVE LAN 上线记录 — 2026-10-01
 
-当前可运行版本已上线。应用代码版本 `b45af44c66a805110fa3d53fd127ee34659d2889`。
-完整 plan.md 的所有阶段尚未完成；本次上线范围是已有实现的桌面、XeLibrary、D100M 和网关。
+当前可运行版本已上线。应用代码版本 `c660a458b9691759de44de48bd22819100ea841c`。
+完整 plan.md 的所有阶段尚未完成；此版本还包含 DevAgent Issues 协作、HF-cache API/预取保护和 Caddy include 同步。
 
 ## 访问
 
@@ -46,10 +46,12 @@ LLM 和 Tool Gateway 使用不同系统用户，均不能读取部署私钥，To
 通过真实 OIDC Codex 身份注册 release，由明确授权的 policy 身份批准，再 acquire lease、
 调用 Deploy Gateway。网关只运行固定 executor，受限 SSH forced-command 只激活已暂存的
 指定 commit。各服务健康检查成功后租约释放。再次通过相同流程重启各应用，样例数据仍保留。
-最新上线 ID：`cc2a80b4-d0fd-416c-8924-4412875a667c`；对应 release
-`cd0720f0-832a-4e6c-b9d8-6ac018a0e343`，状态 completed，租约已释放。
+最新上线 ID：`f61107f5-641a-42cb-b5be-74bc959049b6`；对应 release
+`05f00027-ecd9-41f7-a16c-320084626811`，commit
+`c660a458b9691759de44de48bd22819100ea841c`，状态 completed，租约已释放。
 
-- 19 项代码测试通过，TypeScript/React production build 通过。
+- 189 项后端测试、11 项桌面测试、TypeScript/Vite production build 通过；本次改动的 Ruff 检查通过。
+- Issue #69 Caddy include 已同步；Caddy active，完整 Caddyfile validate 通过。公网桌面、OIDC discovery、Forgejo 登录页及 IP 入口 smoke check 通过。
 - HTTPS 证书链与 hostname 验证通过，LAN DNS 解析通过。
 - 真实 Keycloak 授权码 + PKCE 登录、签名 JWT、桌面管理员 role-to-scope 校验通过。
 - 未登录接口返回 401；内部 Embedding 端口拒绝操作主机直接访问。
@@ -76,5 +78,6 @@ Keycloak dump 可被 pg_restore 读取目录。模型原始权重仍位于操作
 该备份尚未设置定期自动化或异地存储；多个 `.xl` 与 catalogue 的快照不是全局原子快照。
 恢复时停写、恢复 catalogue/.xl/objects/ACL、校验一致性，再重建索引。
 
-尚未上线：Qwen worker、HF-cache、Library Agent、DevAgent triage、OpenWebUI 和完整监控。
+尚未上线：Qwen worker、Library Agent、OpenWebUI 和完整监控。HF-cache API 与预取水位保护代码已部署，
+但物理池 telemetry collector/receiver 尚未完成生产接线；PVE 池映射、VM103 接收、防火墙和真实下载验收仍待完成。
 这些功能不能从当前部署成功推断为已完成。

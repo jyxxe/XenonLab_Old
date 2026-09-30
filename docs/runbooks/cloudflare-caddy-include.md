@@ -82,8 +82,26 @@ synchronizing this include.
   complete Caddyfile before reloading. Do not use an ad hoc Deploy Gateway
   command or broaden its fixed executor allowlist.
 
-No production staging, Caddy validation, reload, or login acceptance was
-performed for this implementation. The operator must verify the live Caddy
-binary/path, exact import line, file ownership/mode, and Tunnel behavior before
-applying it. The control-plane update is a prerequisite and does not occur
-through normal release staging.
+## Production acceptance — 2026-10-01
+
+The reviewed control-plane update installed `activate.py` and `caddy_sync.py` at
+their fixed root-owned paths on Web 101. The prior helper, activation policy,
+Caddyfile, and Cloudflare include are backed up under
+`/var/backups/xeonolab-control-plane/issue69-20260930-191053-c660a458b969`.
+The helper and module match commit `c660a458b9691759de44de48bd22819100ea841c`;
+the policy already had `reload_caddy: true`. The update did not reload Caddy.
+
+That release completed through Deploy Gateway as deployment
+`f61107f5-641a-42cb-b5be-74bc959049b6` (release
+`05f00027-ecd9-41f7-a16c-320084626811`), and its lease was released. Activation
+validated the complete Caddy configuration and synchronized the include. The
+live include SHA-256 is
+`267e21bb61ec548ba1dd9e39ef33f5052f34d1f989a48f51c710a64f5028f73f`, matching
+the staged release. Caddy is active and the complete configuration validates.
+
+Post-deployment smoke checks returned 200 for the public desktop, public OIDC
+discovery, Forgejo login page, and direct-IP desktop. The auth-config endpoint
+returned the configured issuer for both exact origins when called with its
+required `origin` query parameter. Anonymous `/api/v1/apps` returned 401, as
+expected. A full interactive PKCE login and browser session renewal were not
+part of this acceptance run.
