@@ -1,0 +1,38 @@
+# XeonoLab scrape configuration (reference; not deployed by this change).
+# Firewall: only the Prometheus host may reach these ports; the production
+# topology keeps service ports off the management network (see docs/runbooks/deployment.md).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: xeonolab
+    metrics_path: /metrics
+    static_configs:
+      # Web 101
+      - targets: ["192.168.0.101:8101"]
+        labels: {service: desktop-web, vm: "101"}
+      # XeLibrary 104
+      - targets: ["192.168.0.104:8100"]
+        labels: {service: xelibrary, vm: "104"}
+      # Docker 106 (Tool / Deploy / LLM gateways)
+      - targets: ["192.168.0.106:8102"]
+        labels: {service: tool-gateway, vm: "106"}
+      - targets: ["192.168.0.106:8103"]
+        labels: {service: deploy-gateway, vm: "106"}
+      - targets: ["192.168.0.106:8105"]
+        labels: {service: llm-gateway, vm: "106"}
+      # Embedding 107
+      - targets: ["192.168.0.107:8104"]
+        labels: {service: embedding, vm: "107"}
+      # DevAgent / work queue (VM 111 in the current LAN layout)
+      - targets: ["192.168.0.111:8106"]
+        labels: {service: dev-agent, vm: "111"}
+      # Not deployed yet; enable after HF-cache / Library Agent go live.
+      # - targets: ["192.168.0.106:8107"]
+      #   labels: {service: hf-cache, vm: "106"}
+      # - targets: ["192.168.0.106:8108"]
+      #   labels: {service: library-agent, vm: "106"}

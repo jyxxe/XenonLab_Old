@@ -227,4 +227,20 @@ def create_app(service=None, settings=None):
     if service in ("hf-cache", "library-agent", "network-control"):
         app.state.ready_check = lambda: False
 
+    if service == "hf-cache":
+
+        def cache_usage():
+            total = 0
+            for path in app.state.settings.data_dir.rglob("*"):
+                try:
+                    if path.is_file():
+                        total += path.stat().st_size
+                except OSError:
+                    continue
+            return [({"service": "hf-cache"}, total)]
+
+        app.state.metrics.gauge_provider(
+            "hfcache_usage_bytes", "Bytes stored in the local HF cache directory.", cache_usage
+        )
+
     return app
