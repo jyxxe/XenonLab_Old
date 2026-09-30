@@ -403,6 +403,8 @@ def test_qdrant_search_discards_model_and_chunker_mismatch(settings, tmp_path, m
         pytest.param("wrong_column", id="column-does-not-match-indexed-chunk"),
         pytest.param("nonfinite_score", id="non-finite-score"),
         pytest.param("invalid_score", id="invalid-score"),
+        pytest.param("score_above_cosine_range", id="score-above-cosine-range"),
+        pytest.param("score_below_cosine_range", id="score-below-cosine-range"),
     ],
 )
 def test_qdrant_search_rejects_forged_candidate_identity_column_and_score(
@@ -429,6 +431,10 @@ def test_qdrant_search_rejects_forged_candidate_identity_column_and_score(
                 point["candidate_score"] = float("nan")
             elif candidate_mutation == "invalid_score":
                 point["candidate_score"] = "highest"
+            elif candidate_mutation == "score_above_cosine_range":
+                point["candidate_score"] = 1.01
+            elif candidate_mutation == "score_below_cosine_range":
+                point["candidate_score"] = -1.01
             changed.append(point)
         return changed
 

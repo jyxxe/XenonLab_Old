@@ -25,6 +25,7 @@ class IndexRequest(BaseModel):
 
 
 CHUNKER_VERSION = "chunker-v2"
+COSINE_SCORE_TOLERANCE = 1e-6
 CHUNK_TARGET_TOKENS = 108
 CHUNK_OVERLAP_TOKENS = 16
 CHUNK_HARD_LIMIT = 126
@@ -376,6 +377,8 @@ def install(
                 or isinstance(score, bool)
                 or not isinstance(score, (int, float))
                 or not math.isfinite(score)
+                or score < -1.0 - COSINE_SCORE_TOLERANCE
+                or score > 1.0 + COSINE_SCORE_TOLERANCE
             ):
                 continue
             tid, rid = payload.get("table_id"), payload.get("row_id")
@@ -431,7 +434,9 @@ def install(
                 "row_id": rid,
                 "row_revision": row_revision,
                 "path": table["path"],
-                "score": float(score),
+                # Accept only tiny serialization/rounding excursions, and keep
+                # returned cosine scores inside their documented interval.
+                "score": min(1.0, max(-1.0, float(score))),
                 "score_type": "d100m_cosine",
                 "snippet": str(current["values"][column])[:240],
                 "matched_chunks": [{"chunk_id": chunk_id, "column": column}],
