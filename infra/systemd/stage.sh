@@ -15,6 +15,7 @@ install -m 600 -o xeonolab-deploy -g xeonolab-deploy /tmp/xeonolab-config/author
 usermod -p '*' xeonolab-deploy
 install -d -m 755 /usr/local/libexec
 install -m 755 /tmp/activate.py /usr/local/libexec/xeonolab-activate
+install -m 644 /tmp/caddy_sync.py /usr/local/libexec/caddy_sync.py
 install -m 755 /tmp/receiver.py /usr/local/libexec/xeonolab-receiver
 printf 'xeonolab-deploy ALL=(root) NOPASSWD: /usr/local/libexec/xeonolab-activate\n' >/etc/sudoers.d/xeonolab-deploy
 chmod 440 /etc/sudoers.d/xeonolab-deploy
