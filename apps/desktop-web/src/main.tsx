@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './style.css';
-import {login,callback} from './auth';
+import {login,callback,sessionToken,logout} from './auth';
 import {Permissions} from './Permissions';
 import {Work} from './Work';
 import {Knowledge} from './Knowledge';
@@ -15,11 +15,13 @@ function Desktop(){
  const [apps,setApps]=useState<App[]>([]), [windows,setWindows]=useState<Window[]>([]);
  const [token,setToken]=useState(''), [error,setError]=useState(''), [notice,setNotice]=useState('');
  const [query,setQuery]=useState('FROM "/**" LIMIT 20'), [results,setResults]=useState<unknown[]>([]);
- const [connected,setConnected]=useState(false),[launchpad,setLaunchpad]=useState(false);
- useEffect(()=>{callback().then(result=>{if(result){setToken(result.token);setTimeout(()=>{setToken('');setConnected(false);setNotice('登录已过期，请重新登录')},result.expires*1000)}}).catch(e=>setError(String(e)))},[]);
- useEffect(()=>{if(token)connect()},[token]);
+ const [connected,setConnected]=useState(false),[launchpad,setLaunchpad]=useState(false),[persistent,setPersistent]=useState(false);
+ useEffect(()=>{callback().then(async result=>result||await sessionToken()).then(result=>{if(result){setPersistent(true);setToken(result.token)}}).catch(e=>setError(String(e)))},[]);
+ useEffect(()=>{if(!persistent)return;const renew=()=>sessionToken().then(result=>{if(result)setToken(result.token);else{setToken('');setConnected(false);setPersistent(false);setNotice('登录已撤销，请重新登录')}}).catch(e=>setNotice(String(e)));const timer=setInterval(renew,60000);const visible=()=>{if(document.visibilityState==='visible')renew()};document.addEventListener('visibilitychange',visible);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible)}},[persistent]);
+ useEffect(()=>{if(token&&!connected)connect()},[token]);
  async function api(path:string, init:RequestInit={}){
-   const response=await fetch(`/api/v1${path}`, {...init,headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`,...init.headers}});
+   const current=persistent?await sessionToken():{token};if(!current)throw Error('登录已撤销，请重新登录');
+   const response=await fetch(`/api/v1${path}`, {...init,headers:{'Content-Type':'application/json',Authorization:`Bearer ${current.token}`,...init.headers}});
    const result=await response.json();
    if(!response.ok) throw Error(result.error?.message || `HTTP ${response.status}`);
    return result.data;
@@ -58,7 +60,7 @@ function Desktop(){
  async function search(){try{const data=await api('/query',{method:'POST',body:JSON.stringify({expression:query})});setResults(data);setError('')}catch(e){setError(String(e))}}
  if(libraryView&&connected)return <Knowledge api={api}/>;
  return <main>
-   <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><time>{new Date().toLocaleDateString('zh-CN')}</time></header>
+   <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><time>{new Date().toLocaleDateString('zh-CN')}</time>{connected&&<button onClick={async()=>{try{if(persistent)await logout();setPersistent(false);setToken('');setConnected(false);setWindows([])}catch(e){setError(String(e))}}}>退出登录</button>}</header>
    {!connected&&<section className="intro"><small>YOUR KNOWLEDGE WORKSPACE</small><h1>让知识，有处可循。</h1><p>统一桌面 · 可追溯数据 · 受控工具</p></section>}
    {!connected?<section className="login"><h2>连接工作空间</h2><p>通过统一身份服务登录。</p><button onClick={()=>login().catch(e=>setError(String(e)))}>登录 XeonoLab</button><details><summary>API 访问令牌</summary><input type="password" aria-label="访问令牌" value={token} onChange={e=>setToken(e.target.value)} placeholder="OIDC access token"/><button onClick={connect}>连接</button></details><p className="error">{error}</p></section>:
    <>{launchpad&&<section className="launchpad" aria-label="LaunchPad"><button className="launchpad-close" onClick={()=>setLaunchpad(false)}>关闭 LaunchPad</button><h2>LaunchPad</h2><div>{apps.map(app=><button key={app.id} onClick={()=>{open(app);setLaunchpad(false)}}><b>{app.icon}</b><span>{app.title}</span></button>)}</div></section>}

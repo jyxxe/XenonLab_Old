@@ -62,7 +62,11 @@ for node, entries in services.items():
             ]
             (dest / "embedding-client-secret").write_text(credentials["embedding_secret"])
         if service == "dev-agent":
-            lines += ["FORGEJO_WEBHOOK_SECRET_FILE=/etc/xeonolab/forgejo-webhook-secret"]
+            lines += [
+                "FORGEJO_WEBHOOK_SECRET_FILE=/etc/xeonolab/forgejo-webhook-secret",
+                "FORGEJO_URL=https://192.168.0.101:9445",
+                "FORGEJO_CA_FILE=/etc/xeonolab/lan-root-ca.crt",
+            ]
         if service == "tool-gateway":
             lines += ["XELIBRARY_URL=http://192.168.0.104:8100"]
         if service == "deploy-gateway":
@@ -98,7 +102,7 @@ artifact = {
             "commit": commit,
             "artifacts": [artifact],
             "migration_manifest": "bootstrap-v1-no-existing-data-migration",
-            "test_report": "25 tests; frontend build; D100M model smoke",
+            "test_report": "26 tests; frontend build; D100M model smoke",
         }
     )
 )

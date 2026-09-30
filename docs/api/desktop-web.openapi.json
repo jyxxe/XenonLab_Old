@@ -71,6 +71,74 @@
         }
       }
     },
+    "/api/v1/auth/session/exchange": {
+      "post": {
+        "summary": "Create",
+        "operationId": "create_api_v1_auth_session_exchange_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Exchange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session/token": {
+      "post": {
+        "summary": "Token",
+        "operationId": "token_api_v1_auth_session_token_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session/logout": {
+      "post": {
+        "summary": "Logout",
+        "operationId": "logout_api_v1_auth_session_logout_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/config": {
       "get": {
         "summary": "Auth Config",
@@ -271,6 +339,33 @@
           "origin"
         ],
         "title": "AppEntry"
+      },
+      "Exchange": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Code"
+          },
+          "verifier": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 43,
+            "title": "Verifier"
+          },
+          "redirect": {
+            "type": "string",
+            "title": "Redirect"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "verifier",
+          "redirect"
+        ],
+        "title": "Exchange"
       },
       "HTTPValidationError": {
         "properties": {

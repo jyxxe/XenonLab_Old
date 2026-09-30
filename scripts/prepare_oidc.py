@@ -78,6 +78,8 @@ realm = {
     "accessTokenLifespan": 300,
     "ssoSessionIdleTimeout": 1800,
     "ssoSessionMaxLifespan": 28800,
+    "offlineSessionIdleTimeout": 2147483647,
+    "offlineSessionMaxLifespanEnabled": False,
     "roles": {"realm": [{"name": "platform-admin"}]},
     "users": [
         {
@@ -100,6 +102,7 @@ realm = {
             "directAccessGrantsEnabled": False,
             "redirectUris": ["https://xenon.lan/*", "https://xenon.jyxxe.com/*", "https://192.168.0.101:9443/*"],
             "webOrigins": ["https://xenon.lan", "https://xenon.jyxxe.com", "https://192.168.0.101:9443"],
+            "optionalClientScopes": ["offline_access"],
             "attributes": {"pkce.code.challenge.method": "S256"},
             "protocolMappers": [
                 audience(),

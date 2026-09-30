@@ -81,3 +81,11 @@ Issues ROOT_URL 子路径已修复；桌面功能已迁入子窗口并新增 Lau
 知识管理器提供表筛选/创建、schema 驱动记录表格/编辑和带 If-Match 软删除；附件/导入导出/历史界面仍待完成。
 账号树与 API key 生命周期、持续登录刷新仍未实现。
 Issue 同时间戳冲突冻结与主动 source reconcile 已实现且有测试，待配置和发布；25 项测试通过。
+
+### 2026-09-30 WebUI priority update
+
+- Deployed 0688c488: windowed knowledge manager, schema-driven record editing, table creation/filtering, soft delete, LaunchPad, settings/work windows. Full settings, attachment/history/import-export UI remain incomplete.
+- Forgejo ROOT_URL now uses the public `/dev/` prefix; public index/theme CSS verified as CSS responses. IP entry supports the same prefixed assets.
+- Persistent desktop browser sessions exchange PKCE codes server-side, keep refresh credentials in a private server SQLite database, and use secure HttpOnly same-site cookies. Server restart/page reload restore the session; access tokens remain short-lived and refresh automatically. Logout deletes this browser session. Idle offline timeout is configured to Keycloak's signed-integer maximum, with no maximum offline session lifespan. Browser cookie storage limits and deliberate revocation still apply; this is continuous renewal rather than literally immortal credentials. [Keycloak offline-session semantics](https://www.keycloak.org/docs/latest/server_admin/#_offline-access).
+- Tests cover restart restoration, refresh after expiry, temporary provider failure, origin/redirect rejection, and logout. Account tree, inherited account permissions, password reset/revocation, and API key management are not yet implemented; existing resource ACL settings are not an account administration page.
+- DevAgent reconciliation source now has a fixed Forgejo endpoint and verified LAN CA in deployment configuration.

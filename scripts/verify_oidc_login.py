@@ -93,7 +93,7 @@ with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
                 "client_id": "desktop",
                 "response_type": "code",
                 "redirect_uri": redirect,
-                "scope": "openid profile",
+                "scope": "openid profile offline_access" if "--session" in sys.argv else "openid profile",
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
                 "state": state,
@@ -109,6 +109,33 @@ with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
         assert r.status_code in (302, 303), ("login did not finish", r.status_code)
         returned = parse_qs(urlparse(r.headers["Location"]).query)
         assert returned.get("state") == [state] and "code" in returned
+        if "--session" in sys.argv:
+            r = client.post(
+                desktop_url + "/api/v1/auth/session/exchange",
+                headers={"Origin": desktop_url},
+                json={"code": returned["code"][0], "redirect": redirect, "verifier": verifier},
+            )
+            r.raise_for_status()
+            assert "HttpOnly" in r.headers["set-cookie"] and "refresh_token" not in r.text
+            restored = client.post(
+                desktop_url + "/api/v1/auth/session/token", headers={"Origin": desktop_url}
+            )
+            restored.raise_for_status()
+            user_headers = {"Authorization": "Bearer " + restored.json()["token"]}
+            assert client.get(desktop_url + "/api/v1/users/me", headers=user_headers).status_code == 200
+            client.post(
+                desktop_url + "/api/v1/auth/session/logout", headers={"Origin": desktop_url}
+            ).raise_for_status()
+            assert (
+                client.post(
+                    desktop_url + "/api/v1/auth/session/token", headers={"Origin": desktop_url}
+                ).status_code
+                == 401
+            )
+            print(
+                "PASS: offline PKCE login → server session → cookie restore → authorized API → logout invalidation"
+            )
+            sys.exit(0)
         r = client.post(
             auth_base + "/realms/xeonolab/protocol/openid-connect/token",
             data={
