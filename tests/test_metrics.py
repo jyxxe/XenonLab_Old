@@ -166,6 +166,38 @@ def test_library_snapshot_table_database_failure_omits_state_instead_of_reportin
     assert not any(line.startswith("xelibrary_index_lag ") for line in text.splitlines())
 
 
+def test_library_snapshot_ignores_only_files_disappearing_before_stat(library, settings, monkeypatch):
+    seed_table(library)
+    missing = settings.data_dir / "catalogue.sqlite"
+    original_stat = Path.stat
+
+    def stat_with_disappearing_file(path, *args, **kwargs):
+        if path == missing:
+            raise FileNotFoundError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_with_disappearing_file)
+    text = library.get("/metrics").text
+    assert "xelibrary_snapshot_success 1" in text
+    assert "xelibrary_rows_total 1" in text
+
+
+def test_library_snapshot_surfaces_other_file_stat_errors(library, settings, monkeypatch):
+    seed_table(library)
+    inaccessible = settings.data_dir / "catalogue.sqlite"
+    original_stat = Path.stat
+
+    def stat_with_inaccessible_file(path, *args, **kwargs):
+        if path == inaccessible:
+            raise PermissionError(path)
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_with_inaccessible_file)
+    text = library.get("/metrics").text
+    assert "xelibrary_snapshot_success 0" in text
+    assert not any(line.startswith("xelibrary_rows_total ") for line in text.splitlines())
+
+
 def test_embedding_metrics_by_model(settings):
     settings.dev_tokens["alice"]["scope"] += " embedding:write"
     with TestClient(create_app("embedding", settings)) as client:
@@ -204,6 +236,24 @@ def test_embedding_worker_busy_is_reported_as_in_flight_not_queued(settings):
     assert 'embedding_in_flight{model="d100m"} 0' in idle
     assert 'embedding_queue_depth{model="d100m"} 0' in busy
     assert 'embedding_in_flight{model="d100m"} 1' in busy
+
+
+def test_embedding_unexpected_encoder_failure_is_counted_and_remains_http_500(settings):
+    from types import SimpleNamespace
+
+    settings.dev_tokens["alice"]["scope"] += " embedding:write"
+    with TestClient(create_app("embedding", settings), raise_server_exceptions=False) as client:
+        def fail_encode(*_args, **_kwargs):
+            raise RuntimeError("unexpected encoder failure")
+
+        client.app.state.model = SimpleNamespace(revision="test", encode=fail_encode)
+        result = client.post("/v1/embeddings", headers=auth(), json={"input": "test"})
+        text = client.get("/metrics").text
+
+    assert result.status_code == 500
+    assert result.json()["error"]["code"] == "INTERNAL_ERROR"
+    assert 'embedding_requests_total{model="d100m",result="error"} 1' in text
+    assert 'embedding_errors_total{code="INTERNAL_ERROR",model="d100m"} 1' in text
 
 
 def test_deploy_metrics_follow_real_state_machine(settings, tmp_path, monkeypatch):

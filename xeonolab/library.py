@@ -3,6 +3,7 @@ import json
 import math
 import re
 import sqlite3
+import stat
 import threading
 import time
 from datetime import datetime, timezone
@@ -996,8 +997,12 @@ def create_app(settings=None):
 
         storage = 0
         for path in root.rglob("*"):
-            if path.is_file():
-                storage += path.stat().st_size
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                storage += info.st_size
         return {"rows": rows, "chunks": chunks, "lag": lag, "backlog": backlog, "storage": storage}
 
     def library_snapshot():

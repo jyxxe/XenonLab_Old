@@ -121,6 +121,17 @@ def create_app(settings=None):
         quality = body.model in ("quality", "Qwen/Qwen3-VL-Embedding-2B")
         label = "qwen3vl2b" if quality else ("d100m" if body.model in ("fast", "D100M-Embedding") else "unknown")
         started = time.monotonic()
+
+        def record_error(code):
+            metrics.counter(
+                "embedding_requests_total", help="Embedding requests by model and outcome.",
+                model=label, result="error",
+            )
+            metrics.counter(
+                "embedding_errors_total", help="Embedding errors by model and error code.",
+                model=label, code=code,
+            )
+
         try:
             if body.model not in ("fast", "D100M-Embedding", "quality", "Qwen/Qwen3-VL-Embedding-2B"):
                 raise APIError(422, "UNKNOWN_MODEL", "unsupported embedding model")
@@ -131,14 +142,10 @@ def create_app(settings=None):
             texts = [body.input] if isinstance(body.input, str) else body.input
             vectors, tokens = app.state.model.encode(texts, body.truncation)
         except APIError as error:
-            metrics.counter(
-                "embedding_requests_total", help="Embedding requests by model and outcome.",
-                model=label, result="error",
-            )
-            metrics.counter(
-                "embedding_errors_total", help="Embedding errors by model and error code.",
-                model=label, code=error.code,
-            )
+            record_error(error.code)
+            raise
+        except Exception:
+            record_error("INTERNAL_ERROR")
             raise
         finally:
             metrics.observe(

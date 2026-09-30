@@ -16,13 +16,15 @@
     `xelibrary_rows_total`、`xelibrary_chunks_total`、`xelibrary_embedding_backlog`、`xelibrary_index_lag`、
     `xelibrary_storage_bytes`、`xelibrary_snapshot_success`。状态 gauges 由同一个受锁保护的快照读取，
     快照 60 秒刷新一次；读取失败时省略状态样本并将 `xelibrary_snapshot_success` 置为 0，
-    不把数据库故障记作零行或零积压。唯一按零处理的表缺失是尚未初始化的可选 `__xl_vectors`。
+    不把数据库故障记作零行或零积压。唯一按零处理的表缺失是尚未初始化的可选 `__xl_vectors`；
+    storage 遍历中仅忽略已并发消失文件的 `FileNotFoundError`，其他文件系统错误令快照失败。
     `index_lag` 定义为「行 revision 大于该行最近已索引 revision 的非删除行数」。
   - Embedding：`embedding_requests_total{model,result}`、`embedding_latency_seconds{model}`、
     `embedding_errors_total{model,code}`、`embedding_batch_size{model}`、
     `embedding_model_loaded{model}`、`embedding_queue_depth{model}`、`embedding_in_flight{model}`。
     V1 没有排队队列：`queue_depth` 始终为 0；单 worker 正在推理时由 `in_flight` 表示 1，
-    并发请求直接返回 429；Qwen 未配置时两项都为 0。
+    并发请求直接返回 429；意外推理异常仍返回 HTTP 500，同时以固定 `code="INTERNAL_ERROR"`
+    计入 `embedding_errors_total`；Qwen 未配置时两项都为 0。
   - Deploy：`deploy_lease_active`、`deploy_duration_seconds`（执行器实际耗时）、
     `deploy_failure_total`、`deploy_rollback_total`、`deploy_deployments{state}`。
   - HF-cache：当前 skeleton 仅暴露真实的 `hfcache_usage_bytes`（缓存目录字节数）；
