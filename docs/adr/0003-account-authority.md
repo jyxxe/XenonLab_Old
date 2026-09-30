@@ -22,10 +22,13 @@ keys are random opaque values, stored as hashes and shown once; issued scopes
 are capped by both issuer and owner's effective permissions, and shrink with
 the account tree. API keys cannot reset passwords or alter account policies.
 
-Password reset fences old JWTs, revokes the user's keys and deletes browser
-sessions before calling Keycloak. Provider timeout returns a pending/error
+Password reset advances a random credential version, revokes the user's keys
+and deletes browser sessions before calling Keycloak. Keycloak adds an
+admin-only user attribute to desktop access tokens; matching the version
+distinguishes new credentials without a same-second timestamp race. Provider timeout returns a pending/error
 rather than restoring old credentials. Keycloak reset also logs out SSO
-sessions. Retrying may require fresh login or an ancestor. Password changes via
+sessions. Retrying requires an ancestor or privileged operator if identity attribute
+synchronization has not completed. Password changes via
 an external Keycloak admin do not update this local fence; platform password
 reset should use the platform API. Full identity reconciliation remains work.
 

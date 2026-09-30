@@ -123,3 +123,10 @@ XeLibrary service losing permissions immediately. Thirty tests and frontend
 build passed. Live deployment/provider verification is required before claiming
 production acceptance. Preferences/app registry settings, knowledge attachments
 and history UI, and the broader plan remain incomplete.
+
+Real account verification found same-second JWT issuance rejected immediately
+after password reset. Credential reset now uses a random version in an admin-only
+Keycloak attribute/desktop token mapper, rather than an issue-time cutoff for
+managed JWTs. The regression verifies a fresh version with unchanged issued-at
+time. Opaque keys still use explicit revocation. The first disposable-account
+verification failed at fresh login and was cleaned up; rerun after release.

@@ -28,6 +28,7 @@ class Identity:
     scopes: set[str]
     kind: str = "human"
     issued_at: float = 0
+    credential_epoch: str = ""
 
     def require(self, scope):
         if scope not in self.scopes:
@@ -81,7 +82,13 @@ def token_identity(token, settings):
     scopes = set(claims.get("scope", "").split()) | set(claims.get("platform_scopes", "").split())
     for role in claims.get("realm_access", {}).get("roles", []):
         scopes.update((settings.role_scopes or {}).get(role, []))
-    return Identity(claims["sub"], scopes, claims.get("agent_kind", "human"), claims.get("iat", 0))
+    return Identity(
+        claims["sub"],
+        scopes,
+        claims.get("agent_kind", "human"),
+        claims.get("iat", 0),
+        claims.get("account_epoch", ""),
+    )
 
 
 def identity(request: Request):

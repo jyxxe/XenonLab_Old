@@ -34,8 +34,9 @@ def accounts(settings):
             }
             return uid
 
-        def password(self, uid, value):
+        def password(self, uid, value, epoch):
             self.users[uid] = value
+            settings.dev_tokens[uid]["next_epoch"] = epoch
 
         def delete(self, uid):
             self.users.pop(uid)
@@ -197,7 +198,8 @@ def test_api_key_attenuation_revocation_and_password_fencing(accounts):
     assert app.state.account_provider.users[uid] == "new-test-password"
     assert client.get("/api/v1/users/me", headers=auth(uid)).status_code == 401
     assert client.get("/api/v1/users/me", headers=auth(key2)).status_code == 401
-    settings.dev_tokens[uid]["iat"] = time.time() + 1
+    # Fresh credentials work even with the exact same issued-at timestamp.
+    settings.dev_tokens[uid]["account_epoch"] = settings.dev_tokens[uid]["next_epoch"]
     assert client.get("/api/v1/users/me", headers=auth(uid)).status_code == 200
     audit = client.get("/api/v1/auth/accounts/audit/events", headers=auth("admin")).text
     assert "password_reset" in audit and "new-test-password" not in audit and key2 not in audit
@@ -253,7 +255,7 @@ def test_self_password_reset_without_management_and_provider_failure(accounts):
         },
     ).json()["data"]["token"]
 
-    def unavailable(uid, password):
+    def unavailable(uid, password, epoch):
         raise APIError(503, "ACCOUNT_PROVIDER_UNAVAILABLE", "unavailable")
 
     app.state.account_provider.password = unavailable

@@ -62,4 +62,40 @@ with httpx.Client(
     client.post(
         realm + "/users/" + user.json()["id"] + "/role-mappings/clients/" + mid, headers=headers, json=roles
     ).raise_for_status()
-print("Desktop realm user manager provisioned; secret stored privately")
+
+    desktop = client.get(realm + "/clients", headers=headers, params={"clientId": "desktop"})
+    desktop.raise_for_status()
+    did = desktop.json()[0]["id"]
+    mapper_url = realm + "/clients/" + did + "/protocol-mappers/models"
+    mappers = client.get(mapper_url, headers=headers)
+    mappers.raise_for_status()
+    mapper = {
+        "name": "account-credential-epoch",
+        "protocol": "openid-connect",
+        "protocolMapper": "oidc-usermodel-attribute-mapper",
+        "config": {
+            "user.attribute": "xeonolab_credential_epoch",
+            "claim.name": "account_epoch",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+        },
+    }
+    old = next((m for m in mappers.json() if m["name"] == mapper["name"]), None)
+    if old:
+        client.put(mapper_url + "/" + old["id"], headers=headers, json=mapper).raise_for_status()
+    else:
+        client.post(mapper_url, headers=headers, json=mapper).raise_for_status()
+    profile = client.get(realm + "/users/profile", headers=headers)
+    profile.raise_for_status()
+    body = profile.json()
+    attributes = body.setdefault("attributes", [])
+    definition = {
+        "name": "xeonolab_credential_epoch",
+        "displayName": "Credential version",
+        "permissions": {"view": ["admin"], "edit": ["admin"]},
+        "multivalued": False,
+    }
+    attributes[:] = [a for a in attributes if a["name"] != definition["name"]] + [definition]
+    client.put(realm + "/users/profile", headers=headers, json=body).raise_for_status()
+print("Desktop credential version mapper and admin-only attribute configured")

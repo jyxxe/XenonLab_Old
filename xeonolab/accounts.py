@@ -115,7 +115,11 @@ class Keycloak:
     def delete(self, uid):
         self.request("DELETE", "/users/" + str(UUID(uid)))
 
-    def password(self, uid, value):
+    def password(self, uid, value, epoch):
+        user = self.request("GET", "/users/" + str(UUID(uid))).json()
+        attributes = user.get("attributes", {})
+        attributes["xeonolab_credential_epoch"] = [epoch]
+        self.request("PUT", "/users/" + str(UUID(uid)), {"attributes": attributes})
         self.request(
             "PUT",
             "/users/" + str(UUID(uid)) + "/reset-password",
@@ -146,6 +150,9 @@ def install(app):
           id TEXT PRIMARY KEY, actor TEXT NOT NULL, event TEXT NOT NULL,
           target TEXT NOT NULL, at REAL NOT NULL);
         """)
+    with transaction(path) as db:
+        if "credential_epoch" not in {row[1] for row in db.execute("PRAGMA table_info(accounts)")}:
+            db.execute("ALTER TABLE accounts ADD COLUMN credential_epoch TEXT NOT NULL DEFAULT ''")
     path.chmod(0o600)
     app.state.account_provider = Keycloak()
 
@@ -222,7 +229,12 @@ def install(app):
                 account = db.execute("SELECT * FROM accounts WHERE id=?", (actor.sub,)).fetchone()
                 if not account:
                     return actor  # Existing operator-provisioned OIDC identities remain valid.
-                if actor.kind != account["kind"] or actor.issued_at < account["not_before"]:
+                stale = (
+                    actor.credential_epoch != account["credential_epoch"]
+                    if account["credential_epoch"]
+                    else actor.issued_at < account["not_before"]
+                )
+                if actor.kind != account["kind"] or stale:
                     raise APIError(401, "CREDENTIAL_REVOKED", "credentials revoked; sign in again")
             if not all(node["enabled"] for node in chain(db, actor.sub)):
                 raise APIError(401, "ACCOUNT_DISABLED", "account or ancestor disabled")
@@ -255,7 +267,7 @@ def install(app):
             if db.execute("SELECT 1 FROM accounts WHERE id=?", (actor.sub,)).fetchone():
                 raise APIError(409, "ACCOUNT_EXISTS", "account already registered")
             db.execute(
-                "INSERT INTO accounts VALUES(?,NULL,?,?,?,?,?,?,0,?)",
+                "INSERT INTO accounts(id,parent,username,name,kind,enabled,inherit_all,grants,not_before,created) VALUES(?,NULL,?,?,?,?,?,?,0,?)",
                 (
                     actor.sub,
                     actor.sub,
@@ -311,7 +323,7 @@ def install(app):
             uid = app.state.account_provider.create(body)
             try:
                 db.execute(
-                    "INSERT INTO accounts VALUES(?,?,?,?,?,?,?,?,0,?)",
+                    "INSERT INTO accounts(id,parent,username,name,kind,enabled,inherit_all,grants,not_before,created) VALUES(?,?,?,?,?,?,?,?,0,?)",
                     (
                         uid,
                         body.parent_id,
@@ -373,19 +385,22 @@ def install(app):
         if uid != actor.sub:
             manage(actor)
         # Fence old credentials before a potentially ambiguous provider timeout.
+        epoch = str(uuid4())
         with transaction(path) as db:
             owned(db, actor, uid)
-            db.execute("UPDATE accounts SET not_before=? WHERE id=?", (time.time(), uid))
+            db.execute(
+                "UPDATE accounts SET not_before=?,credential_epoch=? WHERE id=?", (time.time(), epoch, uid)
+            )
             db.execute("UPDATE api_keys SET revoked=1 WHERE owner=?", (uid,))
             audit(db, actor, "account.password_reset_requested", uid)
         sessions = app.state.settings.data_dir / "browser-sessions.sqlite"
         with transaction(sessions) as db:
             db.execute("DELETE FROM sessions WHERE subject=?", (uid,))
         try:
-            app.state.account_provider.password(uid, body.password)
+            app.state.account_provider.password(uid, body.password, epoch)
         except APIError:
             raise APIError(
-                503, "PASSWORD_RESET_PENDING", "旧凭据已撤销，身份服务暂不可用；请重新登录后重试或联系父账号"
+                503, "PASSWORD_RESET_PENDING", "旧凭据已撤销，身份同步尚未完成；请由父账号或运维管理员重试"
             ) from None
         with transaction(path) as db:
             audit(db, actor, "account.password_reset", uid)
