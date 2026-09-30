@@ -127,8 +127,11 @@ def create_app(settings=None):
                 ).fetchone()
                 if acl:
                     grants = json.loads(acl[0])
-                    return action in grants.get(actor.sub, []) or action in grants.get("*", [])
-        return table["owner"] == actor.sub
+                    for principal in (actor.sub, *actor.ancestors):
+                        if principal in grants:
+                            return action in grants[principal] or action in grants.get("*", [])
+                    return action in grants.get("*", [])
+        return table["owner"] in (actor.sub, *actor.ancestors)
 
     def authorize(actor, tid, action, row_id=None):
         table = table_info(tid)

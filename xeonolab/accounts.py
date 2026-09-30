@@ -119,7 +119,8 @@ class Keycloak:
         user = self.request("GET", "/users/" + str(UUID(uid))).json()
         attributes = user.get("attributes", {})
         attributes["xeonolab_credential_epoch"] = [epoch]
-        self.request("PUT", "/users/" + str(UUID(uid)), {"attributes": attributes})
+        user["attributes"] = attributes
+        self.request("PUT", "/users/" + str(UUID(uid)), user)
         self.request(
             "PUT",
             "/users/" + str(UUID(uid)) + "/reset-password",
@@ -241,7 +242,14 @@ def install(app):
             permissions = effective(db, actor.sub)
             if token.startswith("xek_"):
                 permissions &= actor.scopes
-            return Identity(actor.sub, permissions, actor.kind, actor.issued_at)
+            return Identity(
+                actor.sub,
+                permissions,
+                actor.kind,
+                actor.issued_at,
+                actor.credential_epoch,
+                tuple(row["id"] for row in chain(db, actor.sub)[1:]),
+            )
 
     app.state.authorization_resolver = resolve
 
@@ -254,7 +262,15 @@ def install(app):
 
     @app.get("/api/v1/auth/authorization")
     def authorization(request: Request, actor=Depends(identity)):
-        result = response(request, {"subject": actor.sub, "kind": actor.kind, "scopes": sorted(actor.scopes)})
+        result = response(
+            request,
+            {
+                "subject": actor.sub,
+                "kind": actor.kind,
+                "scopes": sorted(actor.scopes),
+                "ancestors": actor.ancestors,
+            },
+        )
         return result
 
     @app.post("/api/v1/auth/accounts/bootstrap", status_code=201)

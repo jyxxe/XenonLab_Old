@@ -29,6 +29,7 @@ class Identity:
     kind: str = "human"
     issued_at: float = 0
     credential_epoch: str = ""
+    ancestors: tuple[str, ...] = ()
 
     def require(self, scope):
         if scope not in self.scopes:
@@ -115,7 +116,9 @@ def identity(request: Request):
             data = result.json()["data"]
             if local and (data["subject"] != local.sub or data["kind"] != local.kind):
                 raise ValueError("identity authority mismatch")
-            return Identity(data["subject"], set(data["scopes"]), data["kind"])
+            return Identity(
+                data["subject"], set(data["scopes"]), data["kind"], ancestors=tuple(data.get("ancestors", []))
+            )
         except (httpx.HTTPError, ValueError, KeyError, OSError):
             raise APIError(503, "AUTHORIZATION_UNAVAILABLE", "account authority unavailable") from None
     if token.startswith("xek_"):

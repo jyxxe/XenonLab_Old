@@ -130,3 +130,13 @@ Keycloak attribute/desktop token mapper, rather than an issue-time cutoff for
 managed JWTs. The regression verifies a fresh version with unchanged issued-at
 time. Opaque keys still use explicit revocation. The first disposable-account
 verification failed at fresh login and was cleaned up; rerun after release.
+
+Account inheritance now also carries verified ancestor principals into XeLibrary
+ownership/ACL checks; a nearer child ACL entry overrides inherited parent entries,
+and API scopes continue to cap writes. Tests verify actual parent-owned resource
+access and explicit child denial, rather than only comparing scope arrays.
+A second real password-reset check found the Keycloak attribute-only PUT cleared
+profile fields and triggered UPDATE_PROFILE. The provider now preserves the full
+existing profile when changing credential version; a regression asserts names,
+email, existing attributes, password reset and logout ordering. Thirty-two tests
+passed; the disposable real-account verification will be rerun after activation.

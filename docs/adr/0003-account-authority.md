@@ -12,7 +12,10 @@ No reparent operation is exposed; trees are bounded at 128 levels. Partial
 inheritance intersects explicit grants with every ancestor. Full inheritance
 tracks the parent's entire current set. A child cannot edit its own inherited
 policy or a sibling/ancestor. Root accounts retain desktop administration.
-Existing operator-issued OIDC service identities remain separate and preserve
+Resource ACL checks use the verified ancestor principal chain: parent ownership
+and explicit parent grants can be inherited, while a nearer explicit child
+entry takes precedence. Scope checks still prevent a read-only child from
+writing. Existing operator-issued OIDC service identities remain separate and preserve
 signed agent_kind; registering users does not let OpenCode become Codex.
 
 All API services check the fixed TLS account authority on each request, without

@@ -268,3 +268,76 @@ def test_self_password_reset_without_management_and_provider_failure(accounts):
     assert result.json()["error"]["code"] == "PASSWORD_RESET_PENDING"
     assert client.get("/api/v1/users/me", headers=auth(uid)).status_code == 401
     assert client.get("/api/v1/users/me", headers=auth(token)).status_code == 401
+
+
+def test_resource_acl_inherits_parent_and_child_entry_overrides(accounts, monkeypatch):
+    from xeonolab.services import create_app as service_app
+
+    client, settings, app = accounts
+    uid = child(client, grants=["desktop:read", "accounts:manage", "xelibrary:read", "xelibrary:write"])
+    grand = child(client, uid, actor=uid, grants=["desktop:read", "xelibrary:read"])
+    monkeypatch.setenv("AUTHORIZATION_URL", "https://authority.example/api/v1/auth/authorization")
+    original_get = httpx.Client.get
+
+    def get(instance, url, **kwargs):
+        if isinstance(instance, TestClient):
+            return original_get(instance, url, **kwargs)
+        result = client.get("/api/v1/auth/authorization", headers=kwargs["headers"])
+        return httpx.Response(result.status_code, json=result.json(), request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.Client, "get", get)
+    library = TestClient(service_app("xelibrary", settings))
+    created = library.post(
+        "/api/v1/tables",
+        headers=auth(uid),
+        json={
+            "path": "/account-inheritance",
+            "name": "Owned by parent",
+            "columns": [{"name": "title", "type": "string"}],
+        },
+    )
+    assert created.status_code == 201
+    tid = created.json()["data"]["table_id"]
+    assert library.get("/api/v1/tables/" + tid, headers=auth(grand)).status_code == 200
+    assert (
+        library.post(
+            "/api/v1/tables/" + tid + "/rows", headers=auth(grand), json={"values": {"title": "forbidden"}}
+        ).status_code
+        == 403
+    )
+    library.put("/api/v1/acl/table/" + tid, headers=auth("admin"), json={"grants": {uid: ["read"]}})
+    assert library.get("/api/v1/tables/" + tid, headers=auth(grand)).status_code == 200
+    library.put(
+        "/api/v1/acl/table/" + tid, headers=auth("admin"), json={"grants": {uid: ["read"], grand: []}}
+    )
+    assert library.get("/api/v1/tables/" + tid, headers=auth(grand)).status_code == 403
+
+
+def test_password_provider_preserves_profile_while_updating_credential_version():
+    from xeonolab.accounts import Keycloak
+
+    provider = Keycloak()
+    calls = []
+    uid = str(uuid4())
+    profile = {
+        "id": uid,
+        "username": "child",
+        "firstName": "First",
+        "lastName": "Last",
+        "email": "child@xenon.lan",
+        "emailVerified": True,
+        "enabled": True,
+        "attributes": {"existing": ["retained"]},
+    }
+
+    def request(method, path, body=None):
+        calls.append((method, path, body))
+        return httpx.Response(200, json=profile)
+
+    provider.request = request
+    provider.password(uid, "temporary-test-password", "new-version")
+    updated = calls[1][2]
+    assert updated["firstName"] == "First" and updated["lastName"] == "Last"
+    assert updated["email"] == profile["email"] and updated["emailVerified"] is True
+    assert updated["attributes"] == {"existing": ["retained"], "xeonolab_credential_epoch": ["new-version"]}
+    assert calls[2][1].endswith("/reset-password") and calls[3][1].endswith("/logout")

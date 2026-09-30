@@ -80,7 +80,12 @@ def main():
                 )
                 assert submitted.status_code in (302, 303), "login rejected"
                 returned = parse_qs(urlparse(submitted.headers["Location"]).query)
-                assert returned.get("state") == [state]
+                assert returned.get("state") == [state], (
+                    "login callback failed",
+                    sorted(returned.keys()),
+                    returned.get("error"),
+                    returned.get("error_description"),
+                )
                 exchanged = browser.post(
                     API + "/auth/session/exchange",
                     headers={"Origin": DESKTOP},
