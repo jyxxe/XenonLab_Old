@@ -397,6 +397,16 @@
               "default": "",
               "title": "Cursor"
             }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Deleted"
+            }
           }
         ],
         "responses": {

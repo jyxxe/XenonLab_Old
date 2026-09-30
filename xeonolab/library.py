@@ -386,7 +386,12 @@ def create_app(settings=None):
 
     @app.get("/api/v1/tables/{tid}/rows")
     def list_rows(
-        tid: str, request: Request, limit: int = 100, cursor: str = "", actor=Depends(scope("xelibrary:read"))
+        tid: str,
+        request: Request,
+        limit: int = 100,
+        cursor: str = "",
+        include_deleted: bool = False,
+        actor=Depends(scope("xelibrary:read")),
     ):
         table = authorize(actor, tid, "read")
         if not 1 <= limit <= 1000:
@@ -395,7 +400,8 @@ def create_app(settings=None):
             rows = [
                 decode(r)
                 for r in db.execute(
-                    "SELECT * FROM data WHERE _deleted_at IS NULL AND _row_id>? ORDER BY _row_id", (cursor,)
+                    "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id",
+                    (include_deleted, cursor),
                 )
                 if allowed(actor, table, "read", r["_row_id"])
             ][: limit + 1]
