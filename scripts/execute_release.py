@@ -20,7 +20,7 @@ with httpx.Client(verify=context, trust_env=False, timeout=600) as client:
 
     def token(cid, key):
         result = client.post(
-            "https://auth.xenon.lan/realms/xeonolab/protocol/openid-connect/token",
+            "https://192.168.0.101:9444/realms/xeonolab/protocol/openid-connect/token",
             data={"grant_type": "client_credentials", "client_id": cid, "client_secret": credentials[key]},
         )
         result.raise_for_status()
@@ -32,7 +32,7 @@ with httpx.Client(verify=context, trust_env=False, timeout=600) as client:
         codex,
         (root / "oidc-public.pem").read_text(),
         algorithms=["RS256"],
-        issuer="https://auth.xenon.lan/realms/xeonolab",
+        issuer="https://192.168.0.101:9444/realms/xeonolab",
         audience="xeonolab",
     )
     base = "https://deploy.xenon.lan"

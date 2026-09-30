@@ -45,12 +45,12 @@ for node, entries in services.items():
             "PORT=" + str(port),
             "DATA_DIR="
             + ("/srv/xelibrary/core/xeonolab" if node == "104" else "/var/lib/xeonolab/" + service),
-            "OIDC_ISSUER=https://auth.xenon.lan/realms/xeonolab",
+            "OIDC_ISSUER=https://192.168.0.101:9444/realms/xeonolab",
             "OIDC_AUDIENCE=xeonolab",
             "OIDC_PUBLIC_KEY_FILE=/etc/xeonolab/oidc-public.pem",
             "OIDC_ROLE_SCOPES_JSON='" + json.dumps(roles) + "'",
             "OIDC_CA_FILE=/etc/xeonolab/lan-root-ca.crt",
-            "OIDC_TOKEN_URL=https://auth.xenon.lan/realms/xeonolab/protocol/openid-connect/token",
+            "OIDC_TOKEN_URL=https://192.168.0.101:9444/realms/xeonolab/protocol/openid-connect/token",
         ]
         if node == "104":
             lines += [

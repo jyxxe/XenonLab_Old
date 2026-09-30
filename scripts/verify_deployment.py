@@ -17,7 +17,7 @@ socket.getaddrinfo = lambda host, *a, **kw: original(
 context = ssl.create_default_context(cafile=root / "lan-root-ca.crt")
 with httpx.Client(verify=context, trust_env=False, timeout=180) as client:
     result = client.post(
-        "https://auth.xenon.lan/realms/xeonolab/protocol/openid-connect/token",
+        "https://192.168.0.101:9444/realms/xeonolab/protocol/openid-connect/token",
         data={
             "grant_type": "client_credentials",
             "client_id": "deployment-policy",

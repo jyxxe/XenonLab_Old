@@ -144,7 +144,7 @@ os.chmod(root / "xeonolab-realm.json", 0o600)
             "KC_DB_PASSWORD=" + credentials["postgres"],
             "KC_BOOTSTRAP_ADMIN_USERNAME=bootstrap-admin",
             "KC_BOOTSTRAP_ADMIN_PASSWORD=" + credentials["keycloak_admin"],
-            "KC_HOSTNAME=https://auth.xenon.lan",
+            "KC_HOSTNAME=https://192.168.0.101:9444",
             "KC_HTTP_ENABLED=true",
             "KC_PROXY_HEADERS=xforwarded",
             "KC_HEALTH_ENABLED=true",

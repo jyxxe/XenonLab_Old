@@ -17,3 +17,7 @@ release directories. It cannot run arbitrary shell commands or change PVE hardwa
 executor accepts only the commit and artifact digests listed in a root-managed inventory file.
 A failed deployment remains frozen unless rollback was confirmed. Full deployment SSE, multi-release
 artifact registry, advanced database migrations and zero-downtime updates remain future work.
+
+The canonical OIDC issuer uses https://192.168.0.101:9444 so IP desktop login on
+port 9443 does not depend on client DNS. Domain desktop access remains supported;
+JWT signature, audience, issuer and PKCE checks remain mandatory.
