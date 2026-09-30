@@ -34,21 +34,29 @@ the exact CA nickname the coordinator imported):
   "password": "replace-with-temporary-password",
   "caNickname": "XeonoLab local acceptance CA",
   "issue41": {
-    "systemPanelToggle": "[data-testid='system-panel-toggle']",
-    "systemPanel": "[data-testid='system-panel']",
-    "widget": "[data-testid='desktop-widget']",
-    "launchpadSearch": "[data-testid='launchpad-search']"
+    "systemPanelToggle": "button[title='打开系统面板']",
+    "systemPanel": ".window .dashboard",
+    "widgetClock": ".widgets .widget-clock",
+    "widgetStatus": ".widgets .widget-status",
+    "launchpadSearch": ".launchpad-search"
   }
 }
 ```
 
-The `issue41` selectors are optional overrides. Defaults search accessible labels and common
-`data-testid`/class markers. During the read-only run the script also captures the system panel,
-desktop widgets, LaunchPad filtered for `Dashboard`, and the opened Dashboard. Its report asserts
-that Dashboard is open, a rounded visible SVG is present, and a queue label/content is visible.
-These checks use DOM visibility and computed corner radius/`rx` attributes; they never click a
-write/action control. If the UI uses different stable selectors, pass them in the private config
-after inspecting the integrated UI source.
+The `issue41` selectors are optional overrides for the integrated UI. The runner checks the
+clock/date and system-status widgets, opens the `.dashboard` through the status widget's
+`button[title="打开系统面板"]`, then searches `系统面板` in LaunchPad (the displayed app title,
+not its internal `dashboard` ID). It checks that the dashboard stays open after selecting the
+search result. Chart assertions inspect the real markup: `.ring-segment` uses
+`stroke-linecap="round"`; `.mac-meter` has a rounded border and hidden overflow; and each visible
+`.mac-bars .mac-plot` has rounded clipping. It also requires both queue cards and their ring/meter
+content to be visible. These checks intentionally fail if data/scopes hide the chart rather than
+passing on a card heading alone.
+
+The attachment stage is independent of Issue 41. If there is no visible table/row or no attachment
+fixture, it records that check as failed and continues through the dashboard checks without
+creating test data. Any early exception also writes `report.json` with the failure and every
+screenshot captured up to that point.
 
 Run after the temporary test account exists:
 

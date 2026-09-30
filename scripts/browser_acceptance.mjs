@@ -8,6 +8,13 @@ import net from 'node:net';
 const timeoutMs = 20_000;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const safeText = value => String(value).replace(/[\u0000-\u001f]/g, ' ').slice(0, 500);
+let activeReport;
+let activeOutDir;
+let activeSecrets = [];
+
+function redactError(value) {
+  return activeSecrets.reduce((text, secret) => text.replaceAll(secret, '[redacted]'), safeText(value));
+}
 
 function args() {
   const result = {};
@@ -115,7 +122,11 @@ class CDP {
 
 async function main() {
   const options = args();
+  activeOutDir = path.resolve(options.out);
+  await fs.mkdir(activeOutDir, {recursive: true});
+  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], overflow: []};
   const config = await privateConfig(options.config, options.caNickname);
+  activeSecrets = [config.username, config.password].filter(Boolean);
   const chromePath = options.chrome || '/usr/bin/google-chrome';
   const certutilPath = options.certutil || 'certutil';
   const caNickname = options.caNickname || config.caNickname;
@@ -126,7 +137,7 @@ async function main() {
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xelonolab-browser-'));
   const profile = path.join(tempDir, 'chrome-profile');
-  const outDir = path.resolve(options.out);
+  const outDir = activeOutDir;
   await fs.mkdir(profile, {recursive: true});
   await fs.mkdir(outDir, {recursive: true});
 
@@ -138,7 +149,7 @@ async function main() {
     'about:blank',
   ], {env: process.env, stdio: 'ignore'});
   let cdp;
-  const report = {checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], overflow: []};
+  const report = activeReport;
   const redact = value => [config.username, config.password].filter(Boolean).reduce((text, secret) => text.replaceAll(secret, '[redacted]'), safeText(value));
   const check = (name, passed, detail = '') => report.checks.push({name, passed, ...(detail ? {detail: safeText(detail)} : {})});
   try {
@@ -246,56 +257,57 @@ async function main() {
     check('identity and permissions tab visible', true);
 
     const featureSelectors = config.issue41 || {};
-    const systemToggleSelectors = featureSelectors.systemPanelToggle ? [featureSelectors.systemPanelToggle] : [
-      '[data-testid="system-panel-toggle"]', '[aria-label*="系统面板"]', '[title*="系统面板"]',
-      '[aria-label*="System panel" i]', '[title*="System panel" i]', '[aria-label*="Control Center" i]', '[title*="Control Center" i]',
-    ];
-    const systemPanelSelectors = featureSelectors.systemPanel ? [featureSelectors.systemPanel] : [
-      '#system-panel', '[data-testid*="system-panel"]', '[aria-label*="系统面板"]', '[aria-label*="System panel" i]', '[class*="system-panel" i]',
-    ];
-    const clickedSystemPanel = await clickVisible(systemToggleSelectors);
-    check('system panel toggle found and clicked', clickedSystemPanel, 'Set issue41.systemPanelToggle in the private config if the UI uses another accessible selector.');
-    if (clickedSystemPanel) {
-      const panelVisible = await waitFor(async () => cdp.evaluate(`(()=>{for(const selector of ${JSON.stringify(systemPanelSelectors)}){try{const e=document.querySelector(selector);if(e&&e.getClientRects().length)return true}catch{}}return false})()`), 'system panel visible').catch(() => false);
-      check('system panel opened', panelVisible);
-      await measureOverflow('system panel');
-      await screenshot('09-system-panel.png');
-      await clickVisible(systemToggleSelectors);
-    }
-    const widgetSelectors = featureSelectors.widget ? [featureSelectors.widget] : [
-      '[data-testid*="widget"]', '[data-widget]', '[class*="widget" i]', '[aria-label*="widget" i]', '[aria-label*="小组件"]',
-    ];
-    const widgetState = await cdp.evaluate(`(()=>{for(const selector of ${JSON.stringify(widgetSelectors)}){try{const e=document.querySelector(selector);if(e&&e.getClientRects().length)return {visible:true,selector}}catch{}}return {visible:false}})()`);
-    check('desktop widget visible', widgetState.visible, widgetState.selector || 'Set issue41.widget in the private config if the widget has no widget marker.');
+    await cdp.evaluate("[...document.querySelectorAll('.window')].find(e=>e.querySelector('.settings-panel'))?.querySelector('.bar .close')?.click()");
+    await waitFor(() => cdp.evaluate("!document.querySelector('.settings-panel')"), 'close Settings window');
+    const clockSelector = featureSelectors.widgetClock || '.widgets .widget-clock';
+    const statusSelector = featureSelectors.widgetStatus || '.widgets .widget-status';
+    const widgetState = await cdp.evaluate(`(()=>{const visible=s=>{const e=document.querySelector(s);return Boolean(e&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden')};return {clock:visible(${JSON.stringify(clockSelector)}),status:visible(${JSON.stringify(statusSelector)})}})()`);
+    check('desktop clock/date widget visible', widgetState.clock, `selector: ${clockSelector}`);
+    check('desktop system-status widget visible', widgetState.status, `selector: ${statusSelector}`);
     await measureOverflow('desktop widgets');
-    await screenshot('10-desktop-widgets.png');
+    await screenshot('09-desktop-widgets.png');
+
+    const systemToggle = featureSelectors.systemPanelToggle || 'button[title="打开系统面板"]';
+    const clickedSystemPanel = await clickVisible([systemToggle]);
+    check('system-status widget opens panel', clickedSystemPanel, `selector: ${systemToggle}`);
+    const panelSelector = featureSelectors.systemPanel || '.window .dashboard';
+    const panelVisible = await waitFor(() => cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(panelSelector)});return Boolean(e&&e.getClientRects().length)})()`), 'system panel dashboard visible').catch(() => false);
+    check('system panel opened', panelVisible, `selector: ${panelSelector}`);
+    if (panelVisible) {
+      const panelTitle = await cdp.evaluate(`document.querySelector(${JSON.stringify(panelSelector)})?.querySelector('h2')?.innerText.trim()||''`);
+      check('system panel is titled 系统面板', panelTitle === '系统面板', panelTitle);
+      await measureOverflow('system panel dashboard');
+      await screenshot('10-system-panel-dashboard.png');
+          const dashboardDetails = await cdp.evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(panelSelector)});if(!d)return {ring:false,roundedRing:false,bars:false,roundedBars:false,meter:false,roundedMeter:false,indexQueue:false,workQueue:false};const visible=e=>e&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';const cardWith=label=>[...d.querySelectorAll('.mac-card')].find(card=>card.querySelector('h3')?.innerText.includes(label));const embedding=cardWith('Embedding 索引队列'),work=cardWith('Harness 任务队列');const ring=d.querySelector('.mac-ring'),ringSegments=[...(ring?.querySelectorAll('.ring-segment')||[])].filter(visible);const meter=d.querySelector('.mac-meter'),meterStyle=meter?getComputedStyle(meter):null;const bars=d.querySelector('.mac-bars'),plots=[...(bars?.querySelectorAll('.mac-plot')||[])].filter(visible),plotStyle=plots[0]?getComputedStyle(plots[0]):null;const corners=style=>style&&parseFloat(style.borderTopLeftRadius)>0&&style.overflowX==='hidden'&&style.overflowY==='hidden';return {ring:Boolean(visible(ring)),roundedRing:ringSegments.some(circle=>circle.getAttribute('stroke-linecap')==='round'||getComputedStyle(circle).strokeLinecap==='round'),bars:Boolean(visible(bars)),roundedBars:plots.length>0&&corners(plotStyle),meter:Boolean(visible(meter)),roundedMeter:Boolean(meterStyle&&parseFloat(meterStyle.borderTopLeftRadius)>0&&meterStyle.overflowX==='hidden'&&meterStyle.overflowY==='hidden'),indexQueue:Boolean(embedding&&visible(embedding)&&visible(embedding.querySelector('.mac-meter[role="img"]'))),workQueue:Boolean(work&&visible(work)&&visible(work.querySelector('.mac-ring[role="img"]')))}})()`);
+      check('Harness activity ring visible', dashboardDetails.ring);
+      check('Harness SVG ring uses rounded stroke-linecap', dashboardDetails.roundedRing, 'requires a visible .ring-segment with stroke-linecap="round"');
+      check('mac-bars chart visible', dashboardDetails.bars, 'requires table data for the knowledge overview chart');
+      check('mac-bars plot has rounded clipping', dashboardDetails.roundedBars, 'requires a visible .mac-plot with border-radius and overflow hidden');
+      check('mac-meter visible', dashboardDetails.meter);
+      check('mac-meter has rounded clipping', dashboardDetails.roundedMeter, 'requires border-radius and overflow hidden on .mac-meter');
+      check('Embedding queue card and meter visible', dashboardDetails.indexQueue);
+      check('Harness queue card and ring visible', dashboardDetails.workQueue);
+    }
 
     await cdp.evaluate("document.querySelector('button[title=\"LaunchPad\"]')?.click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), 'LaunchPad for search acceptance');
-    const searchSelectors = featureSelectors.launchpadSearch ? [featureSelectors.launchpadSearch] : [
-      '.launchpad input[type="search"]', '.launchpad input[aria-label*="搜索"]', '.launchpad input[placeholder*="搜索"]',
-      '.launchpad input[aria-label*="Search" i]', '.launchpad input[placeholder*="Search" i]',
-    ];
-    const searchSelector = await cdp.evaluate(`(()=>{for(const selector of ${JSON.stringify(searchSelectors)}){try{const e=document.querySelector(selector);if(e&&e.getClientRects().length)return selector}catch{}}return ''})()`);
-    check('LaunchPad search input found', Boolean(searchSelector), 'Set issue41.launchpadSearch in the private config if the search field uses another selector.');
-    if (searchSelector) {
-      await cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(searchSelector)});if(!e)return false;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'Dashboard');e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+    const searchSelector = featureSelectors.launchpadSearch || '.launchpad-search';
+    const searchExists = await cdp.evaluate(`Boolean(document.querySelector(${JSON.stringify(searchSelector)})?.getClientRects().length)`);
+    check('LaunchPad search input found', searchExists, `selector: ${searchSelector}`);
+    if (searchExists) {
+      await cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(searchSelector)});if(!e)return false;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'系统面板');e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
       await measureOverflow('LaunchPad search');
-      await screenshot('11-launchpad-search-dashboard.png');
-      const dashboardHit = await cdp.evaluate("(()=>{const re=/Dashboard|仪表板|仪表盘/i;return [...document.querySelectorAll('.launchpad button,.launchpad a,[role=button]')].some(e=>e.getClientRects().length&&re.test([e.innerText,e.getAttribute('aria-label'),e.getAttribute('title')].filter(Boolean).join(' '))})()");
-      check('LaunchPad search shows Dashboard result', dashboardHit, 'Search for Dashboard must expose a visible matching result.');
+      await screenshot('11-launchpad-search-system-panel.png');
+      const dashboardHit = await cdp.evaluate("(()=>[...document.querySelectorAll('.launchpad button')].some(e=>e.getClientRects().length&&e.innerText.includes('系统面板')))()");
+      check('LaunchPad search shows 系统面板 result', dashboardHit, 'Search uses the Chinese app title; expected one visible “系统面板” tile.');
       if (dashboardHit) {
-        const clickedDashboard = await cdp.evaluate("(()=>{const re=/Dashboard|仪表板|仪表盘/i;const e=[...document.querySelectorAll('.launchpad button,.launchpad a,[role=button]')].find(x=>x.getClientRects().length&&re.test(x.innerText));if(!e)return false;e.click();return true})()");
-        check('Dashboard result opened', clickedDashboard);
+        const clickedDashboard = await cdp.evaluate("(()=>{const e=[...document.querySelectorAll('.launchpad button')].find(x=>x.getClientRects().length&&x.innerText.includes('系统面板'));if(!e)return false;e.click();return true})()");
+        check('LaunchPad 系统面板 result opened', clickedDashboard);
         if (clickedDashboard) {
-          const dashboardWindow = await waitFor(() => cdp.evaluate("[...document.querySelectorAll('.window')].find(e=>/Dashboard|仪表板|仪表盘/i.test(e.innerText))?.innerText||''"), 'Dashboard window opened').catch(() => '');
-          check('Dashboard window visible', Boolean(dashboardWindow));
-          await measureOverflow('Dashboard');
-          await screenshot('12-dashboard.png');
-          const dashboardDetails = await cdp.evaluate(`(()=>{const w=[...document.querySelectorAll('.window')].find(e=>/Dashboard|仪表板|仪表盘/i.test(e.innerText));if(!w)return {svg:0,roundedSvg:false,queue:false};const visible=e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';const svgs=[...w.querySelectorAll('svg')].filter(visible);const rounded=svgs.some(svg=>{const radius=parseFloat(getComputedStyle(svg).borderTopLeftRadius)||parseFloat(getComputedStyle(svg.parentElement||svg).borderTopLeftRadius)||0;return radius>0||!!svg.querySelector('rect[rx],rect[ry],image[rx],image[ry]')});const queue=w.innerText.match(/队列|Queue/i)||[...w.querySelectorAll('[aria-label],[data-testid],[class]')].some(e=>visible(e)&&/队列|Queue/i.test([e.getAttribute('aria-label'),e.getAttribute('data-testid'),e.className].join(' ')));return {svg:svgs.length,roundedSvg:rounded,queue:Boolean(queue)}})()`);
-          check('Dashboard SVG visible', dashboardDetails.svg > 0, `${dashboardDetails.svg} visible SVG element(s)`);
-          check('Dashboard rounded SVG visible', dashboardDetails.roundedSvg);
-          check('Dashboard queue visible', dashboardDetails.queue);
+          const dashboardVisible = await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window .dashboard'))"), 'Dashboard opened from LaunchPad search').catch(() => false);
+          check('Dashboard remains open after LaunchPad result click', dashboardVisible);
+          await measureOverflow('Dashboard after LaunchPad search');
+          await screenshot('12-dashboard-from-search.png');
         }
       }
     }
@@ -304,8 +316,9 @@ async function main() {
     check('uncaught page exceptions absent', report.pageExceptions.length === 0, `${report.pageExceptions.length} exception(s)`);
     report.httpErrors = report.httpErrors.filter(item => !item.url.endsWith('/favicon.ico'));
     check('HTTP error responses absent', report.httpErrors.length === 0, `${report.httpErrors.length} HTTP error response(s)`);
+    report.state = report.checks.some(item => !item.passed) ? 'failed_checks' : 'completed';
     await fs.writeFile(path.join(outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, {mode: 0o600});
-    process.stdout.write(JSON.stringify({state: 'completed', screenshots: report.screenshots, checks: report.checks, report: path.join(outDir, 'report.json')}, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({state: report.state, screenshots: report.screenshots, checks: report.checks, report: path.join(outDir, 'report.json')}, null, 2) + '\n');
     if (report.checks.some(item => !item.passed)) process.exitCode = 1;
   } finally {
     cdp?.close();
@@ -316,8 +329,14 @@ async function main() {
   }
 }
 
-main().catch(error => {
+main().catch(async error => {
   // Keep arbitrary config and credential contents out of logs.
-  process.stderr.write(`Browser acceptance failed: ${safeText(error.message)}\n`);
+  const message = redactError(error.message);
+  if (activeReport && activeOutDir) {
+    activeReport.state = 'error';
+    activeReport.error = message;
+    await fs.writeFile(path.join(activeOutDir, 'report.json'), `${JSON.stringify(activeReport, null, 2)}\n`, {mode: 0o600}).catch(() => {});
+  }
+  process.stderr.write(`Browser acceptance failed: ${message}${activeOutDir ? `; partial report: ${path.join(activeOutDir, 'report.json')}` : ''}\n`);
   process.exitCode = 1;
 });
