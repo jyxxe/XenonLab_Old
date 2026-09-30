@@ -24,7 +24,7 @@
 | 15 | 定理区数据模型 | 未实现 | 代码库没有 theorem 数据模型/API/Lean 验证器。 |
 | 16 | API 总体规范 | 部分实现 / 未做生产验收 | `common.py` 提供版本化 API、认证、request ID、错误格式、ETag；缺少完整兼容策略。 |
 | 17 | 通用运维 API | 部分实现 / 未做生产验收 | 四个运维端点由 `common.py` 提供；ready 目前只用可选 callable。 |
-| 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；前端实际视觉验收需独立结果。 |
+| 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；协调器报告 `runtime/browser-private/issue41-results/report.json` 有 34+ 项真实 Chrome UI 检查。此证据覆盖 Issue #41 桌面路径，仍不等于本节所有 registry/API/security 条款都已验收。 |
 | 19 | OpenWebUI → XeLibrary Tool API | 部分实现 / 未做生产验收 | Tool Gateway 有 search/query/get 且转发用户 bearer；attachment/theorem/derive/proposal 工具缺少。 |
 | 20 | XeLibrary Catalog / Path API | 部分实现 / 未做生产验收 | 没有独立 path/catalog CRUD；路径是 table 的逻辑字段。 |
 | 21 | XeLibrary Table API | 部分实现 / 未做生产验收 | 建表、schema、move、list/get 实现；table delete/stats/API 全集不齐。 |
@@ -52,14 +52,14 @@
 | 43 | Forgejo 集成 | 部分实现 / 未做生产验收 | Forgejo signed webhook、去重与 issue work sync 有实现；PR/scope 自动化未完成。 |
 | 44 | DevAgent API | 部分实现 / 未做生产验收 | work queue、links、签名 webhook、规则 triage 已有；自动重复处理/LLM 分类未实现。 |
 | 45 | 多 Agent 身份模型 | 部分实现 / 未做生产验收 | 账号 authority、OIDC agent_kind、work/deploy fencing 有测试；多主体现实并发验证仅限专门报告。 |
-| 46 | Deploy Gateway | 部分实现 / 未做生产验收 | Deploy Gateway 有 release/approval/lease/deployment API；executor 安装与运行需生产证据。 |
-| 47 | Deploy Lease API | 部分实现 / 未做生产验收 | 单 lease、holder/epoch/renew/release、过期冻结均有测试。 |
+| 46 | Deploy Gateway | 部分实现 / 未做生产验收 | Deploy Gateway 有 release/approval/lease/deployment API；`docs/runbooks/collaboration.md` 记录已完成真实 deployment 与 lease 释放，`docs/runbooks/deployment.md` 记录受限 executor。任意 release 自动拉取、SSE 与跨版本迁移仍缺。 |
+| 47 | Deploy Lease API | 部分实现 / 未做生产验收 | 单 lease、holder/epoch/renew/release、过期冻结均有测试；运行手册记录生产 lease/deployment 完成。仍缺完整事件流与所有状态迁移的生产验收。 |
 | 48 | Release API | 部分实现 / 未做生产验收 | release API 与人类审批有实现；签名 artifact inventory 完整性仍有限。 |
-| 49 | Deployment API | 部分实现 / 未做生产验收 | 部署状态接口与固定 executor 源码存在；SSE/cancel/rollback API 缺。 |
+| 49 | Deployment API | 部分实现 / 未做生产验收 | 部署状态接口与固定 executor 源码存在，运行记录包含真实 completed deployment；SSE/cancel/rollback API 缺。 |
 | 50 | 部署状态机 | 部分实现 / 未做生产验收 | 关键 lease fence 实现；plan 完整状态机与生产故障转换未完整。 |
-| 51 | Deploy Gateway 内部执行 | 部分实现 / 未做生产验收 | 有受限 receiver、systemd staging/activation；发布流水线与 PVE 自动配置不等于已全验。 |
-| 52 | `deployctl` CLI | 部分实现 / 未做生产验收 | 没有 deployctl CLI 命令集。 |
-| 53 | `xlctl` CLI | 未实现 | `xlctl` 提供 API 客户端基础操作；import/export/theorem/完整索引命令未齐。 |
+| 51 | Deploy Gateway 内部执行 | 部分实现 / 未做生产验收 | 有受限 receiver、systemd staging/activation；部署 runbook 记录按 allowlist 发布并完成。SSE、任意 release 自动拉取、PVE 硬件编排仍未实现。 |
+| 52 | `deployctl` CLI | 未实现 | 没有 deployctl CLI 命令集。 |
+| 53 | `xlctl` CLI | 部分实现 / 未做生产验收 | `xlctl` 提供 API 客户端基础操作；import/export/theorem/完整索引命令未齐。 |
 | 54 | `hf-cachectl` | 未实现 | 没有 hf-cachectl。 |
 | 55 | OpenWebUI 权限原则 | 部分实现 / 未做生产验收 | Tool Gateway scopes 与 bearer passthrough 限制写操作；真实 OpenWebUI integration 未完成。 |
 | 56 | Web / iframe 安全 | 部分实现 / 未做生产验收 | iframe origin/source 校验、sandbox registry 有代码；所有独立 origins 的浏览器验证待完成。 |
@@ -75,9 +75,9 @@
 | 66 | XeLibrary 内部一致性 | 部分实现 / 未做生产验收 | `.xl` 事务、FTS、附件引用、index revisions 有实现；跨 catalogue/.xl 原子性及 outbox 未实现。 |
 | 67 | 删除语义 | 部分实现 / 未做生产验收 | 行软删除立即过滤、当前 ACL 和索引重检存在；附件对象 GC 尚未实现。 |
 | 68 | 权限与向量查询 | 部分实现 / 未做生产验收 | 检索候选返回前按当前 ACL/行状态复核；规模/严格 topK 生产保证未验证。 |
-| 69 | fnOS 边界 | 未实现 | 有 fnOS VM/数据边界记录；独立认证/平台停机时访问未在本轮实测。 |
-| 70 | 备份 | 部分实现 / 未做生产验收 | XeLibrary backup/verify/restore 有脚本与故障测试；独立物理备份目标未提供。 |
-| 71 | XeLibrary 恢复顺序 | 部分实现 / 未做生产验收 | 恢复脚本与 runbook 有顺序；生产灾难恢复演练未做。 |
+| 69 | fnOS 边界 | 部分实现 / 外部验证未覆盖 | 有 fnOS VM/数据边界记录；独立认证/平台停机时访问未在本轮实测。 |
+| 70 | 备份 | 部分实现 / 未做生产验收 | XeLibrary backup/verify/restore 有脚本与故障测试；`docs/runbooks/deployment.md` 记载 2026-09-30 实际备份及 integrity/pg_restore 检查。定期自动化、异地存储和完整模型权重副本仍缺。 |
+| 71 | XeLibrary 恢复顺序 | 部分实现 / 未做生产验收 | 恢复脚本与 runbook 有顺序；`dd6a397` / `docs/implementation-status.md` 记录发布前 quiesced backup 和 isolated restore（含空 object store 回归）通过。完整 PVE 灾难恢复与跨 catalogue/.xl 原子快照仍未验证。 |
 | 72 | HF-cache 水位 | 未实现 | 没有 HF-cache 物理水位计量/自动清退。 |
 | 73 | 开发权限 | 部分实现 / 未做生产验收 | 仓库贡献规则/API 边界文档存在；远端 Forgejo 权限矩阵需平台配置证据。 |
 | 74 | Codex 开发规则 | 部分实现 / 未做生产验收 | AGENTS/Agent workflow 有独立 worktree、测试与发布规则；PR required checks 需远端配置核实。 |
@@ -128,12 +128,12 @@ Rate Limit 实现按每个服务 `DATA_DIR/rate-limits.sqlite3` 持久化滑动�
 
 覆盖配置示例：`RATE_LIMIT_POLICIES_JSON='{"interactive":{"requests":90,"window_seconds":60}}'`；未覆盖路由组保留默认值。每服务共用其 `DATA_DIR` 下的 sqlite 文件；配置不支持跨服务的全局共享窗口。
 
-尚未做多机/共享数据库验证；不同 service `DATA_DIR` 之间不共享 bucket，这代表身份+路由组是 service-local 限流，不是跨全平台的全局额度。受保护的 `/api/v1/*` 与兼容 `/v1/*` 参与；不经 `identity()` 的无身份 browser-session 登录端点不在此限流实现范围。限流日志由运行时日志系统接收，本轮未验证生产日志保留与告警。Qwen/image worker 尚未上线，因此 `embedding-quality` 策略当前主要供 semantic search 路由使用，不代表 Qwen 生产限额已验收。
+尚未做多机/共享数据库验证；不同 service `DATA_DIR` 之间不共享 bucket，这代表身份+路由组是 service-local 限流，不是跨全平台的全局额度。受保护的 `/api/v1/*` 与兼容 `/v1/*` 参与；不经 `identity()` 的无身份 browser-session 登录端点不在此限流实现范围。限流日志由运行时日志系统接收，本轮未验证生产日志保留与告警。Quality mode 的 semantic search 与 `/v1/embeddings` model 字段按 JSON body 分流至严格 bucket；Qwen/image worker 尚未上线，因此不代表 Qwen 生产限额已验收。
 
 ## 本轮验证
 
-- `uv run pytest --basetemp runtime/pytest-tmp`：83 passed；Starlette/httpx 弃用提示 1 条。
-- `uv run pytest tests/test_rate_limit.py tests/test_auth.py -q`：6 passed。
+- `uv run pytest --basetemp runtime/pytest-tmp`：88 passed；Starlette/httpx 弃用提示 1 条。
+- `uv run pytest tests/test_rate_limit.py tests/test_auth.py -q`：11 passed。
 - `uv run ruff check xeonolab tests scripts`：通过。
 - `uv run python scripts/export_openapi.py`：通过；限流使用统一异常处理，不新增 endpoint/schema。
 - 还未执行生产阈值校准、跨进程外部服务压测、日志留存检查与真实 429 HTTP smoke。

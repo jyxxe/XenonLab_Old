@@ -139,6 +139,10 @@ def identity(request: Request):
                 result = client.get(endpoint, headers={"Authorization": header})
             if result.status_code in (401, 403):
                 raise APIError(result.status_code, "AUTHORIZATION_REVOKED", "identity or permission revoked")
+            if result.status_code == 429:
+                retry_after = result.headers.get("Retry-After")
+                headers = {"Retry-After": retry_after} if retry_after else {}
+                raise APIError(429, "AUTHORIZATION_RATE_LIMITED", "authorization authority rate limited the request", headers)
             result.raise_for_status()
             data = result.json()["data"]
             if local and (data["subject"] != local.sub or data["kind"] != local.kind):
@@ -159,7 +163,20 @@ def identity(request: Request):
 
 def route_group(request, actor):
     path = request.url.path.lower()
-    if "/embedding/quality" in path or path.endswith("/search/semantic"):
+    body = {}
+    raw_body = getattr(request, "_body", None)
+    if raw_body:
+        try:
+            body = json.loads(raw_body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+    if path.endswith("/search/semantic"):
+        return "embedding-quality" if body.get("mode") == "quality" else "embedding-fast"
+    if path.endswith("/embed/text") or path.endswith("/v1/embeddings"):
+        if body.get("model") in {"quality", "Qwen/Qwen3-VL-Embedding-2B"}:
+            return "embedding-quality"
+        return "embedding-fast"
+    if "/embedding/quality" in path:
         return "embedding-quality"
     if "/embedding/" in path or "/embed/" in path or "/embeddings/" in path or path.endswith("/embeddings"):
         return "embedding-fast"
@@ -184,7 +201,11 @@ def route_group(request, actor):
 def enforce_rate_limit(request, actor):
     settings = request.app.state.settings
     versioned_api = request.url.path.startswith(("/api/v1/", "/v1/"))
-    if not settings.rate_limit_enabled or not versioned_api:
+    if (
+        not settings.rate_limit_enabled
+        or not versioned_api
+        or request.url.path == "/api/v1/auth/authorization"
+    ):
         return
     group = route_group(request, actor)
     policy = settings.rate_limit_policies.get(group)
@@ -203,7 +224,10 @@ def enforce_rate_limit(request, actor):
     identity_key = hashlib.sha256(actor.sub.encode("utf-8")).hexdigest()
     store = request.app.state.rate_limit_db
     with transaction(store) as db:
-        db.execute("DELETE FROM rate_limit_requests WHERE created_at<=?", (cutoff,))
+        db.execute(
+            "DELETE FROM rate_limit_requests WHERE route_group=? AND created_at<=?",
+            (group, cutoff),
+        )
         recent = db.execute(
             "SELECT created_at FROM rate_limit_requests WHERE identity_key=? AND route_group=? "
             "AND created_at>? ORDER BY created_at LIMIT ?",
