@@ -137,9 +137,11 @@ def create_app(service=None, settings=None):
             return await forward(request, "POST", "/api/v1/search/semantic", body.model_dump())
 
     elif service == "dev-agent":
+        from .triage import install as install_triage
         from .work import install
 
         install(app)
+        install_triage(app)
         database = app.state.settings.data_dir / "work.sqlite"
         with transaction(database) as db:
             db.execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, digest TEXT, payload TEXT)")

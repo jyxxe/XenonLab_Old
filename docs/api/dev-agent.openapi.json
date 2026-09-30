@@ -385,6 +385,53 @@
         }
       }
     },
+    "/api/v1/issues/{issue_id}/triage": {
+      "post": {
+        "summary": "Triage",
+        "operationId": "triage_api_v1_issues__issue_id__triage_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/webhooks/forgejo": {
       "post": {
         "summary": "Webhook",
@@ -488,6 +535,20 @@
           "epoch"
         ],
         "title": "Release"
+      },
+      "TriageRequest": {
+        "properties": {
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+            "title": "Repository"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "title": "TriageRequest"
       },
       "ValidationError": {
         "properties": {

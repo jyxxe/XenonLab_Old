@@ -78,6 +78,12 @@ DevAgent signed issues webhook 与 work queue 原子同步已实现并上线，F
 非 issues 类型仅记录原始事件。旧 events.sqlite 事件去重历史复制到 work.sqlite，原文件保留。
 不执行 Issue 文本；24 项测试覆盖签名、事务与迁移。自动 triage 仍待实现。
 
+规则化 triage 端点已由 OpenCode harness 在分支 `opencode/issue-17` 实现：
+`POST /api/v1/issues/{issue_id}/triage` 返回 labels/priority/duplicates/related/recommended_agent
+建议，只读 work.sqlite 与已登记 Issue 标题，不调用 LLM、不写 Forgejo、不执行 Issue 文本。
+新增 5 项测试覆盖规则、重复/关联、链接图与仓库隔离、权限与 404/422、注入文本仅作数据处理；
+全套 31 项测试与 Ruff 通过。待评审与发布；LLM 语义 triage、mark-duplicate 与自动评论/标签联动仍未实现。
+
 用户 UI 优先级更新：完整 WebUI/设置、可视化知识管理器、Issues CSS、账号树、LaunchPad、持续登录。
 Issues ROOT_URL 子路径已修复；桌面功能已迁入子窗口并新增 LaunchPad（待发布）。
 知识管理器提供表筛选/创建、schema 驱动记录表格/编辑和带 If-Match 软删除；附件/导入导出/历史界面仍待完成。

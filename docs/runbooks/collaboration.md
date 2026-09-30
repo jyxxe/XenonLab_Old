@@ -50,11 +50,14 @@ runtime/deploy-secrets/harness-clients.json（600），管理员分别分发，�
 - POST /api/v1/work/{id}/claim，body ttl_seconds（30–3600）
 - POST /api/v1/work/{id}/release，body epoch、completed
 - GET/POST /api/v1/issues/{issue_id}/links，repository 与目标 issue/type
+- POST /api/v1/issues/{issue_id}/triage，body repository；返回规则化建议
+  labels/priority/duplicates/related/recommended_agent（只读 work.sqlite，不调用 LLM，不写 Forgejo）
 
 领取原子互斥、带 TTL 和递增 epoch；过期持有者不能完成重新领取后的任务。
 Issue 关联以 repository 为命名空间；production 默认仅 xenon-admin/XeonoLab；
 自关联和 duplicate_of 环路被拒绝。元数据持久化到 work.sqlite，独立于 Forgejo facts。
-Forgejo webhook 自动同步、triage、自动评论/标签联动和任务续租接口仍待实现。
+Forgejo webhook 自动同步、自动评论/标签联动和任务续租接口仍待实现；
+规则化 triage 端点已在分支实现待评审发布，LLM 语义与 Forgejo 联动仍未实现。
 
 发布 commit c1effc8d463522084dae818e1742d06890442116；deployment
 8460739e-1805-4c1a-87b7-297e9786b034 completed，lease 已释放。
