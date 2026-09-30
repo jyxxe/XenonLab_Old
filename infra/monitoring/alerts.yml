@@ -34,6 +34,14 @@ groups:
         annotations:
           summary: "Row revisions have been unindexed for over an hour"
 
+      - alert: XeonolabMetricsSnapshotFailed
+        expr: xelibrary_snapshot_success == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "XeLibrary state metrics snapshot failed"
+          description: "Catalogue or table reads failed; state gauges are omitted instead of reported as zero."
+
       - alert: XeonolabDeployFailure
         expr: increase(deploy_failure_total[1h]) > 0
         labels: {severity: critical}

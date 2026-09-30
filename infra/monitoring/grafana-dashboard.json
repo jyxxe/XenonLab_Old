@@ -607,7 +607,7 @@
     {
       "id": 14,
       "type": "stat",
-      "title": "Embedding 队列深度",
+      "title": "Embedding 正在推理",
       "gridPos": {
         "h": 6,
         "w": 8,
@@ -620,7 +620,7 @@
       },
       "targets": [
         {
-          "expr": "embedding_queue_depth",
+          "expr": "embedding_in_flight",
           "legendFormat": "{{model}}",
           "refId": "A",
           "datasource": {

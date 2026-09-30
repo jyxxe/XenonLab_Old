@@ -1,3 +1,8 @@
+import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from xeonolab.common import Metrics, base_app
@@ -97,8 +102,68 @@ def test_xelibrary_query_metrics_and_state_gauges(library):
     assert "xelibrary_chunks_total 0" in text
     assert "xelibrary_index_lag 1" in text
     assert "xelibrary_embedding_backlog 0" in text
+    assert "xelibrary_snapshot_success 1" in text
     storage = [line for line in text.splitlines() if line.startswith("xelibrary_storage_bytes ")]
     assert len(storage) == 1 and int(storage[0].split()[1]) > 0
+
+
+def test_library_snapshot_refresh_is_cached_and_single_flight(library, monkeypatch):
+    seed_table(library)
+    import xeonolab.library as library_module
+
+    original_connect = library_module.connect
+    opened = []
+
+    def counted_connect(path):
+        opened.append(Path(path).name)
+        return original_connect(path)
+
+    monkeypatch.setattr(library_module, "connect", counted_connect)
+    barrier = threading.Barrier(4)
+
+    def scrape(_):
+        barrier.wait(timeout=5)
+        return library.app.state.metrics.render()
+
+    with ThreadPoolExecutor(4) as pool:
+        samples = list(pool.map(scrape, range(4)))
+
+    assert all("xelibrary_snapshot_success 1" in sample for sample in samples)
+    # One refresh reads the catalogue, validates the table mapping, and opens
+    # the .xl database once; the concurrent scrapes share its cached result.
+    assert opened.count("catalogue.sqlite") == 2
+    assert len(opened) == 3
+    library.app.state.metrics.render()
+    assert len(opened) == 3
+
+
+def test_library_snapshot_database_failure_omits_state_instead_of_reporting_zero(library, settings):
+    seed_table(library)
+    catalogue = settings.data_dir / "catalogue.sqlite"
+    with sqlite3.connect(catalogue) as db:
+        db.execute("DROP TABLE tables")
+
+    text = library.get("/metrics").text
+    assert "xelibrary_snapshot_success 0" in text
+    for metric in (
+        "xelibrary_rows_total",
+        "xelibrary_chunks_total",
+        "xelibrary_index_lag",
+        "xelibrary_embedding_backlog",
+        "xelibrary_storage_bytes",
+    ):
+        assert not any(line.startswith(metric + " ") for line in text.splitlines())
+
+
+def test_library_snapshot_table_database_failure_omits_state_instead_of_reporting_zero(library, settings):
+    tid = seed_table(library)
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    table_file.unlink()
+
+    text = library.get("/metrics").text
+    assert "xelibrary_snapshot_success 0" in text
+    assert not any(line.startswith("xelibrary_rows_total ") for line in text.splitlines())
+    assert not any(line.startswith("xelibrary_index_lag ") for line in text.splitlines())
 
 
 def test_embedding_metrics_by_model(settings):
@@ -117,6 +182,28 @@ def test_embedding_metrics_by_model(settings):
     assert 'embedding_errors_total{code="MODEL_NOT_CONFIGURED",model="d100m"} 1' in text
     assert 'embedding_errors_total{code="MODEL_NOT_CONFIGURED",model="qwen3vl2b"} 1' in text
     assert "embedding_latency_seconds_count" in text
+    assert 'embedding_queue_depth{model="d100m"} 0' in text
+    assert 'embedding_in_flight{model="d100m"} 0' in text
+
+
+def test_embedding_worker_busy_is_reported_as_in_flight_not_queued(settings):
+    from types import SimpleNamespace
+
+    settings.dev_tokens["alice"]["scope"] += " embedding:write"
+    with TestClient(create_app("embedding", settings)) as client:
+        lock = threading.Lock()
+        client.app.state.model = SimpleNamespace(lock=lock, revision="test")
+        idle = client.get("/metrics").text
+        lock.acquire()
+        try:
+            busy = client.get("/metrics").text
+        finally:
+            lock.release()
+
+    assert 'embedding_queue_depth{model="d100m"} 0' in idle
+    assert 'embedding_in_flight{model="d100m"} 0' in idle
+    assert 'embedding_queue_depth{model="d100m"} 0' in busy
+    assert 'embedding_in_flight{model="d100m"} 1' in busy
 
 
 def test_deploy_metrics_follow_real_state_machine(settings, tmp_path, monkeypatch):

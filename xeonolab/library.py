@@ -3,6 +3,7 @@ import json
 import math
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
@@ -966,55 +967,67 @@ def create_app(settings=None):
         results.sort(key=lambda x: x["score"], reverse=True)
         return response(request, results[: body.limit], partial=False)
 
-    snapshot_cache = {"at": -1e9, "value": {}}
+    snapshot_ttl = 60
+    snapshot_lock = threading.Lock()
+    snapshot_cache = {"at": -1e9, "value": None, "error": False}
 
-    def library_snapshot():
-        # Scrapes must not open every table on each provider call; cache briefly.
-        if time.monotonic() - snapshot_cache["at"] < 5 and snapshot_cache["value"]:
-            return snapshot_cache["value"]
+    def read_library_snapshot():
         rows = chunks = lag = 0
-        try:
-            with connect(catalogue) as db:
-                tables = [dict(t) for t in db.execute("SELECT * FROM tables ORDER BY id")]
-        except sqlite3.Error:
-            tables = []
-
-        def table_count(tid, statement):
-            # Missing optional tables (for example __xl_vectors before a first
-            # reindex) must not hide the other gauges of the same table.
-            try:
-                with connect(file(tid)) as db:
-                    return db.execute(statement).fetchone()[0]
-            except (sqlite3.Error, APIError):
-                return 0
+        with connect(catalogue) as db:
+            tables = [dict(t) for t in db.execute("SELECT * FROM tables ORDER BY id")]
+            backlog = sum(
+                json.loads(payload).get("status") in ("queued", "running")
+                for (payload,) in db.execute("SELECT payload FROM index_jobs")
+            )
 
         for table in tables:
-            rows += table_count(table["id"], "SELECT COUNT(*) FROM data WHERE _deleted_at IS NULL")
-            chunks += table_count(table["id"], "SELECT COUNT(*) FROM __xl_vectors")
-            lag += table_count(
-                table["id"],
-                "SELECT COUNT(*) FROM data d WHERE d._deleted_at IS NULL AND d._revision >"
-                " COALESCE((SELECT MAX(c.indexed_revision) FROM __xl_changes c"
-                " WHERE c.row_id=d._row_id),0)",
-            )
-        backlog = 0
-        try:
-            with connect(catalogue) as db:
-                for (payload,) in db.execute("SELECT payload FROM index_jobs"):
-                    if json.loads(payload).get("status") in ("queued", "running"):
-                        backlog += 1
-        except (sqlite3.Error, ValueError):
-            backlog = 0
+            with connect(file(table["id"])) as db:
+                rows += db.execute("SELECT COUNT(*) FROM data WHERE _deleted_at IS NULL").fetchone()[0]
+                try:
+                    chunks += db.execute("SELECT COUNT(*) FROM __xl_vectors").fetchone()[0]
+                except sqlite3.OperationalError as error:
+                    if "no such table: __xl_vectors" not in str(error).lower():
+                        raise
+                lag += db.execute(
+                    "SELECT COUNT(*) FROM data d WHERE d._deleted_at IS NULL AND d._revision >"
+                    " COALESCE((SELECT MAX(c.indexed_revision) FROM __xl_changes c"
+                    " WHERE c.row_id=d._row_id),0)"
+                ).fetchone()[0]
+
         storage = 0
         for path in root.rglob("*"):
+            if path.is_file():
+                storage += path.stat().st_size
+        return {"rows": rows, "chunks": chunks, "lag": lag, "backlog": backlog, "storage": storage}
+
+    def library_snapshot():
+        # Serialize refreshes and retain both successful and failed results so a
+        # burst of scrapes does not repeatedly traverse every table and file.
+        with snapshot_lock:
+            now = time.monotonic()
+            if now - snapshot_cache["at"] < snapshot_ttl:
+                if snapshot_cache["error"]:
+                    raise RuntimeError("cached XeLibrary metrics snapshot is unavailable")
+                return snapshot_cache["value"]
             try:
-                if path.is_file():
-                    storage += path.stat().st_size
-            except OSError:
-                continue
-        value = {"rows": rows, "chunks": chunks, "lag": lag, "backlog": backlog, "storage": storage}
-        snapshot_cache.update(at=time.monotonic(), value=value)
-        return value
+                value = read_library_snapshot()
+            except Exception:
+                snapshot_cache.update(at=now, value=None, error=True)
+                raise
+            snapshot_cache.update(at=now, value=value, error=False)
+            return value
+
+    def snapshot_success():
+        try:
+            library_snapshot()
+        except Exception:
+            return [(None, 0)]
+        return [(None, 1)]
+
+    metrics.gauge_provider(
+        "xelibrary_snapshot_success", "Whether the most recent library metrics snapshot succeeded.",
+        snapshot_success,
+    )
 
     metrics.gauge_provider(
         "xelibrary_rows_total", "Non-deleted rows across all tables.",

@@ -166,17 +166,23 @@ def create_app(settings=None):
         model = app.state.model
         return [({"model": "d100m"}, 1 if model is not None else 0), ({"model": "qwen3vl2b"}, 0)]
 
-    def queue_depth():
+    def in_flight():
         lock = getattr(app.state.model, "lock", None)
-        # V1 has no queue: the single worker either runs or rejects with 429.
         return [({"model": "d100m"}, 1 if lock is not None and lock.locked() else 0), ({"model": "qwen3vl2b"}, 0)]
+
+    def queue_depth():
+        # V1 has no waiting queue: requests are rejected while the worker is busy.
+        return [({"model": "d100m"}, 0), ({"model": "qwen3vl2b"}, 0)]
 
     metrics.gauge_provider(
         "embedding_model_loaded", "Loaded embedding models (1 loaded, 0 unavailable).", model_loaded
     )
     metrics.gauge_provider(
-        "embedding_queue_depth", "Requests waiting on the single embedding worker (0 or 1 in V1).",
+        "embedding_queue_depth", "Requests waiting for an embedding worker (always 0 in V1).",
         queue_depth,
+    )
+    metrics.gauge_provider(
+        "embedding_in_flight", "Embedding requests currently using a worker.", in_flight,
     )
 
     return app
