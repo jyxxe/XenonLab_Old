@@ -70,6 +70,31 @@ def scopes(client, token):
     return set(result.json()["data"]["scopes"])
 
 
+def test_account_tree_first_use_requires_explicit_bootstrap_and_preserves_scopes(settings):
+    settings.dev_tokens["admin"].update(
+        scope="desktop:read desktop:admin",
+        agent_kind="human",
+    )
+    settings.dev_tokens["viewer"] = {
+        "sub": "viewer",
+        "scope": "desktop:read",
+        "agent_kind": "human",
+    }
+    client = TestClient(create_app(settings))
+
+    unregistered = client.get("/api/v1/auth/accounts", headers=auth("admin"))
+    assert unregistered.status_code == 404
+    assert unregistered.json()["error"]["code"] == "ACCOUNT_NOT_FOUND"
+    assert client.post("/api/v1/auth/accounts/bootstrap", headers=auth("viewer"), json={}).status_code == 403
+    with connect(settings.data_dir / "accounts.sqlite") as db:
+        assert db.execute("SELECT count(*) FROM accounts").fetchone()[0] == 0
+
+    created = client.post("/api/v1/auth/accounts/bootstrap", headers=auth("admin"), json={})
+    assert created.status_code == 201, created.text
+    assert set(created.json()["data"]["effective_scopes"]) == {"desktop:admin", "desktop:read"}
+    assert "accounts:manage" not in created.json()["data"]["effective_scopes"]
+
+
 def test_tree_inheritance_sibling_boundary_and_live_shrink(accounts):
     client, settings, app = accounts
     uid = child(client)
