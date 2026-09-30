@@ -60,7 +60,9 @@ def chunk_documents(tokenizer, values, path, table_name):
             yield column, chunk
 
 
-def install(app, catalogue, file, authorize, allowed, load_row, table_transaction, table_connect):
+def install(
+    app, catalogue, file, authorize, allowed, request_acl, load_row, table_transaction, table_connect
+):
     lock = threading.Lock()
     jobs = JobStore(catalogue)
     endpoint = os.getenv("EMBEDDING_URL")
@@ -196,13 +198,16 @@ def install(app, catalogue, file, authorize, allowed, load_row, table_transactio
             tables = [dict(t) for t in db.execute("SELECT * FROM tables")]
         results, missing = [], 0
         for table in tables:
-            if not path_matches(table["path"], body.path) or not allowed(actor, table, "read"):
+            if not path_matches(table["path"], body.path):
+                continue
+            permits = request_acl(actor, table)
+            if not permits("read"):
                 continue
             initialize(table["id"])
             with table_connect(table["id"]) as db:
                 for raw in db.execute("SELECT _row_id FROM data WHERE _deleted_at IS NULL"):
                     rid = raw[0]
-                    if not allowed(actor, table, "read", rid):
+                    if not permits("read", rid):
                         continue
                     row = load_row(db, rid)
                     if any(row["values"].get(k) != v for k, v in body.filters.items()):
@@ -218,7 +223,7 @@ def install(app, catalogue, file, authorize, allowed, load_row, table_transactio
                     best = max(hits, key=lambda h: sum(x * y for x, y in zip(query, json.loads(h["vector"]))))
                     # Current row state, revision and ACL checked after candidate retrieval as well.
                     current = load_row(db, rid)
-                    if current["_revision"] != row["_revision"] or not allowed(actor, table, "read", rid):
+                    if current["_revision"] != row["_revision"] or not permits("read", rid):
                         continue
                     results.append(
                         {

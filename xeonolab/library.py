@@ -244,6 +244,59 @@ def create_app(settings=None):
                     return action in grants.get("*", [])
         return table["owner"] in (actor.sub, *actor.ancestors)
 
+    def request_acl(actor, table):
+        """Load a table's ACL policies once and reuse them for this request's rows."""
+        if "xelibrary:admin" in actor.scopes:
+            return lambda action, row_id=None: True
+
+        paths = []
+        path = table["path"]
+        while True:
+            paths.append(path)
+            if path == "/":
+                break
+            path = str(PurePosixPath(path).parent)
+
+        path_marks = ",".join("?" for _ in paths)
+        with connect(catalogue) as db:
+            policies = db.execute(
+                "SELECT resource_type,resource_id,grants,explicit FROM acl WHERE "
+                "(resource_type='table' AND resource_id=?) OR "
+                "(resource_type='row' AND resource_id LIKE ?) OR "
+                f"(resource_type='path' AND resource_id IN ({path_marks}))",
+                (table["id"], table["id"] + ":%", *paths),
+            ).fetchall()
+        by_resource = {
+            (policy["resource_type"], policy["resource_id"]): (
+                bool(policy["explicit"]), json.loads(policy["grants"]) if policy["explicit"] else {}
+            )
+            for policy in policies
+        }
+        principals = (actor.sub, *actor.ancestors)
+
+        def permits(action, row_id=None):
+            resources = [("row", f"{table['id']}:{row_id}")] if row_id else []
+            resources.append(("table", table["id"]))
+            resources.extend(("path", path_id) for path_id in paths)
+            for resource in resources:
+                policy = by_resource.get(resource)
+                if policy and policy[0]:
+                    grants = policy[1]
+                    for principal in principals:
+                        if principal in grants:
+                            return action in grants[principal] or action in grants.get("*", [])
+                    return action in grants.get("*", [])
+            return table["owner"] in principals
+
+        return permits
+
+    def authorize_request(actor, tid, action):
+        table = table_info(tid)
+        permits = request_acl(actor, table)
+        if not permits(action):
+            raise APIError(403, "XL_FORBIDDEN", "resource permission denied")
+        return table, permits
+
     def authorize(actor, tid, action, row_id=None):
         table = table_info(tid)
         if not allowed(actor, table, action, row_id):
@@ -622,7 +675,7 @@ def create_app(settings=None):
         include_deleted: bool = False,
         actor=Depends(scope("xelibrary:read")),
     ):
-        table = authorize(actor, tid, "read")
+        table, permits = authorize_request(actor, tid, "read")
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
         with table_connect(tid) as db:
@@ -632,7 +685,7 @@ def create_app(settings=None):
                     "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id",
                     (include_deleted, cursor),
                 )
-                if allowed(actor, table, "read", r["_row_id"])
+                if permits("read", r["_row_id"])
             ][: limit + 1]
         return response(
             request, rows[:limit], next_cursor=rows[limit - 1]["_row_id"] if len(rows) > limit else None
@@ -758,12 +811,15 @@ def create_app(settings=None):
         target = plan.offset + plan.limit
         matches = []
         for table in tables:
-            if not path_matches(table["path"], plan.path) or not allowed(actor, table, "read"):
+            if not path_matches(table["path"], plan.path):
+                continue
+            permits = request_acl(actor, table)
+            if not permits("read"):
                 continue
             with table_connect(table["id"]) as db:
                 for raw in db.execute("SELECT * FROM data WHERE _deleted_at IS NULL ORDER BY _row_id"):
                     row = decode(raw)
-                    if allowed(actor, table, "read", row["_row_id"]) and evaluate(
+                    if permits("read", row["_row_id"]) and evaluate(
                         plan.predicate, row["values"]
                     ):
                         matches.append({"table_id": table["id"], "path": table["path"], **row})
@@ -1140,7 +1196,17 @@ def create_app(settings=None):
     from .services import Search
     from .theorems import install as install_theorems
 
-    install(app, catalogue, file, authorize, allowed, load_row, table_transaction, table_connect)
+    install(
+        app,
+        catalogue,
+        file,
+        authorize,
+        allowed,
+        request_acl,
+        load_row,
+        table_transaction,
+        table_connect,
+    )
     install_theorems(app, catalogue, allowed, audit)
 
     @app.post("/api/v1/search/hybrid")
@@ -1158,13 +1224,16 @@ def create_app(settings=None):
             tables = [dict(t) for t in db.execute("SELECT * FROM tables ORDER BY id")]
         results = []
         for table in tables:
-            if not path_matches(table["path"], body.path) or not allowed(actor, table, "read"):
+            if not path_matches(table["path"], body.path):
+                continue
+            permits = request_acl(actor, table)
+            if not permits("read"):
                 continue
             with table_connect(table["id"]) as db:
                 for hit in db.execute(
                     "SELECT row_id,bm25(__xl_fts) AS rank FROM __xl_fts WHERE __xl_fts MATCH ?", (fts_query,)
                 ):
-                    if not allowed(actor, table, "read", hit["row_id"]):
+                    if not permits("read", hit["row_id"]):
                         continue
                     try:
                         row = load_row(db, hit["row_id"])

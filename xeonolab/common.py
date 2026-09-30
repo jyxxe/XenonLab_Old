@@ -314,6 +314,7 @@ def token_identity(token, settings):
         claims.get("agent_kind", "human"),
         claims.get("iat", 0),
         claims.get("account_epoch", ""),
+        tuple(claims.get("ancestors", ())),
     )
 
 

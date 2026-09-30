@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -581,6 +582,166 @@ def test_acl_inspection_and_audit_are_admin_only(library):
         r["event"] == "acl.changed"
         for r in library.get("/api/v1/audit", headers=auth("admin")).json()["data"]
     )
+
+
+def test_request_acl_preserves_precedence_inheritance_and_freshness(library):
+    tid, owner_row = seed(library)
+    hidden = library.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"title": "secret phrase", "confidence": 0.1}},
+    ).json()["data"]["_row_id"]
+
+    # A broad path grant is overridden by a table deny. A direct row request can
+    # still be granted by a row ACL because row scope is the most specific rule.
+    assert put_acl(library, "path", "/数学", {"*": ["read"]}).status_code == 200
+    assert put_acl(library, "table", tid, {"bob": []}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{owner_row}", {"bob": ["read"]}).status_code == 200
+    assert library.get(f"/api/v1/tables/{tid}/rows/{owner_row}", headers=auth("bob")).status_code == 200
+
+    rows = library.get(f"/api/v1/tables/{tid}/rows?limit=100", headers=auth("bob"))
+    query = library.post(
+        "/api/v1/query", headers=auth("bob"), json={"expression": 'FROM "/数学/**" LIMIT 100'}
+    )
+    text = library.post(
+        "/api/v1/search/text", headers=auth("bob"), json={"query": "一致收敛", "limit": 10}
+    )
+    assert rows.status_code == 403
+    assert query.status_code == text.status_code == 200
+    assert query.json()["data"] == []
+    assert text.json()["data"] == []
+    hidden_text = library.post(
+        "/api/v1/search/text", headers=auth("bob"), json={"query": "secret", "limit": 10}
+    )
+    assert hidden_text.json()["data"] == []
+
+    # With a table grant, an explicit row deny stops fallback to that grant and
+    # prevents row data or snippets from leaking through list/query/text routes.
+    assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{owner_row}", {"bob": []}).status_code == 200
+    assert library.get(f"/api/v1/tables/{tid}/rows/{owner_row}", headers=auth("bob")).status_code == 403
+    rows = library.get(f"/api/v1/tables/{tid}/rows?limit=100", headers=auth("bob"))
+    query = library.post(
+        "/api/v1/query", headers=auth("bob"), json={"expression": 'FROM "/数学/**" LIMIT 100'}
+    )
+    text = library.post(
+        "/api/v1/search/text", headers=auth("bob"), json={"query": "一致收敛", "limit": 10}
+    )
+    assert [row["_row_id"] for row in rows.json()["data"]] == [hidden]
+    assert [row["_row_id"] for row in query.json()["data"]] == [hidden]
+    assert text.json()["data"] == []
+
+    # Changing the row ACL is visible to the next request. Clearing both row and
+    # table overrides restores inherited wildcard access immediately.
+    assert put_acl(library, "row", f"{tid}:{owner_row}", {"bob": ["read"]}).status_code == 200
+    assert len(library.get(f"/api/v1/tables/{tid}/rows?limit=100", headers=auth("bob")).json()["data"]) == 2
+    for resource_type, resource_id in (("row", f"{tid}:{owner_row}"), ("table", tid)):
+        current = library.get(f"/api/v1/acl/{resource_type}/{resource_id}", headers=auth("admin"))
+        assert current.status_code == 200
+        assert library.delete(
+            f"/api/v1/acl/{resource_type}/{resource_id}",
+            headers=auth("admin", **{"If-Match": current.headers["ETag"]}),
+        ).status_code == 200
+    inherited = library.get(f"/api/v1/tables/{tid}/rows?limit=100", headers=auth("bob"))
+    assert {row["_row_id"] for row in inherited.json()["data"]} == {owner_row, hidden}
+
+    assert put_acl(library, "path", "/数学/分析", {"bob": []}).status_code == 200
+    denied = library.post(
+        "/api/v1/query", headers=auth("bob"), json={"expression": 'FROM "/数学/**" LIMIT 100'}
+    )
+    assert denied.json()["data"] == []
+    nearest = library.get("/api/v1/acl/path/" + quote("/数学/分析", safe=""), headers=auth("admin"))
+    assert nearest.status_code == 200
+    assert library.delete(
+        "/api/v1/acl/path/" + quote("/数学/分析", safe=""),
+        headers=auth("admin", **{"If-Match": nearest.headers["ETag"]}),
+    ).status_code == 200
+
+    # The current owner is still inherited from the verified account tree when
+    # there is no explicit policy anywhere on the resource chain.
+    parent = library.get("/api/v1/acl/path/" + quote("/数学", safe=""), headers=auth("admin"))
+    assert library.delete(
+        "/api/v1/acl/path/" + quote("/数学", safe=""),
+        headers=auth("admin", **{"If-Match": parent.headers["ETag"]}),
+    ).status_code == 200
+    library.app.state.settings.dev_tokens["tree-child"] = {
+        "sub": "child",
+        "scope": "xelibrary:read xelibrary:query",
+        "agent_kind": "human",
+        "ancestors": ["alice"],
+    }
+    child_auth = auth("tree-child")
+    owner_rows = library.get(f"/api/v1/tables/{tid}/rows?limit=100", headers=child_auth)
+    assert owner_rows.status_code == 200, owner_rows.text
+    assert len(owner_rows.json()["data"]) == 2
+    assert len(
+        library.post(
+            "/api/v1/query", headers=child_auth, json={"expression": 'FROM "/数学/**" LIMIT 100'}
+        ).json()["data"]
+    ) == 2
+    assert len(
+        library.post(
+            "/api/v1/search/text", headers=child_auth, json={"query": "secret", "limit": 10}
+        ).json()["data"]
+    ) == 1
+
+
+def test_row_acl_catalogue_connections_are_bounded_per_request(library, settings, monkeypatch):
+    tid, _ = seed(library)
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    stamp = "2026-10-01T00:00:00Z"
+    with sqlite3.connect(table_file) as db:
+        for index in range(120):
+            rid = str(uuid4())
+            values = {"title": f"bulk benchmark matching {index}", "confidence": 0.5}
+            db.execute(
+                "INSERT INTO data VALUES(?,?,?,?,?,?)",
+                (rid, 1, stamp, stamp, None, json.dumps(values)),
+            )
+            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(map(str, values.values()))))
+
+    import xeonolab.library as library_module
+
+    catalogue = settings.data_dir / "catalogue.sqlite"
+    original_connect = library_module.connect
+
+    class CountedConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.connection.__exit__(*args)
+
+        def execute(self, *args, **kwargs):
+            return self.connection.execute(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    opened = []
+
+    def counting_connect(path):
+        connection = original_connect(path)
+        if str(path) == str(catalogue):
+            opened.append(str(path))
+            return CountedConnection(connection)
+        return connection
+
+    monkeypatch.setattr(library_module, "connect", counting_connect)
+
+    responses = (
+        library.get(f"/api/v1/tables/{tid}/rows?limit=10", headers=auth()),
+        library.post("/api/v1/query", headers=auth(), json={"expression": 'FROM "/数学/**" LIMIT 10'}),
+        library.post("/api/v1/search/text", headers=auth(), json={"query": "matching", "limit": 10}),
+    )
+    for result in responses:
+        assert result.status_code == 200, result.text
+        assert result.json()["data"]
+    assert len(opened) == 3 * len(responses)
 
 
 def test_acl_revision_etag_concurrency_and_inheritance_clear(library):
