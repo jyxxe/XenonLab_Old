@@ -70,3 +70,8 @@ SQLite 原子领取、TTL 与 epoch fencing、完成状态和审计。并发、�
 Issue links API 已实现 related/blocked/blocks/supersedes/duplicate 关系持久化，
 重复关系拒绝自环和环路，跨仓库分离，生产固定 repository allowlist；22 项测试通过。
 工作队列页面已构建，独立 OAuth 开发身份已创建（无 production deploy scope）。
+
+DevAgent signed issues webhook 与 work queue 原子同步已实现（待发布和 Forgejo hook 配置）。
+验证 delivery 去重、按 updated_at 防乱序覆盖、关闭撤销 claim、重开入队、repository allowlist；
+非 issues 类型仅记录原始事件。旧 events.sqlite 事件去重历史复制到 work.sqlite，原文件保留。
+不执行 Issue 文本；24 项测试覆盖签名、事务与迁移。自动 triage 仍待实现。

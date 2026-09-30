@@ -9,7 +9,7 @@ import httpx
 from fastapi import Depends, Request
 from pydantic import BaseModel, Field
 
-from .common import APIError, base_app, response, scope, transaction
+from .common import APIError, base_app, connect, response, scope, transaction
 
 SERVICES = [
     "xelibrary",
@@ -140,13 +140,24 @@ def create_app(service=None, settings=None):
         from .work import install
 
         install(app)
-        database = app.state.settings.data_dir / "events.sqlite"
+        database = app.state.settings.data_dir / "work.sqlite"
         with transaction(database) as db:
             db.execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, digest TEXT, payload TEXT)")
+            previous = app.state.settings.data_dir / "events.sqlite"
+            if previous.exists():
+                with connect(previous) as old_db:
+                    db.executemany(
+                        "INSERT OR IGNORE INTO events VALUES(?,?,?)",
+                        [tuple(row) for row in old_db.execute("SELECT id,digest,payload FROM events")],
+                    )
 
         @app.post("/api/v1/webhooks/forgejo")
         async def webhook(request: Request):
-            secret = os.getenv("FORGEJO_WEBHOOK_SECRET", "")
+            secret = (
+                Path(os.environ["FORGEJO_WEBHOOK_SECRET_FILE"]).read_text().strip()
+                if os.getenv("FORGEJO_WEBHOOK_SECRET_FILE")
+                else os.getenv("FORGEJO_WEBHOOK_SECRET", "")
+            )
             if not secret:
                 raise APIError(503, "WEBHOOK_NOT_CONFIGURED", "webhook secret required")
             raw = await request.body()
@@ -168,9 +179,10 @@ def create_app(service=None, settings=None):
                 old = db.execute("SELECT digest FROM events WHERE id=?", (event_id,)).fetchone()
                 if old and old[0] != digest:
                     raise APIError(409, "EVENT_CONFLICT", "delivery ID reused with different body")
-                db.execute(
-                    "INSERT OR IGNORE INTO events VALUES(?,?,?)", (event_id, digest, json.dumps(payload))
-                )
+                if not old:
+                    if request.headers.get("X-Forgejo-Event") == "issues":
+                        app.state.ingest_forgejo(db, payload)
+                    db.execute("INSERT INTO events VALUES(?,?,?)", (event_id, digest, json.dumps(payload)))
             return response(request, {"event_id": event_id, "duplicate": bool(old), "status": "received"})
 
     elif service == "llm-gateway":

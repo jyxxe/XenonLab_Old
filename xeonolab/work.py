@@ -2,6 +2,7 @@
 
 import os
 import time
+from datetime import datetime
 from uuid import uuid4
 
 from fastapi import Depends, Request
@@ -38,6 +39,8 @@ def install(app):
         CREATE TABLE IF NOT EXISTS work(id TEXT PRIMARY KEY,repository TEXT,issue_id INTEGER,
           title TEXT,status TEXT,holder TEXT,expires REAL,epoch INTEGER,
           UNIQUE(repository,issue_id));
+        CREATE TABLE IF NOT EXISTS issue_sync(repository TEXT,issue_id INTEGER,updated REAL,
+          PRIMARY KEY(repository,issue_id));
         CREATE TABLE IF NOT EXISTS issue_links(repository TEXT,source INTEGER,target INTEGER,kind TEXT,
           actor TEXT,created REAL,PRIMARY KEY(repository,source,target,kind));
         CREATE TABLE IF NOT EXISTS work_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,
@@ -60,6 +63,78 @@ def install(app):
             "INSERT INTO work_audit VALUES(?,?,?,?,?,?)",
             (str(uuid4()), actor.sub, event, work_id, epoch, time.time()),
         )
+
+    def ingest(db, payload):
+        if not isinstance(payload, dict) or not isinstance(payload.get("issue"), dict):
+            return
+        metadata = payload.get("repository")
+        if not isinstance(metadata, dict):
+            raise APIError(422, "INVALID_ISSUE", "repository metadata required")
+        repository = metadata.get("full_name", "")
+        if repository not in os.getenv("DEV_REPOSITORIES", "xenon-admin/XeonoLab").split(","):
+            raise APIError(403, "REPOSITORY_FORBIDDEN", "webhook repository outside service scope")
+        issue = payload["issue"]
+        number, title, state = issue.get("number"), issue.get("title"), issue.get("state")
+        if type(number) is not int or number < 1 or not isinstance(title, str) or not 1 <= len(title) <= 200:
+            raise APIError(422, "INVALID_ISSUE", "invalid issue metadata")
+        if state not in ("open", "closed"):
+            raise APIError(422, "INVALID_ISSUE", "invalid issue state")
+        try:
+            updated = datetime.fromisoformat(issue["updated_at"].replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                raise ValueError()
+            stamp = updated.timestamp()
+        except (KeyError, ValueError, TypeError, AttributeError):
+            raise APIError(422, "INVALID_ISSUE", "timezone-aware updated_at required") from None
+        previous = db.execute(
+            "SELECT updated FROM issue_sync WHERE repository=? AND issue_id=?", (repository, number)
+        ).fetchone()
+        if previous and previous[0] >= stamp:
+            return
+        item = db.execute(
+            "SELECT * FROM work WHERE repository=? AND issue_id=?", (repository, number)
+        ).fetchone()
+        if item is None:
+            work_id = str(uuid4())
+            db.execute(
+                "INSERT INTO work VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    work_id,
+                    repository,
+                    number,
+                    title,
+                    "completed" if state == "closed" else "queued",
+                    None,
+                    0,
+                    0,
+                ),
+            )
+        else:
+            work_id = item["id"]
+            db.execute("UPDATE work SET title=? WHERE id=?", (title, work_id))
+            if state == "closed" or (state == "open" and item["status"] == "completed"):
+                db.execute(
+                    "UPDATE work SET status=?,holder=NULL,expires=0,epoch=epoch+1 WHERE id=?",
+                    ("completed" if state == "closed" else "queued", work_id),
+                )
+        db.execute(
+            "INSERT INTO issue_sync VALUES(?,?,?) ON CONFLICT(repository,issue_id) "
+            "DO UPDATE SET updated=excluded.updated",
+            (repository, number, stamp),
+        )
+        db.execute(
+            "INSERT INTO work_audit VALUES(?,?,?,?,?,?)",
+            (
+                str(uuid4()),
+                "forgejo-webhook",
+                "issue.synced:" + state,
+                work_id,
+                db.execute("SELECT epoch FROM work WHERE id=?", (work_id,)).fetchone()[0],
+                time.time(),
+            ),
+        )
+
+    app.state.ingest_forgejo = ingest
 
     @app.post("/api/v1/work", status_code=201)
     def create(body: WorkCreate, request: Request, actor=Depends(scope("dev:write"))):
