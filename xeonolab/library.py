@@ -2,6 +2,10 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
+import stat
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from uuid import uuid4
@@ -83,6 +87,7 @@ def clean_path(path):
 
 def create_app(settings=None):
     app = base_app("xelibrary", settings)
+    metrics = app.state.metrics
     root = app.state.settings.data_dir
     (root / "tables").mkdir(exist_ok=True)
     (root / "objects" / "sha256").mkdir(parents=True, exist_ok=True)
@@ -532,8 +537,7 @@ def create_app(settings=None):
         audit(actor, "row.restored", f"{tid}:{rid}")
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
-    @app.post("/api/v1/query")
-    def query(body: QueryBody, request: Request, actor=Depends(scope("xelibrary:query"))):
+    def execute_query(body: QueryBody, request: Request, actor):
         plan = parse(body.expression)
         with connect(catalogue) as db:
             tables = [dict(t) for t in db.execute("SELECT * FROM tables ORDER BY id")]
@@ -555,6 +559,22 @@ def create_app(settings=None):
             # Global ordering has to see the whole matching set before slicing.
             matches.sort(key=lambda item: sort_key(plan.order, item["values"]), reverse=plan.descending)
         return response(request, matches[plan.offset:target], approximate=False)
+
+    @app.post("/api/v1/query")
+    def query(body: QueryBody, request: Request, actor=Depends(scope("xelibrary:query"))):
+        started = time.monotonic()
+        try:
+            result = execute_query(body, request, actor)
+        except Exception:
+            metrics.counter("xelibrary_query_errors_total", help="Query expressions rejected or failed.")
+            raise
+        finally:
+            metrics.observe(
+                "xelibrary_query_duration_seconds", time.monotonic() - started,
+                help="Query expression execution duration.",
+            )
+        metrics.counter("xelibrary_query_total", help="Query expressions executed.")
+        return result
 
     @app.post("/api/v1/query/validate")
     @app.post("/api/v1/query/explain")
@@ -947,5 +967,92 @@ def create_app(settings=None):
                     )
         results.sort(key=lambda x: x["score"], reverse=True)
         return response(request, results[: body.limit], partial=False)
+
+    snapshot_ttl = 60
+    snapshot_lock = threading.Lock()
+    snapshot_cache = {"at": -1e9, "value": None, "error": False}
+
+    def read_library_snapshot():
+        rows = chunks = lag = 0
+        with connect(catalogue) as db:
+            tables = [dict(t) for t in db.execute("SELECT * FROM tables ORDER BY id")]
+            backlog = sum(
+                json.loads(payload).get("status") in ("queued", "running")
+                for (payload,) in db.execute("SELECT payload FROM index_jobs")
+            )
+
+        for table in tables:
+            with connect(file(table["id"])) as db:
+                rows += db.execute("SELECT COUNT(*) FROM data WHERE _deleted_at IS NULL").fetchone()[0]
+                try:
+                    chunks += db.execute("SELECT COUNT(*) FROM __xl_vectors").fetchone()[0]
+                except sqlite3.OperationalError as error:
+                    if "no such table: __xl_vectors" not in str(error).lower():
+                        raise
+                lag += db.execute(
+                    "SELECT COUNT(*) FROM data d WHERE d._deleted_at IS NULL AND d._revision >"
+                    " COALESCE((SELECT MAX(c.indexed_revision) FROM __xl_changes c"
+                    " WHERE c.row_id=d._row_id),0)"
+                ).fetchone()[0]
+
+        storage = 0
+        for path in root.rglob("*"):
+            try:
+                info = path.stat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                storage += info.st_size
+        return {"rows": rows, "chunks": chunks, "lag": lag, "backlog": backlog, "storage": storage}
+
+    def library_snapshot():
+        # Serialize refreshes and retain both successful and failed results so a
+        # burst of scrapes does not repeatedly traverse every table and file.
+        with snapshot_lock:
+            now = time.monotonic()
+            if now - snapshot_cache["at"] < snapshot_ttl:
+                if snapshot_cache["error"]:
+                    raise RuntimeError("cached XeLibrary metrics snapshot is unavailable")
+                return snapshot_cache["value"]
+            try:
+                value = read_library_snapshot()
+            except Exception:
+                snapshot_cache.update(at=now, value=None, error=True)
+                raise
+            snapshot_cache.update(at=now, value=value, error=False)
+            return value
+
+    def snapshot_success():
+        try:
+            library_snapshot()
+        except Exception:
+            return [(None, 0)]
+        return [(None, 1)]
+
+    metrics.gauge_provider(
+        "xelibrary_snapshot_success", "Whether the most recent library metrics snapshot succeeded.",
+        snapshot_success,
+    )
+
+    metrics.gauge_provider(
+        "xelibrary_rows_total", "Non-deleted rows across all tables.",
+        lambda: [(None, library_snapshot()["rows"])],
+    )
+    metrics.gauge_provider(
+        "xelibrary_chunks_total", "Stored embedding chunks across all tables.",
+        lambda: [(None, library_snapshot()["chunks"])],
+    )
+    metrics.gauge_provider(
+        "xelibrary_index_lag", "Row revisions newer than their last indexed revision.",
+        lambda: [(None, library_snapshot()["lag"])],
+    )
+    metrics.gauge_provider(
+        "xelibrary_embedding_backlog", "Index jobs queued or running.",
+        lambda: [(None, library_snapshot()["backlog"])],
+    )
+    metrics.gauge_provider(
+        "xelibrary_storage_bytes", "Bytes stored under the XeLibrary data directory.",
+        lambda: [(None, library_snapshot()["storage"])],
+    )
 
     return app

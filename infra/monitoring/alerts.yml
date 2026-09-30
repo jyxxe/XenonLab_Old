@@ -1,0 +1,57 @@
+# Reference alert rules for the plan.md §63 metrics. Load with prometheus.yml.
+groups:
+  - name: xeonolab-availability
+    rules:
+      - alert: XeonolabServiceDown
+        expr: up{job="xeonolab"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "XeonoLab service {{ $labels.service }} is not scrapable"
+          description: "Target {{ $labels.instance }} has been down for 2 minutes."
+
+      - alert: XeonolabErrorRateHigh
+        expr: |
+          sum by (service) (rate(xeonolab_route_requests_total{status=~"5.."}[5m]))
+            / sum by (service) (rate(xeonolab_route_requests_total[5m])) > 0.05
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.service }} 5xx ratio above 5%"
+
+      - alert: XeonolabEmbeddingBacklogHigh
+        expr: xelibrary_embedding_backlog > 5
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Embedding index backlog is not draining"
+          description: "Queued/running index jobs stayed above 5 for 15 minutes; check the embedding worker."
+
+      - alert: XeonolabIndexLagStuck
+        expr: xelibrary_index_lag > 0
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "Row revisions have been unindexed for over an hour"
+
+      - alert: XeonolabMetricsSnapshotFailed
+        expr: xelibrary_snapshot_success == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: "XeLibrary state metrics snapshot failed"
+          description: "Catalogue or table reads failed; state gauges are omitted instead of reported as zero."
+
+      - alert: XeonolabDeployFailure
+        expr: increase(deploy_failure_total[1h]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "A production deployment failed in the last hour"
+
+      - alert: XeonolabEmbeddingModelUnavailable
+        expr: embedding_model_loaded{model="d100m"} == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "D100M embedding model is not loaded"
+          description: "Expected on hosts without weights; production expects 1."

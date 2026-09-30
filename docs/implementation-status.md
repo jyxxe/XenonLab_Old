@@ -185,8 +185,7 @@ WebUI usability increment (2026-09-30, issue #41, branch opencode/issue-41): a b
 Issue #41 integration (2026-09-30): OpenCode delivery 4c413e2 reviewed and integrated with owner-scoped embedding jobs, explicit truncated-list statistics, recoverable error state and reserved dashboard app ID. Preserves attachment/ACL management. Coordinator verification: 78 tests, Ruff, regenerated OpenAPI and frontend build. Production pre-release quiesced backup and isolated restore verified, including empty object-store restore regression. Browser and release verification follow activation; full plan remains incomplete.
 
 
-Resumable uploads integration: multipart sessions, owner/ACL/scope revalidation, stable attachment IDs and crash-retry completion are implemented. Backup validation accepts canonical upload lock files. Coordinator: 82 tests, Ruff, OpenAPI and frontend build passed; pre-uploads production backup and isolated restore verified. Production activation and real multipart verification remain pending. Qdrant systemd/TLS/firewall templates added; not yet active or connected to production search.
-
+Resumable uploads integration: multipart sessions, owner/ACL/scope revalidation, stable attachment IDs and crash-retry completion are implemented. Backup validation accepts canonical upload lock files. Coordinator: 82 tests, Ruff, OpenAPI and frontend build passed; pre-uploads production backup and isolated restore verified. Production activation and real multipart verification passed as recorded below. Qdrant systemd/TLS/firewall templates added; not yet connected to production semantic search.
 
 Production uploads: release c32fd7f completed; real PKCE test uploaded 18,900,000 bytes in 3 parts, reused a repeated part, completed idempotently, verified downloaded SHA-256 and unbound the fixture. Qdrant v1.19.1 official musl binary SHA-256 verified, service VM109 TLS/API-key checked from VM104, unauthenticated access rejected with 401, vector survived restart and probe collection removed. Qdrant is not yet connected to production semantic search.
 
@@ -194,9 +193,9 @@ Production uploads: release c32fd7f completed; real PKCE test uploaded 18,900,00
 WebUI session resilience: timers and API renewal no longer clear the workspace on 401 or temporary failure. Temporary provider errors retain persistent session credentials, startup restores retry, and only explicit logout clears UI state. Revocation requires explicit reauthorization and forbids cached-token fallback. Coordinator validation: 82 backend tests, 4 executable frontend session-state tests, Ruff, OpenAPI and frontend build. Keycloak offline absolute lifespan remains disabled; live Chrome fault injection follows activation.
 
 
-### Issue #32 工作租约续租（OpenCode harness，分支 `opencode/issue-32`）
+### Issue #32 工作租约续租
 
-补齐 #32 评论中的第一项缺口（续租与失租停止约定），未发布：
+工作租约续租与失租停止约定已随生产 release `c32fd7f` 发布：
 - `POST /api/v1/work/{id}/renew`（scope `dev:write`；body `epoch`、`ttl_seconds` 30–3600，默认 900）：
   仅当前 holder、当前 epoch 且租约未过期时延长 expires；续租不改变 epoch，写 `work.renewed` 审计。
 - 过期或被 webhook 重新认领后 renew/release/complete 一律 409；持有者必须停止写入并重新 claim。
@@ -204,3 +203,9 @@ WebUI session resilience: timers and API renewal no longer clear the workspace o
   审计记录与重新认领后的 epoch fencing。
 - 文档：`docs/runbooks/collaboration.md` 与 `docs/agent-workflow.md` 补充续租与失租停止约定。
 - 未实现（另议）：webhook 自动更新 Forgejo assignee/评论；多副本共享具备事务锁的状态库。
+
+监控增量（2026-09-30，issue #30 / plan §63，分支 opencode/issue-30）：共享基座新增最小 Prometheus 注册表（counter/gauge/histogram、标签转义、抓取时动态 gauge provider），`/metrics` 保留 `xeonolab_requests_total`/`xeonolab_errors_total` 名称并新增路由/状态/延迟与 `xeonolab_build_info`；XeLibrary 落地 §63 全部指标（查询计数/耗时/错误、行数、向量块、索引进度、embedding backlog、存储字节），状态快照使用带 single-flight 的 60 秒缓存，数据库读取错误省略状态样本并用 `xelibrary_snapshot_success` 明确报告，只有缺失可选 `__xl_vectors` 表计为零，storage stat 仅忽略并发消失文件；Embedding 指标区分真实队列深度（V1 恒为 0）与 `embedding_in_flight`（worker 锁占用），意外 encoder 异常仍返回 500 并以固定 `INTERNAL_ERROR` 标签记录；Deploy 落地租约活跃、执行耗时、失败与回滚计数及部署状态分布；HF-cache skeleton 仅暴露真实使用量。`infra/monitoring/` 提供 Prometheus 抓取与告警参考配置、Grafana 仪表盘（18 面板），运行手册见 `docs/runbooks/monitoring.md`。修复 reviewer 两轮问题后验证：95 项测试通过（含指标错误、缓存竞争、stat竞态及 encoder exception regression），修改文件 Ruff 检查通过、OpenAPI 重新导出、前端构建通过。未实现：OpenTelemetry、Alertmanager 路由、Qwen/HF-cache 下载类指标与系统层资源 exporter。
+
+Issue #30 integration on `feature/platform-v1` preserves the existing request rate limits and `Retry-After` responses. Review caught and fixed a Starlette exception-path gap so uncaught HTTP 500 responses are also counted in common metrics. Coordinator validation: 109 tests, full Ruff, unchanged generated OpenAPI, 10 frontend tests/build, and monitoring YAML/JSON parsing passed. Prometheus/Grafana remain reference configuration and are not installed in production by this release.
+
+Issue #54 ACL subject selector production update (`f5584ce`): supports account-tree subject selection and preserves grants whose subjects are not in the loaded tree. Production API/account verification passed; browser save/round-trip acceptance with an initialized account tree remains pending.

@@ -42,6 +42,7 @@ class Deployment(BaseModel):
 
 def create_app(settings=None):
     app = base_app("deploy-gateway", settings)
+    metrics = app.state.metrics
     path = app.state.settings.data_dir / "deploy.sqlite"
     with transaction(path) as db:
         db.executescript("""
@@ -189,6 +190,7 @@ def create_app(settings=None):
             )
             audit(db, actor, "deployment.started", did)
         state = "failed"
+        started = time.monotonic()
         try:
             result = subprocess.run(
                 [executor],
@@ -203,6 +205,14 @@ def create_app(settings=None):
                     state = candidate
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
+        metrics.observe(
+            "deploy_duration_seconds", time.monotonic() - started,
+            help="Deployment executor duration for terminal deployments.",
+        )
+        if state == "failed":
+            metrics.counter("deploy_failure_total", help="Deployments that ended failed.")
+        if state == "rolled_back":
+            metrics.counter("deploy_rollback_total", help="Deployments that were rolled back.")
         with transaction(path) as db:
             db.execute("UPDATE deployments SET state=? WHERE id=?", (state, did))
             audit(db, actor, "deployment." + state, did)
@@ -223,5 +233,23 @@ def create_app(settings=None):
                 "SELECT * FROM audit WHERE actor=? ORDER BY at DESC LIMIT 100", (actor.sub,)
             ).fetchall()
         return response(request, [dict(r) for r in rows])
+
+    def lease_active():
+        with connect(path) as db:
+            row = db.execute("SELECT id,expires FROM lease").fetchone()
+        active = bool(row) and bool(row["id"]) and (row["expires"] or 0) > time.time()
+        return [({"service": "deploy-gateway"}, 1 if active else 0)]
+
+    def deployment_states():
+        with connect(path) as db:
+            rows = db.execute(
+                "SELECT state,COUNT(*) AS total FROM deployments GROUP BY state ORDER BY state"
+            ).fetchall()
+        return [({"service": "deploy-gateway", "state": row["state"]}, row["total"]) for row in rows]
+
+    metrics.gauge_provider(
+        "deploy_lease_active", "Whether a deployment lease is currently active.", lease_active
+    )
+    metrics.gauge_provider("deploy_deployments", "Deployments by state.", deployment_states)
 
     return app

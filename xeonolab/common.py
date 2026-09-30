@@ -5,6 +5,7 @@ import math
 import os
 import sqlite3
 import ssl
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -17,6 +18,145 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException
+
+DEFAULT_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+
+
+def escape_labels(labels):
+    """Prometheus text format label value escaping."""
+    return str(labels).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def format_number(value):
+    value = float(value)
+    return str(int(value)) if value.is_integer() else repr(value)
+
+
+class Metrics:
+    """Minimal in-process Prometheus text-format registry (no external dependency).
+
+    Counters, gauges and histograms; gauges may be backed by a provider that is
+    evaluated at scrape time so state is read from the database instead of being
+    cached in memory. Series names, help and types stay stable across scrapes.
+    """
+
+    def __init__(self, service=""):
+        self.service = service
+        self._lock = threading.Lock()
+        self._types = {}
+        self._help = {}
+        self._series = {}
+        self._histograms = {}
+        self._providers = {}
+
+    def _labels_key(self, labels):
+        return tuple(sorted((str(key), str(value)) for key, value in labels.items()))
+
+    def _register(self, name, kind, help_text=None):
+        current = self._types.get(name)
+        if current is not None and current != kind:
+            raise ValueError(f"metric {name} already registered as {current}")
+        self._types[name] = kind
+        if help_text is not None:
+            self._help[name] = help_text
+
+    def counter(self, name, amount=1.0, help=None, **labels):
+        with self._lock:
+            self._register(name, "counter", help)
+            key = (name, self._labels_key(labels))
+            self._series[key] = self._series.get(key, 0.0) + float(amount)
+
+    def gauge(self, name, value, help=None, **labels):
+        with self._lock:
+            self._register(name, "gauge", help)
+            self._series[(name, self._labels_key(labels))] = float(value)
+
+    def observe(self, name, value, buckets=DEFAULT_BUCKETS, help=None, **labels):
+        with self._lock:
+            self._register(name, "histogram", help)
+            key = (name, self._labels_key(labels))
+            entry = self._histograms.get(key)
+            if entry is None:
+                entry = {
+                    "labels": dict(labels),
+                    "buckets": tuple(buckets),
+                    "counts": [0] * len(buckets),
+                    "sum": 0.0,
+                    "count": 0,
+                }
+                self._histograms[key] = entry
+            value = float(value)
+            entry["sum"] += value
+            entry["count"] += 1
+            for index, boundary in enumerate(entry["buckets"]):
+                if value <= boundary:
+                    entry["counts"][index] += 1
+
+    def gauge_provider(self, name, help, function):
+        """Register a gauge family evaluated at scrape time: function() -> [(labels, value)]."""
+        with self._lock:
+            self._register(name, "gauge", help)
+            self._providers[name] = function
+
+    @staticmethod
+    def _line(name, labels, value):
+        if labels:
+            rendered = ",".join(f'{key}="{escape_labels(value)}"' for key, value in sorted(labels.items()))
+            return f"{name}{{{rendered}}} {format_number(value)}"
+        return f"{name} {format_number(value)}"
+
+    def render(self):
+        with self._lock:
+            types = dict(self._types)
+            help_texts = dict(self._help)
+            series = [(name, dict(labels), value) for (name, labels), value in self._series.items()]
+            histograms = [
+                (name, dict(entry["labels"]), entry["buckets"], list(entry["counts"]), entry["sum"], entry["count"])
+                for (name, _), entry in self._histograms.items()
+            ]
+            providers = dict(self._providers)
+
+        output = []
+
+        def header(name):
+            output.append(f"# TYPE {name} {types[name]}")
+            if name in help_texts:
+                output.append(f"# HELP {name} {help_texts[name]}")
+
+        for name in sorted({name for name, _, _ in series}):
+            header(name)
+            for series_name, labels, value in sorted(
+                series, key=lambda item: (item[0], sorted(item[1].items()))
+            ):
+                if series_name == name:
+                    output.append(self._line(name, labels, value))
+        for name, function in sorted(providers.items()):
+            header(name)
+            try:
+                entries = list(function())
+            except Exception:  # a broken provider must not break the scrape
+                logging.getLogger("xeonolab").warning(
+                    json.dumps({"event": "metrics.provider_failed", "metric": name})
+                )
+                continue
+            for labels, value in entries:
+                output.append(self._line(name, labels or {}, value))
+        for name in sorted({item[0] for item in histograms}):
+            header(name)
+            for histogram_name, labels, buckets, counts, total, count in sorted(
+                histograms, key=lambda item: (item[0], sorted(item[1].items()))
+            ):
+                if histogram_name != name:
+                    continue
+                for boundary, observed in zip(buckets, counts):
+                    output.append(
+                        self._line(name + "_bucket", {**labels, "le": format_number(boundary)}, observed)
+                    )
+                output.append(self._line(name + "_bucket", {**labels, "le": "+Inf"}, count))
+                output.append(self._line(name + "_sum", labels, total))
+                output.append(self._line(name + "_count", labels, count))
+        return "".join(line + "\n" for line in output)
+
 
 
 class APIError(Exception):
@@ -302,9 +442,13 @@ def base_app(service, settings=None):
         db.execute(
             "CREATE INDEX IF NOT EXISTS rate_limit_expiry_idx ON rate_limit_requests(created_at)"
         )
+    app.state.metrics = Metrics(service)
+    app.state.metrics.gauge(
+        "xeonolab_build_info", 1, help="Build and service identity.", service=service, version="0.1.0"
+    )
 
     @app.middleware("http")
-    async def context(request, call_next):
+    async def context(request: Request, call_next):
         request.state.request_id = str(uuid4())
         supplied = request.headers.get("X-Request-ID", "")
         try:
@@ -313,24 +457,58 @@ def base_app(service, settings=None):
             request.state.request_id = str(UUID(supplied))
         except ValueError:
             pass
+
+        def record_request(status, duration):
+            route = getattr(request.scope.get("route"), "path", None) or "unmatched"
+            app.state.requests += 1
+            app.state.errors += status >= 400
+            metrics = app.state.metrics
+            metrics.counter("xeonolab_requests_total", help="HTTP requests handled.", service=service)
+            metrics.counter(
+                "xeonolab_route_requests_total",
+                1,
+                help="HTTP requests by route, method and status code.",
+                service=service,
+                route=route,
+                method=request.method,
+                status=status,
+            )
+            metrics.observe(
+                "xeonolab_request_duration_seconds",
+                duration,
+                help="HTTP request duration by route, method and status code.",
+                service=service,
+                route=route,
+                method=request.method,
+                status=status,
+            )
+            if status >= 400:
+                metrics.counter("xeonolab_errors_total", help="HTTP error responses.", service=service)
+            logging.getLogger("xeonolab").info(
+                json.dumps(
+                    {
+                        "service": service,
+                        "request_id": request.state.request_id,
+                        "event": "request.completed",
+                        "status": status,
+                        "duration_ms": round(duration * 1000, 2),
+                    }
+                )
+            )
+
         started = time.monotonic()
-        result = await call_next(request)
+        try:
+            result = await call_next(request)
+        except Exception:
+            duration = time.monotonic() - started
+            record_request(500, duration)
+            raise
+
+        duration = time.monotonic() - started
         result.headers["X-Request-ID"] = request.state.request_id
         if request.url.path.startswith("/api/v1/auth/"):
             result.headers["Cache-Control"] = "no-store"
-        app.state.requests += 1
-        app.state.errors += result.status_code >= 400
-        logging.getLogger("xeonolab").info(
-            json.dumps(
-                {
-                    "service": service,
-                    "request_id": request.state.request_id,
-                    "event": "request.completed",
-                    "status": result.status_code,
-                    "duration_ms": round((time.monotonic() - started) * 1000, 2),
-                }
-            )
-        )
+        record_request(result.status_code, duration)
         return result
 
     @app.exception_handler(APIError)
@@ -377,10 +555,7 @@ def base_app(service, settings=None):
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def metrics():
-        return (
-            f'xeonolab_requests_total{{service="{service}"}} {app.state.requests}\n'
-            f'xeonolab_errors_total{{service="{service}"}} {app.state.errors}\n'
-        )
+        return app.state.metrics.render()
 
     return app
 

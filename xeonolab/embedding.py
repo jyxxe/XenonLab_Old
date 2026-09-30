@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 from fastapi import Depends, Request
@@ -116,14 +117,46 @@ def create_app(settings=None):
     @app.post("/v1/embeddings")
     @app.post("/api/v1/embed/text")
     def embed(body: EmbedRequest, request: Request, actor=Depends(scope("embedding:write"))):
-        if body.model not in ("fast", "D100M-Embedding", "quality", "Qwen/Qwen3-VL-Embedding-2B"):
-            raise APIError(422, "UNKNOWN_MODEL", "unsupported embedding model")
-        if body.model in ("quality", "Qwen/Qwen3-VL-Embedding-2B"):
-            raise APIError(503, "MODEL_NOT_CONFIGURED", "Qwen worker not configured")
-        if app.state.model is None:
-            raise APIError(503, "MODEL_NOT_CONFIGURED", "D100M weights not configured")
-        texts = [body.input] if isinstance(body.input, str) else body.input
-        vectors, tokens = app.state.model.encode(texts, body.truncation)
+        metrics = app.state.metrics
+        quality = body.model in ("quality", "Qwen/Qwen3-VL-Embedding-2B")
+        label = "qwen3vl2b" if quality else ("d100m" if body.model in ("fast", "D100M-Embedding") else "unknown")
+        started = time.monotonic()
+
+        def record_error(code):
+            metrics.counter(
+                "embedding_requests_total", help="Embedding requests by model and outcome.",
+                model=label, result="error",
+            )
+            metrics.counter(
+                "embedding_errors_total", help="Embedding errors by model and error code.",
+                model=label, code=code,
+            )
+
+        try:
+            if body.model not in ("fast", "D100M-Embedding", "quality", "Qwen/Qwen3-VL-Embedding-2B"):
+                raise APIError(422, "UNKNOWN_MODEL", "unsupported embedding model")
+            if quality:
+                raise APIError(503, "MODEL_NOT_CONFIGURED", "Qwen worker not configured")
+            if app.state.model is None:
+                raise APIError(503, "MODEL_NOT_CONFIGURED", "D100M weights not configured")
+            texts = [body.input] if isinstance(body.input, str) else body.input
+            vectors, tokens = app.state.model.encode(texts, body.truncation)
+        except APIError as error:
+            record_error(error.code)
+            raise
+        except Exception:
+            record_error("INTERNAL_ERROR")
+            raise
+        finally:
+            metrics.observe(
+                "embedding_latency_seconds", time.monotonic() - started,
+                help="Embedding request duration by model.", model=label,
+            )
+        metrics.counter(
+            "embedding_requests_total", help="Embedding requests by model and outcome.",
+            model=label, result="ok",
+        )
+        metrics.observe("embedding_batch_size", len(texts), help="Texts per embedding request.", model=label)
         return {
             "object": "list",
             "model": "D100M-Embedding",
@@ -133,5 +166,30 @@ def create_app(settings=None):
             ],
             "usage": {"input_tokens": tokens, "total_tokens": tokens},
         }
+
+    metrics = app.state.metrics
+
+    def model_loaded():
+        model = app.state.model
+        return [({"model": "d100m"}, 1 if model is not None else 0), ({"model": "qwen3vl2b"}, 0)]
+
+    def in_flight():
+        lock = getattr(app.state.model, "lock", None)
+        return [({"model": "d100m"}, 1 if lock is not None and lock.locked() else 0), ({"model": "qwen3vl2b"}, 0)]
+
+    def queue_depth():
+        # V1 has no waiting queue: requests are rejected while the worker is busy.
+        return [({"model": "d100m"}, 0), ({"model": "qwen3vl2b"}, 0)]
+
+    metrics.gauge_provider(
+        "embedding_model_loaded", "Loaded embedding models (1 loaded, 0 unavailable).", model_loaded
+    )
+    metrics.gauge_provider(
+        "embedding_queue_depth", "Requests waiting for an embedding worker (always 0 in V1).",
+        queue_depth,
+    )
+    metrics.gauge_provider(
+        "embedding_in_flight", "Embedding requests currently using a worker.", in_flight,
+    )
 
     return app
