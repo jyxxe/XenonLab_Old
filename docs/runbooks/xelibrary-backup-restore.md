@@ -27,12 +27,22 @@ uv run python scripts/xelibrary_backup.py verify \
   --backup /path/to/protected-storage/xelibrary-YYYYMMDD
 ```
 
-The manifest records the source root, catalogue table mappings, and each
-payload file's size and SHA-256. Verification checks the manifest checksum,
-all payload hashes, SQLite integrity, catalogue-to-`.xl` identity/path mapping,
-and that attachment references resolve to correctly hashed objects with no
-missing or orphan table/object files. A failure means the snapshot is not
-usable; preserve the diagnostic and do not treat it as a completed backup.
+The manifest records the source root, catalogue table mappings, every
+content-addressed object with a `referenced` flag, and each payload file's size
+and SHA-256. Verification checks the manifest checksum, all payload hashes,
+SQLite integrity, catalogue-to-`.xl` identity/path mapping, and that every
+referenced or unreferenced object has the correct content-addressed path and
+hash. Missing referenced objects, corrupt objects, and orphan `.xl` files fail
+validation. Correct unreferenced objects are retained and listed; this tool
+does not delete them. Existing `uploads.sqlite` and `objects/.uploads` files
+are included in the payload manifest and restore, but upload-session/part
+cross-file consistency is not yet validated. A failure means the snapshot is
+not usable; preserve the diagnostic and do not treat it as completed.
+
+SQLite database snapshots use SQLite's backup API, which incorporates
+committed WAL frames. Recognized `catalogue.sqlite`, `uploads.sqlite`, and
+mapped `.xl` `-wal`/`-shm` sidecars are validated as present and are not copied
+as separate files. Sidecars without their corresponding database are rejected.
 
 ## Isolated restore rehearsal
 

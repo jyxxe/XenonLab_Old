@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from uuid import UUID
 
 
 class BackupError(ValueError):
@@ -46,6 +47,22 @@ def _integrity(path: Path) -> None:
         raise BackupError(f"cannot read SQLite database {path}: {exc}") from exc
 
 
+def _snapshot_sqlite(source: Path, destination: Path) -> None:
+    source_db = _db(source)
+    destination_db = sqlite3.connect(destination)
+    try:
+        source_db.backup(destination_db)
+        mode = destination_db.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+        if mode.lower() != "delete":
+            raise BackupError(f"could not materialize SQLite snapshot without WAL sidecars: {destination}")
+    finally:
+        source_db.close()
+        destination_db.close()
+    for suffix in ("-wal", "-shm"):
+        if Path(str(destination) + suffix).exists():
+            raise BackupError(f"SQLite snapshot left an unexpected sidecar: {destination}{suffix}")
+
+
 def _regular(path: Path) -> None:
     if path.is_symlink() or not path.is_file():
         raise BackupError(f"expected regular file: {path}")
@@ -65,6 +82,13 @@ def validate_data_root(root: Path) -> list[dict]:
     catalog = root / "catalogue.sqlite"
     _regular(catalog)
     _integrity(catalog)
+    databases = {"catalogue.sqlite"}
+    upload_db = root / "uploads.sqlite"
+    if upload_db.exists():
+        _regular(upload_db)
+        _integrity(upload_db)
+        databases.add("uploads.sqlite")
+    _validate_sidecars(root, databases)
     try:
         with _db(catalog) as db:
             rows = db.execute("SELECT id,path,name FROM tables ORDER BY id").fetchall()
@@ -107,9 +131,15 @@ def validate_data_root(root: Path) -> list[dict]:
         records.append({"id": tid, "path": row["path"], "name": row["name"], "file": f"tables/{tid}.xl"})
     actual = set()
     for p in table_dir.iterdir():
-        if p.is_symlink() or not p.is_file() or p.suffix != ".xl":
+        if p.is_symlink() or not p.is_file():
             raise BackupError(f"unexpected table directory entry: {p}")
-        actual.add(p.name)
+        if p.name.endswith((".xl-wal", ".xl-shm")):
+            if p.name[:-4] not in expected:
+                raise BackupError(f"orphan SQLite sidecar: {p}")
+        elif p.suffix == ".xl":
+            actual.add(p.name)
+        else:
+            raise BackupError(f"unexpected table directory entry: {p}")
     if expected != actual:
         raise BackupError(
             f"table file set mismatch; missing={sorted(expected - actual)}, orphan={sorted(actual - expected)}"
@@ -122,10 +152,51 @@ def validate_data_root(root: Path) -> list[dict]:
             actual_objects.add(p.relative_to(root).as_posix())
         elif not p.is_dir():
             raise BackupError(f"unexpected object store entry: {p}")
-    if referenced != actual_objects:
-        raise BackupError(
-            f"object set mismatch; missing={sorted(referenced - actual_objects)}, orphan={sorted(actual_objects - referenced)}"
-        )
+    missing = referenced - actual_objects
+    if missing:
+        raise BackupError(f"missing attachment objects: {sorted(missing)}")
+    for rel in actual_objects:
+        parts = PurePosixPath(rel).parts
+        if (
+            len(parts) != 5
+            or parts[:2] != ("objects", "sha256")
+            or not _HASH.fullmatch(parts[4])
+            or parts[2] != parts[4][:2]
+            or parts[3] != parts[4][2:4]
+        ):
+            raise BackupError(f"invalid content-addressed object path: {rel}")
+        if _sha(root / rel) != parts[4]:
+            raise BackupError(f"content-addressed object hash mismatch: {rel}")
+    return records
+
+
+def _validate_sidecars(root: Path, databases: set[str]) -> None:
+    for entry in root.iterdir():
+        if entry.name.endswith(("-wal", "-shm")):
+            database_name = entry.name[:-4]
+            if database_name not in databases:
+                raise BackupError(f"orphan SQLite sidecar: {entry}")
+            _regular(entry)
+
+
+def _object_manifest(root: Path) -> list[dict]:
+    referenced = set()
+    for table in (root / "tables").glob("*.xl"):
+        with _db(table) as db:
+            for row in db.execute("SELECT object_hash FROM __xl_attachments"):
+                referenced.add(row["object_hash"])
+    records = []
+    for path in sorted((root / "objects/sha256").rglob("*")):
+        if path.is_file():
+            digest = path.name
+            records.append(
+                {
+                    "path": path.relative_to(root).as_posix(),
+                    "sha256": digest,
+                    "size": path.stat().st_size,
+                    "referenced": digest in referenced,
+                }
+            )
     return records
 
 
@@ -151,26 +222,31 @@ def create_backup(source: Path, destination: Path, *, quiesced: bool = False) ->
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     destination.mkdir(mode=0o700)
     try:
-        for rel in ["catalogue.sqlite", "tables", "objects"]:
+        for rel in ["catalogue.sqlite", "uploads.sqlite", "tables", "objects"]:
             src, dst = source / rel, destination / rel
+            if not src.exists():
+                if rel == "uploads.sqlite":
+                    continue
+                raise BackupError(f"required source path is missing: {src}")
             if src.is_dir():
                 dst.mkdir(mode=0o700)
                 for p in sorted(src.rglob("*")):
                     sub = dst / p.relative_to(src)
                     if p.is_symlink():
                         raise BackupError(f"symlink in source: {p}")
+                    if p.is_file() and p.name.endswith(("-wal", "-shm")):
+                        # The SQLite backup API folds committed WAL frames into the snapshot.
+                        continue
                     if p.is_dir():
                         sub.mkdir(mode=0o700, parents=True, exist_ok=True)
                     elif p.is_file():
                         if p.suffix == ".sqlite" or p.suffix == ".xl":
-                            with _db(p) as src_db, sqlite3.connect(sub) as dst_db:
-                                src_db.backup(dst_db)
+                            _snapshot_sqlite(p, sub)
                         else:
                             shutil.copyfile(p, sub)
                         os.chmod(sub, 0o600)
             else:
-                with _db(src) as src_db, sqlite3.connect(dst) as dst_db:
-                    src_db.backup(dst_db)
+                _snapshot_sqlite(src, dst)
                 os.chmod(dst, 0o600)
         tables = validate_data_root(destination)
         manifest = {
@@ -178,6 +254,7 @@ def create_backup(source: Path, destination: Path, *, quiesced: bool = False) ->
             "created_at": datetime.now(timezone.utc).isoformat(),
             "source_root": str(source),
             "tables": tables,
+            "objects": _object_manifest(destination),
             "files": _payload_files(destination),
         }
         raw = (json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode()
@@ -186,6 +263,7 @@ def create_backup(source: Path, destination: Path, *, quiesced: bool = False) ->
         (destination / "manifest.sha256").write_text(hashlib.sha256(raw).hexdigest() + "\n")
         os.chmod(destination / "manifest.sha256", 0o600)
         os.chmod(destination, 0o700)
+        verify_backup(destination)
         return destination
     except Exception:
         shutil.rmtree(destination)
@@ -213,8 +291,21 @@ def verify_backup(backup: Path) -> dict:
         pure = PurePosixPath(rel) if isinstance(rel, str) else None
         if pure is None or pure.is_absolute() or ".." in pure.parts or "\\" in rel or not pure.parts:
             raise BackupError(f"unsafe manifest path: {rel!r}")
+        upload_path = False
+        if len(pure.parts) == 3 and pure.parts[:2] == ("objects", ".uploads"):
+            upload_path = re.fullmatch(r"\.[0-9a-f-]{36}\.[0-9a-f-]{36}\.tmp", pure.name) is not None
+        elif len(pure.parts) == 4 and pure.parts[:2] == ("objects", ".uploads"):
+            try:
+                session_valid = str(UUID(pure.parts[2])) == pure.parts[2]
+            except ValueError:
+                session_valid = False
+            upload_path = session_valid and (
+                re.fullmatch(r"[0-9]{8}\.part", pure.name) is not None
+                or re.fullmatch(r"\.[0-9]{8}\.[0-9a-f-]{36}\.tmp", pure.name) is not None
+            )
         allowed = (
-            rel == "catalogue.sqlite"
+            rel in ("catalogue.sqlite", "uploads.sqlite")
+            or upload_path
             or (len(pure.parts) == 2 and pure.parts[0] == "tables" and pure.suffix == ".xl")
             or (
                 len(pure.parts) == 5
@@ -242,6 +333,8 @@ def verify_backup(backup: Path) -> dict:
     tables = validate_data_root(backup)
     if tables != manifest.get("tables"):
         raise BackupError("manifest table catalogue mismatch")
+    if _object_manifest(backup) != manifest.get("objects"):
+        raise BackupError("manifest object catalogue mismatch")
     return manifest
 
 
