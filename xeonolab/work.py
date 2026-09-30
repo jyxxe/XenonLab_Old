@@ -1,10 +1,15 @@
 """Durable, fenced collaboration claims. Issue text never becomes executable input."""
 
+import hashlib
+import json
 import os
+import ssl
 import time
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
+import httpx
 from fastapi import Depends, Request
 from pydantic import BaseModel, Field
 
@@ -21,6 +26,10 @@ class IssueLink(BaseModel):
     repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
     target_issue_id: int = Field(ge=1)
     type: str = Field(pattern=r"^(duplicate_of|related_to|blocked_by|blocks|supersedes)$")
+
+
+class Reconcile(BaseModel):
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class Claim(BaseModel):
@@ -41,6 +50,8 @@ def install(app):
           UNIQUE(repository,issue_id));
         CREATE TABLE IF NOT EXISTS issue_sync(repository TEXT,issue_id INTEGER,updated REAL,
           PRIMARY KEY(repository,issue_id));
+        CREATE TABLE IF NOT EXISTS issue_snapshots(repository TEXT,issue_id INTEGER,digest TEXT,
+          conflict INTEGER DEFAULT 0,PRIMARY KEY(repository,issue_id));
         CREATE TABLE IF NOT EXISTS issue_links(repository TEXT,source INTEGER,target INTEGER,kind TEXT,
           actor TEXT,created REAL,PRIMARY KEY(repository,source,target,kind));
         CREATE TABLE IF NOT EXISTS work_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,
@@ -64,7 +75,7 @@ def install(app):
             (str(uuid4()), actor.sub, event, work_id, epoch, time.time()),
         )
 
-    def ingest(db, payload):
+    def ingest(db, payload, authoritative=False):
         if not isinstance(payload, dict) or not isinstance(payload.get("issue"), dict):
             return
         metadata = payload.get("repository")
@@ -89,7 +100,43 @@ def install(app):
         previous = db.execute(
             "SELECT updated FROM issue_sync WHERE repository=? AND issue_id=?", (repository, number)
         ).fetchone()
-        if previous and previous[0] >= stamp:
+        digest = hashlib.sha256(
+            json.dumps({"title": title, "state": state}, sort_keys=True).encode()
+        ).hexdigest()
+        snapshot = db.execute(
+            "SELECT * FROM issue_snapshots WHERE repository=? AND issue_id=?", (repository, number)
+        ).fetchone()
+        if previous and previous[0] > stamp:
+            if authoritative:
+                raise APIError(409, "SOURCE_STALE", "source older than recorded event")
+            return
+        if previous and previous[0] == stamp and not authoritative:
+            if snapshot and snapshot["digest"] == digest and not snapshot["conflict"]:
+                return
+            db.execute(
+                "UPDATE work SET status='blocked',holder=NULL,expires=0,epoch=epoch+1 "
+                "WHERE repository=? AND issue_id=?",
+                (repository, number),
+            )
+            db.execute(
+                "INSERT INTO issue_snapshots VALUES(?,?,?,1) ON CONFLICT(repository,issue_id) "
+                "DO UPDATE SET conflict=1",
+                (repository, number, digest),
+            )
+            item = db.execute(
+                "SELECT id,epoch FROM work WHERE repository=? AND issue_id=?", (repository, number)
+            ).fetchone()
+            db.execute(
+                "INSERT INTO work_audit VALUES(?,?,?,?,?,?)",
+                (
+                    str(uuid4()),
+                    "forgejo-webhook",
+                    "issue.sync_conflict",
+                    item["id"],
+                    item["epoch"],
+                    time.time(),
+                ),
+            )
             return
         item = db.execute(
             "SELECT * FROM work WHERE repository=? AND issue_id=?", (repository, number)
@@ -112,11 +159,16 @@ def install(app):
         else:
             work_id = item["id"]
             db.execute("UPDATE work SET title=? WHERE id=?", (title, work_id))
-            if state == "closed" or (state == "open" and item["status"] == "completed"):
+            if state == "closed" or (state == "open" and item["status"] in ("completed", "blocked")):
                 db.execute(
                     "UPDATE work SET status=?,holder=NULL,expires=0,epoch=epoch+1 WHERE id=?",
                     ("completed" if state == "closed" else "queued", work_id),
                 )
+        db.execute(
+            "INSERT INTO issue_snapshots VALUES(?,?,?,0) ON CONFLICT(repository,issue_id) "
+            "DO UPDATE SET digest=excluded.digest,conflict=0",
+            (repository, number, digest),
+        )
         db.execute(
             "INSERT INTO issue_sync VALUES(?,?,?) ON CONFLICT(repository,issue_id) "
             "DO UPDATE SET updated=excluded.updated",
@@ -135,6 +187,36 @@ def install(app):
         )
 
     app.state.ingest_forgejo = ingest
+
+    @app.post("/api/v1/issues/{issue_id}/reconcile")
+    def reconcile(issue_id: int, body: Reconcile, request: Request, actor=Depends(scope("dev:write"))):
+        repository_allowed(body.repository)
+        if issue_id < 1:
+            raise APIError(422, "INVALID_ISSUE", "positive issue number required")
+        endpoint = os.getenv("FORGEJO_URL")
+        if not endpoint:
+            raise APIError(503, "FORGEJO_NOT_CONFIGURED", "source API not configured")
+        context = ssl.create_default_context()
+        if os.getenv("FORGEJO_CA_FILE"):
+            context.load_verify_locations(Path(os.environ["FORGEJO_CA_FILE"]))
+        try:
+            with httpx.Client(verify=context, trust_env=False, timeout=30) as client:
+                result = client.get(
+                    endpoint.rstrip("/") + "/api/v1/repos/" + body.repository + "/issues/" + str(issue_id)
+                )
+                result.raise_for_status()
+                issue = result.json()
+        except (httpx.HTTPError, ValueError):
+            raise APIError(503, "FORGEJO_UNAVAILABLE", "source state could not be verified") from None
+        if not isinstance(issue, dict) or issue.get("number") != issue_id:
+            raise APIError(503, "INVALID_SOURCE", "source returned a different issue")
+        with transaction(database) as db:
+            ingest(db, {"repository": {"full_name": body.repository}, "issue": issue}, authoritative=True)
+            item = db.execute(
+                "SELECT * FROM work WHERE repository=? AND issue_id=?", (body.repository, issue_id)
+            ).fetchone()
+            audit(db, actor, "issue.reconciled", item["id"], item["epoch"])
+            return response(request, dict(item))
 
     @app.post("/api/v1/work", status_code=201)
     def create(body: WorkCreate, request: Request, actor=Depends(scope("dev:write"))):
@@ -172,6 +254,8 @@ def install(app):
     def claim(work_id: str, body: Claim, request: Request, actor=Depends(scope("dev:write"))):
         with transaction(database) as db:
             item = load(db, work_id)
+            if item["status"] == "blocked":
+                raise APIError(409, "SYNC_CONFLICT", "resolve source conflict before claiming")
             if item["status"] == "completed":
                 raise APIError(409, "WORK_COMPLETED", "completed task cannot be claimed")
             if item["holder"] is not None and item["expires"] > time.time():

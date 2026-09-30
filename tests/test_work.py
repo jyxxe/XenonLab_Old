@@ -176,3 +176,80 @@ def test_legacy_delivery_history_survives_event_store_migration(settings, monkey
     )
     assert result.status_code == 200 and result.json()["data"]["duplicate"] is True
     assert (settings.data_dir / "events.sqlite").exists()
+
+
+def test_equal_timestamp_conflict_blocks_until_source_reconciliation(settings, monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    import httpx
+
+    from xeonolab import work
+
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    monkeypatch.setenv("FORGEJO_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.setenv("FORGEJO_URL", "https://forgejo.example")
+    client = TestClient(create_app("dev-agent", settings))
+
+    def event(delivery, state):
+        raw = json.dumps(
+            {
+                "repository": {"full_name": "xenon-admin/XeonoLab"},
+                "issue": {
+                    "number": 7,
+                    "title": "Same second",
+                    "state": state,
+                    "updated_at": "2026-09-30T10:00:00Z",
+                },
+            }
+        ).encode()
+        return client.post(
+            "/api/v1/webhooks/forgejo",
+            content=raw,
+            headers={
+                "X-Forgejo-Event": "issues",
+                "X-Forgejo-Delivery": delivery,
+                "X-Forgejo-Signature": hmac.new(b"test-secret", raw, hashlib.sha256).hexdigest(),
+            },
+        )
+
+    assert event("first", "open").status_code == 200
+    item = client.get("/api/v1/work", headers=auth()).json()["data"][0]
+    path = "/api/v1/work/" + item["id"]
+    first = client.post(path + "/claim", headers=auth(), json={}).json()["data"]
+    assert event("second", "closed").status_code == 200
+    assert client.post(path + "/claim", headers=auth(), json={}).status_code == 409
+    assert client.post(path + "/release", headers=auth(), json={"epoch": first["epoch"]}).status_code == 409
+    assert client.get("/api/v1/work", headers=auth()).json()["data"][0]["status"] == "blocked"
+
+    class Source:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url):
+            assert url == "https://forgejo.example/api/v1/repos/xenon-admin/XeonoLab/issues/7"
+            return httpx.Response(
+                200,
+                request=httpx.Request("GET", url),
+                json={
+                    "number": 7,
+                    "title": "Current source",
+                    "state": "open",
+                    "updated_at": "2026-09-30T10:00:00Z",
+                },
+            )
+
+    monkeypatch.setattr(work.httpx, "Client", Source)
+    result = client.post(
+        "/api/v1/issues/7/reconcile", headers=auth(), json={"repository": "xenon-admin/XeonoLab"}
+    )
+    assert result.status_code == 200 and result.json()["data"]["status"] == "queued"
+    assert result.json()["data"]["title"] == "Current source"
+    assert client.post(path + "/claim", headers=auth(), json={}).status_code == 200

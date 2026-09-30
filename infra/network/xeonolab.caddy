@@ -51,6 +51,9 @@ https://llm.xenon.lan {
   reverse_proxy 192.168.0.106:8105
 }
 https://192.168.0.101:9445 {
+  handle_path /dev/* {
+    reverse_proxy 192.168.0.110:3000
+  }
   tls internal
   reverse_proxy 192.168.0.110:3000
 }

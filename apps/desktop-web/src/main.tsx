@@ -4,8 +4,10 @@ import './style.css';
 import {login,callback} from './auth';
 import {Permissions} from './Permissions';
 import {Work} from './Work';
+import {Knowledge} from './Knowledge';
 type App = {id:string; title:string; origin:string; entry:string; icon:string; default_size:[number,number]; singleton:boolean};
 type Window = {id:string; app_id:string; title:string; x:number; y:number; width:number; height:number; minimized:boolean};
+const builtins:App[]=[{id:'knowledge',title:'知识库',icon:'▤',origin:location.origin,entry:'/',default_size:[1100,740],singleton:true},{id:'settings',title:'系统设置',icon:'⚙',origin:location.origin,entry:'/',default_size:[850,680],singleton:true},{id:'work',title:'任务中心',icon:'✓',origin:location.origin,entry:'/',default_size:[1000,700],singleton:true}];
 const libraryView=location.hostname==='library.xenon.lan';
 const allowedMessages = new Set(['app.ready','app.request_resize','app.set_title','app.open_app','app.notify']);
 function Desktop(){
@@ -13,7 +15,7 @@ function Desktop(){
  const [apps,setApps]=useState<App[]>([]), [windows,setWindows]=useState<Window[]>([]);
  const [token,setToken]=useState(''), [error,setError]=useState(''), [notice,setNotice]=useState('');
  const [query,setQuery]=useState('FROM "/**" LIMIT 20'), [results,setResults]=useState<unknown[]>([]);
- const [connected,setConnected]=useState(false);
+ const [connected,setConnected]=useState(false),[launchpad,setLaunchpad]=useState(false);
  useEffect(()=>{callback().then(result=>{if(result){setToken(result.token);setTimeout(()=>{setToken('');setConnected(false);setNotice('登录已过期，请重新登录')},result.expires*1000)}}).catch(e=>setError(String(e)))},[]);
  useEffect(()=>{if(token)connect()},[token]);
  async function api(path:string, init:RequestInit={}){
@@ -30,7 +32,7 @@ function Desktop(){
    });
  }
  async function connect(){
-   try {const data=await api('/apps'); setApps(data);const layout=await api('/users/me/layout');setWindows(layout.windows || []);setConnected(true);setError('');}
+   try {const data=await api('/apps'); setApps([...builtins,...data.filter((a:App)=>!builtins.some(b=>b.id===a.id))]);const layout=await api('/users/me/layout');setWindows(layout.windows || []);setConnected(true);setError('');}
    catch(e){setError(String(e));}
  }
  useEffect(()=>{
@@ -54,13 +56,14 @@ function Desktop(){
    addEventListener('pointermove',move);addEventListener('pointerup',end);
  }
  async function search(){try{const data=await api('/query',{method:'POST',body:JSON.stringify({expression:query})});setResults(data);setError('')}catch(e){setError(String(e))}}
+ if(libraryView&&connected)return <Knowledge api={api}/>;
  return <main>
    <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><time>{new Date().toLocaleDateString('zh-CN')}</time></header>
-   <section className="intro"><small>YOUR KNOWLEDGE WORKSPACE</small><h1>让知识，有处可循。</h1><p>统一桌面 · 可追溯数据 · 受控工具</p></section>
+   {!connected&&<section className="intro"><small>YOUR KNOWLEDGE WORKSPACE</small><h1>让知识，有处可循。</h1><p>统一桌面 · 可追溯数据 · 受控工具</p></section>}
    {!connected?<section className="login"><h2>连接工作空间</h2><p>通过统一身份服务登录。</p><button onClick={()=>login().catch(e=>setError(String(e)))}>登录 XeonoLab</button><details><summary>API 访问令牌</summary><input type="password" aria-label="访问令牌" value={token} onChange={e=>setToken(e.target.value)} placeholder="OIDC access token"/><button onClick={connect}>连接</button></details><p className="error">{error}</p></section>:
-   <><Work api={api}/><Permissions api={api}/><section className="query"><h2>XeLibrary 查询</h2><textarea aria-label="查询表达式" value={query} onChange={e=>setQuery(e.target.value)}/><button onClick={search}>执行查询</button><button onClick={async()=>{try{await api('/users/me/layout',{method:'PUT',body:JSON.stringify({dock:apps.map(a=>a.id),windows})});setNotice('桌面布局已保存')}catch(e){setError(String(e))}}}>保存桌面</button><p className="error">{error}</p>{results.length>0&&<pre>{JSON.stringify(results,null,2)}</pre>}</section>
-   {windows.filter(w=>!w.minimized).map(w=>{const app=apps.find(a=>a.id===w.app_id);if(!app)return null;return <section className="window" key={w.id} style={{left:w.x,top:w.y,width:w.width,height:w.height}}><div className="bar" onPointerDown={e=>drag(e,w.id)}><button className="close" aria-label="关闭" onClick={()=>setWindows(ws=>ws.filter(x=>x.id!==w.id))}/><button className="min" aria-label="最小化" onClick={()=>update(w.id,{minimized:true})}/><button className="max" aria-label="最大化" onClick={()=>update(w.id,{x:20,y:45,width:innerWidth-40,height:innerHeight-140})}/><span>{w.title}</span></div><iframe onLoad={event=>{if(app.id==='xelibrary')(event.currentTarget as HTMLIFrameElement).contentWindow?.postMessage({type:'auth.session_changed',access_token:token},app.origin)}} id={`frame-${w.id}`} title={w.title} src={new URL(app.entry,app.origin).href} sandbox="allow-scripts allow-forms allow-same-origin" referrerPolicy="no-referrer"/></section>})}
-   {!libraryView&&<nav className="dock" aria-label="应用程序">{apps.map(app=><button key={app.id} onClick={()=>open(app)} title={app.title}><b>{app.icon}</b><span>{app.title}</span></button>)}{windows.filter(w=>w.minimized).map(w=><button key={w.id} onClick={()=>update(w.id,{minimized:false})}>{w.title} ↗</button>)}</nav>}</>}
+   <>{launchpad&&<section className="launchpad" aria-label="LaunchPad"><button className="launchpad-close" onClick={()=>setLaunchpad(false)}>关闭 LaunchPad</button><h2>LaunchPad</h2><div>{apps.map(app=><button key={app.id} onClick={()=>{open(app);setLaunchpad(false)}}><b>{app.icon}</b><span>{app.title}</span></button>)}</div></section>}
+   {windows.filter(w=>!w.minimized).map(w=>{const app=apps.find(a=>a.id===w.app_id);if(!app)return null;return <section className="window" key={w.id} style={{left:w.x,top:w.y,width:w.width,height:w.height}}><div className="bar" onPointerDown={e=>drag(e,w.id)}><button className="close" aria-label="关闭" onClick={()=>setWindows(ws=>ws.filter(x=>x.id!==w.id))}/><button className="min" aria-label="最小化" onClick={()=>update(w.id,{minimized:true})}/><button className="max" aria-label="最大化" onClick={()=>update(w.id,{x:20,y:45,width:innerWidth-40,height:innerHeight-140})}/><span>{w.title}</span></div>{builtins.some(b=>b.id===app.id)?<div className="window-body">{app.id==='knowledge'?<Knowledge api={api}/>:app.id==='work'?<Work api={api}/>:<><Permissions api={api}/><section className="query"><h2>桌面设置</h2><button onClick={async()=>{try{await api('/users/me/layout',{method:'PUT',body:JSON.stringify({dock:apps.map(a=>a.id),windows})});setNotice('桌面布局已保存')}catch(e){setError(String(e))}}}>保存窗口布局</button><p>{error}</p></section></>}</div>:<iframe onLoad={event=>{if(app.id==='xelibrary')(event.currentTarget as HTMLIFrameElement).contentWindow?.postMessage({type:'auth.session_changed',access_token:token},app.origin)}} id={`frame-${w.id}`} title={w.title} src={new URL(app.entry,app.origin).href} sandbox="allow-scripts allow-forms allow-same-origin" referrerPolicy="no-referrer"/>}</section>})}
+   {!libraryView&&<nav className="dock" aria-label="应用程序"><button onClick={()=>setLaunchpad(!launchpad)} title="LaunchPad"><b>▦</b><span>LaunchPad</span></button>{apps.map(app=><button key={app.id} onClick={()=>open(app)} title={app.title}><b>{app.icon}</b><span>{app.title}</span></button>)}{windows.filter(w=>w.minimized).map(w=><button key={w.id} onClick={()=>update(w.id,{minimized:false})}>{w.title} ↗</button>)}</nav>}</>}
    {notice&&<aside onClick={()=>setNotice('')}>{notice}</aside>}
  </main>
 }

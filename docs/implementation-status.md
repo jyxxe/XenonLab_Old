@@ -75,3 +75,9 @@ DevAgent signed issues webhook 与 work queue 原子同步已实现并上线，F
 验证 delivery 去重、按 updated_at 防乱序覆盖、关闭撤销 claim、重开入队、repository allowlist；
 非 issues 类型仅记录原始事件。旧 events.sqlite 事件去重历史复制到 work.sqlite，原文件保留。
 不执行 Issue 文本；24 项测试覆盖签名、事务与迁移。自动 triage 仍待实现。
+
+用户 UI 优先级更新：完整 WebUI/设置、可视化知识管理器、Issues CSS、账号树、LaunchPad、持续登录。
+Issues ROOT_URL 子路径已修复；桌面功能已迁入子窗口并新增 LaunchPad（待发布）。
+知识管理器提供表筛选/创建、schema 驱动记录表格/编辑和带 If-Match 软删除；附件/导入导出/历史界面仍待完成。
+账号树与 API key 生命周期、持续登录刷新仍未实现。
+Issue 同时间戳冲突冻结与主动 source reconcile 已实现且有测试，待配置和发布；25 项测试通过。
