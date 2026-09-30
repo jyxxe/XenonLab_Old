@@ -1,0 +1,10 @@
+[Unit]
+Description=XeonoLab backend port restrictions
+After=network.target
+Before=xeonolab@dev-agent.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/xeonolab-firewall
+RemainAfterExit=true
+[Install]
+WantedBy=multi-user.target
