@@ -9,7 +9,12 @@ measurements; and writes screenshots plus a JSON report to the requested output 
 The test performs the normal OIDC login/session exchange and read-only UI actions (opening apps,
 selecting the first visible table/row, and changing settings tabs). It does not create records,
 edit ACLs, upload/bind attachments, save settings, or call mutation APIs for business resources.
-Use only a temporary test human account with a seeded readable table/row. The ACL tab requires
+Use only a temporary human test identity that has not been registered in the account tree and has
+a seeded readable table/row. The Settings account tab must return the expected read-only
+`404 ACCOUNT_NOT_FOUND`; the runner records that response separately and checks that the setup
+explanation is visible. It never clicks the initialization button or sends the bootstrap request.
+When the test identity is a human with `desktop:admin`, the initialization button must be visible;
+otherwise, a contact-admin prompt must be visible and the button must be absent. The ACL tab requires
 `xelibrary:admin` to inspect editable controls; without it the UI should show the read-only gate.
 
 ## Browser and certificate preflight
