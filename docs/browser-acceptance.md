@@ -82,3 +82,33 @@ no `certutil` on PATH. A rootless extracted `certutil` is available at
 `/home/jyx/projects/XeonoLab/runtime/browser-tools/extracted/usr/bin/certutil`; the script accepts
 that path and leaves CA import/removal to the coordinator. Syntax is checked with `node --check`;
 actual UI execution is pending the coordinator's trusted NSS entry and temporary human account.
+
+## Dashboard card packing regression (Issue 63)
+
+The local component fixture imports the candidate `Dashboard` and stylesheet directly. Its
+synthetic API results reproduce the Issue screenshot: no index jobs, 50 Harness tasks and one
+visible knowledge table. This test needs no account, production service or certificate setup.
+The fixture HTML is outside Vite's production entry point and is not included in the desktop build.
+
+Start Vite on localhost in one terminal:
+
+```sh
+cd apps/desktop-web
+npm run dev -- --host 127.0.0.1 --port 5179 --strictPort
+```
+
+Then run from the repository root:
+
+```sh
+node scripts/dashboard_browser_acceptance.mjs \
+  http://127.0.0.1:5179/tests/dashboard.html runtime/dashboard-acceptance
+```
+
+The runner launches an isolated real Google Chrome profile and saves screenshots and geometry
+in `report.json`. It checks three, two and single columns, restoring the window width, growing
+and shrinking index-job content after refresh, and the light theme. Every state must have no
+overlapping cards or horizontal grid overflow; stacked cards must retain the configured 16px
+gap. In three columns, the service card must follow the shortest preceding card. Console and
+page errors fail the run, and the knowledge button must still dispatch its application action.
+This proves local candidate layout behavior with fixture data; production OIDC and API
+integration remain covered separately by `browser_acceptance.mjs`.
