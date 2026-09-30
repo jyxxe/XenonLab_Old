@@ -195,6 +195,59 @@ def test_restore_revision_and_admin_purge(library):
     assert library.get(path + "/revisions/1", headers=auth("admin")).status_code == 404
 
 
+def test_deleted_rows_are_opt_in_and_still_acl_checked(library):
+    tid, rid = seed(library)
+    row_path = f"/api/v1/tables/{tid}/rows/{rid}"
+    assert library.delete(row_path, headers=auth(**{"If-Match": '"revision:1"'})).status_code == 200
+
+    rows_path = f"/api/v1/tables/{tid}/rows"
+    assert library.get(rows_path, headers=auth()).json()["data"] == []
+    assert library.get(rows_path + "?include_deleted=true", headers=auth()).json()["data"][0]["_deleted_at"]
+    assert library.put(
+        f"/api/v1/acl/table/{tid}", headers=auth("admin"), json={"grants": {"bob": ["read"]}}
+    ).status_code == 200
+    assert library.put(
+        f"/api/v1/acl/row/{tid}:{rid}", headers=auth("admin"), json={"grants": {}}
+    ).status_code == 200
+    assert library.get(rows_path + "?include_deleted=true", headers=auth("bob")).json()["data"] == []
+
+    assert library.put(
+        f"/api/v1/acl/row/{tid}:{rid}",
+        headers=auth("admin"),
+        json={"grants": {"bob": ["read"]}},
+    ).status_code == 200
+    visible = library.get(rows_path + "?include_deleted=true", headers=auth("bob"))
+    assert [row["_row_id"] for row in visible.json()["data"]] == [rid]
+
+
+def test_row_write_refreshes_table_revision_for_schema_and_move(library):
+    tid, rid = seed(library)
+    row_path = f"/api/v1/tables/{tid}/rows/{rid}"
+    assert library.patch(
+        row_path, headers=auth(**{"If-Match": '"revision:1"'}), json={"values": {"confidence": 0.8}}
+    ).status_code == 200
+
+    table_path = f"/api/v1/tables/{tid}"
+    table = library.get(table_path, headers=auth())
+    changed = library.patch(
+        table_path + "/schema",
+        headers=auth("admin", **{"If-Match": table.headers["ETag"]}),
+        json={"columns": [
+            {"name": "title", "type": "string", "nullable": False},
+            {"name": "confidence", "type": "float64"},
+            {"name": "source", "type": "string", "default_value": "local"},
+        ]},
+    )
+    assert changed.status_code == 200, changed.text
+    table = library.get(table_path, headers=auth())
+    moved = library.post(
+        table_path + "/move",
+        headers=auth(**{"If-Match": table.headers["ETag"]}),
+        json={"path": "/数学/移动后"},
+    )
+    assert moved.status_code == 200, moved.text
+
+
 def test_acl_inspection_and_audit_are_admin_only(library):
     tid, _ = seed(library)
     path = f"/api/v1/acl/table/{tid}"
