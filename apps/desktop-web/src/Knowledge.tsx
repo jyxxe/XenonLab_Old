@@ -16,8 +16,8 @@ export function Knowledge({api,apiPage,apiRaw}:{api:API;apiPage?:APIPage;apiRaw:
  const [message,setMessage]=useState(''),[filter,setFilter]=useState(''),[creating,setCreating]=useState(false),[name,setName]=useState(''),[path,setPath]=useState('/知识');
  const [scopes,setScopes]=useState<string[]>([]),[includeDeleted,setIncludeDeleted]=useState(false),[history,setHistory]=useState<Row[]>([]),[preview,setPreview]=useState<Row|null>(null);
  const [schemaDraft,setSchemaDraft]=useState<Column[]>(initialColumns.map(c=>({...c}))),[editingSchema,setEditingSchema]=useState(false),[destination,setDestination]=useState('');
- const [busy,setBusy]=useState(false);
- const activeTable=useRef(''),viewRequest=useRef(0),rowsRequest=useRef(0),historyRequest=useRef(0),tableListRequest=useRef(0),selectedRowKey=useRef(''),tableLoading=useRef(false);
+ const [busy,setBusy]=useState(false),[indexing,setIndexing]=useState(''),[indexMessage,setIndexMessage]=useState('');
+ const activeTable=useRef(''),viewRequest=useRef(0),rowsRequest=useRef(0),historyRequest=useRef(0),tableListRequest=useRef(0),selectedRowKey=useRef(''),tableLoading=useRef(false),indexRequest=useRef(0);
  const canWrite=scopes.includes('xelibrary:write');
  const canAdmin=scopes.includes('xelibrary:admin');
 
@@ -42,8 +42,8 @@ export function Knowledge({api,apiPage,apiRaw}:{api:API;apiPage?:APIPage;apiRaw:
  useEffect(()=>{void loadTables();api('/users/me').then((me:ScopeResponse)=>setScopes(me.scopes||[])).catch(e=>setMessage(String(e)))},[]);
 
  async function choose(t:Table){
-  activeTable.current=t.id;selectedRowKey.current='';const request=++viewRequest.current;++rowsRequest.current;++historyRequest.current;
-  setTable(t);setSelected(null);setValues({});setRows([]);setRowsCursor(null);setLoadingRows(false);setColumns([]);setSchemaDraft([]);setHistory([]);setPreview(null);setEditingSchema(false);setDestination(t.path);setMessage('');
+  activeTable.current=t.id;selectedRowKey.current='';const request=++viewRequest.current;++rowsRequest.current;++historyRequest.current;++indexRequest.current;
+  setTable(t);setSelected(null);setValues({});setRows([]);setRowsCursor(null);setLoadingRows(false);setColumns([]);setSchemaDraft([]);setHistory([]);setPreview(null);setEditingSchema(false);setDestination(t.path);setMessage('');setIndexing('');setIndexMessage('');
   try{
    const [rowsPage,schema]=await Promise.all([
     fetchRowsPage(t.id,'',includeDeleted),
@@ -136,6 +136,26 @@ export function Knowledge({api,apiPage,apiRaw}:{api:API;apiPage?:APIPage;apiRaw:
    const moved={...current,path:result.path};setTables(old=>old.map(item=>item.id===current.id?moved:item));if(activeTable.current===current.id){setTable(moved);await choose(moved);setMessage('知识表已移动')}
   }catch(e){if(activeTable.current===current.id)setMessage(String(e))}finally{setBusy(false)}
  }
+ async function reindex(active:Table){
+  if(!canAdmin||indexing)return;const request=++indexRequest.current;
+  try{
+   const result=await api('/index/reindex',{method:'POST',body:JSON.stringify({table_id:active.id})});
+   if(indexRequest.current!==request)return;
+   setIndexing(result.job_id);setIndexMessage('索引任务已排队，等待 Embedding worker…');
+   await poll(result.job_id,request);
+  }catch(e){if(indexRequest.current===request){setIndexing('');setIndexMessage(String(e))}}
+ }
+ async function poll(jobId:string,request:number){
+  for(let attempt=0;attempt<300;attempt++){
+   await new Promise(resolve=>setTimeout(resolve,2000));
+   if(indexRequest.current!==request)return;
+   let job:any;
+   try{job=await api(`/jobs/${jobId}`)}catch(e){if(indexRequest.current===request){setIndexing('');setIndexMessage(String(e))}return}
+   if(job.status==='completed'){setIndexing('');setIndexMessage(`索引完成：${new Date(job.updated_at||Date.now()).toLocaleTimeString('zh-CN')}`);return}
+   if(job.status==='failed'){setIndexing('');setIndexMessage(`索引失败：${job.error||'请检查 Embedding 服务'}`);return}
+  }
+  if(indexRequest.current===request){setIndexing('');setIndexMessage('索引仍在后台运行，可在系统面板的 Embedding 队列查看')}
+ }
 
  return <div className="knowledge"><div className="knowledge-sidebar"><h2>知识库</h2><input aria-label="筛选知识表" placeholder="搜索路径或表名" value={filter} onChange={e=>setFilter(e.target.value)}/>
   <button disabled={!canWrite} title={!canWrite?'需要 xelibrary:write 权限':''} onClick={()=>{setCreating(!creating);if(!creating)setSchemaDraft(initialColumns.map(c=>({...c})));setMessage('')}}>新建知识表</button><button disabled={loadingTables} onClick={()=>void loadTables()}>{loadingTables?'加载中…':'刷新'}</button>
@@ -143,7 +163,8 @@ export function Knowledge({api,apiPage,apiRaw}:{api:API;apiPage?:APIPage;apiRaw:
   {tables.filter(t=>(t.path+'/'+t.name).toLowerCase().includes(filter.toLowerCase())).map(t=><button className={table?.id===t.id?'active':''} key={t.id} onClick={()=>void choose(t)}><strong>{t.name}</strong><small>{t.path}</small></button>)}
   {tableCursor&&<button disabled={loadingTables} onClick={()=>void loadTables(true)}>{loadingTables?'加载中…':'加载更多知识表'}</button>}
  </div><div className="knowledge-content"><h2>{table?table.path+'/'+table.name:'选择知识表'}</h2><p role="status" aria-live="polite">{message}</p>{table&&<>
-  <div className="knowledge-actions"><button disabled={!canWrite} onClick={()=>select(null)}>新增记录</button><button disabled={busy} onClick={()=>void choose(table)}>刷新记录</button><label><input type="checkbox" checked={includeDeleted} onChange={e=>{const next=e.target.checked;setIncludeDeleted(next);if(!next&&selected?._deleted_at)select(null);void refreshRows(table.id,next)}}/>显示已软删除记录</label></div>
+  <div className="knowledge-actions"><button disabled={!canWrite} onClick={()=>select(null)}>新增记录</button><button disabled={busy} onClick={()=>void choose(table)}>刷新记录</button>{canAdmin&&<button disabled={busy||!!indexing} onClick={()=>void reindex(table)}>{indexing?'索引进行中…':'重建 Embedding 索引'}</button>}<label><input type="checkbox" checked={includeDeleted} onChange={e=>{const next=e.target.checked;setIncludeDeleted(next);if(!next&&selected?._deleted_at)select(null);void refreshRows(table.id,next)}}/>显示已软删除记录</label></div>
+  {indexMessage&&<p role="status" aria-live="polite">{indexMessage}</p>}
   <section className="table-management"><strong>字段</strong><span>{columns.map(c=>`${c.name} · ${c.type}${c.nullable?' · 可空':''}`).join('，')}</span>{canAdmin&&<button disabled={busy||!Number.isInteger(table.table_revision)} onClick={()=>{setSchemaDraft(columns.map(c=>({...c})));setEditingSchema(!editingSchema)}}>{editingSchema?'取消编辑字段':'修改字段'}</button>}
    {editingSchema&&<div className="schema-management"><SchemaEditor columns={schemaDraft} change={setSchemaDraft} disabled={busy}/><button disabled={busy||!canAdmin||!Number.isInteger(table.table_revision)} onClick={()=>void saveSchema()}>保存字段定义</button></div>}
    <div className="move-table"><label>移动到路径<input disabled={!canWrite||!Number.isInteger(table.table_revision)||busy} value={destination} onChange={e=>setDestination(e.target.value)}/></label><button disabled={!canWrite||busy||!Number.isInteger(table.table_revision)||destination===table.path} onClick={()=>void moveTable()}>移动知识表</button></div>

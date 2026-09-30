@@ -1223,6 +1223,20 @@
               }
             ],
             "title": "Timezone"
+          },
+          "widgets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Widgets"
           }
         },
         "additionalProperties": false,

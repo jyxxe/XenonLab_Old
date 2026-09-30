@@ -77,8 +77,17 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     )
     changed = client.patch(url, headers=auth(), json={"accent": "purple"}).json()["data"]
     assert changed["theme"] == "dark" and changed["timezone"] == "Asia/Shanghai"
+    assert changed["widgets"] == ["clock", "status"]
+    changed = client.patch(url, headers=auth(), json={"widgets": ["clock"]}).json()["data"]
+    assert changed["widgets"] == ["clock"]
     assert client.get(url, headers=auth("bob")).json()["data"]["theme"] == "system"
-    for invalid in ({"timezone": "Unknown/Zone"}, {"theme": None}, {"unexpected": True}):
+    for invalid in (
+        {"timezone": "Unknown/Zone"},
+        {"theme": None},
+        {"unexpected": True},
+        {"widgets": ["bogus"]},
+        {"widgets": "clock"},
+    ):
         assert client.patch(url, headers=auth(), json=invalid).status_code == 422
     restarted = TestClient(create_app("desktop-web", settings))
     assert restarted.get(url, headers=auth()).json()["data"] == changed

@@ -3,6 +3,7 @@
 import json
 import os
 import threading
+from typing import Literal
 from uuid import uuid4
 
 import httpx
@@ -156,6 +157,23 @@ def install(app, catalogue, file, authorize, allowed, load_row):
         jobs.create(job_id, actor.sub, body.table_id)
         background.add_task(run, job_id, body.table_id, actor)
         return response(request, {"job_id": job_id})
+
+    @app.get("/api/v1/jobs")
+    def job_list(
+        request: Request,
+        table_id: str = "",
+        status: Literal["queued", "running", "completed", "failed"] | None = None,
+        limit: int = 50,
+        actor=Depends(scope("xelibrary:admin")),
+    ):
+        """Embedding/index queue view for administrators; reindex itself stays admin-only."""
+        if not 1 <= limit <= 200:
+            raise APIError(422, "INVALID_LIMIT", "limit outside range")
+        return response(
+            request,
+            jobs.list(table_id=table_id or None, status=status, owner=actor.sub, limit=limit),
+            counts=jobs.counts(table_id=table_id or None, owner=actor.sub),
+        )
 
     @app.get("/api/v1/jobs/{job_id}")
     def job(job_id: str, request: Request, actor=Depends(scope("xelibrary:admin"))):
