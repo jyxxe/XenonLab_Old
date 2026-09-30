@@ -3,7 +3,29 @@
 This is the local implementation for plan.md §72. It collects one explicitly configured physical ZFS
 pool on the PVE host and publishes its current byte counts to the HF-cache VM (VM 103 in the existing
 inventory). The receiver writes the HF-cache metrics file; it does not query PVE APIs or run commands
-on the PVE host. No pool name, host address, receiver port, or HMAC key is selected by this change.
+on the PVE host. Read-only PVE API inspection on 2026-10-01 confirmed the pool and host addresses
+below. The receiver port and HMAC secret still need provisioning before production activation.
+
+## Confirmed production mapping
+
+Read-only PVE inventory reports physical pool `aux-10t`, `ONLINE`, with `hf-cache-disk` backed by
+`aux-10t/hf-cache` and `fnos-disk` backed by `aux-10t/fnos`. Both logical storages therefore share
+the same physical pool and their displayed free space must never be added together. VM 103 (`hf-cache`)
+is `192.168.0.103`; its 2 TiB data volume is already mounted as ext4 at `/srv/hf-cache`. The PVE host
+is `192.168.0.10`.
+
+The deployment values established by that read-only check are:
+
+| Setting | Value |
+|---|---|
+| `POOL_TELEMETRY_POOL` | `aux-10t` |
+| `POOL_TELEMETRY_ALLOWED_POOLS` | `aux-10t` |
+| `POOL_TELEMETRY_BIND_ADDRESS` | `192.168.0.103` |
+| `POOL_TELEMETRY_RECEIVER_URL` | `http://192.168.0.103:<selected-port>/api/v1/pool-metrics` |
+| `POOL_METRICS_FILE` | `/var/lib/xeonolab/pool-telemetry/physical-pool.json` |
+
+Select a receiver port that is confirmed unused on VM 103. Generate a new random HMAC secret and
+install it independently on both hosts with root-only access; do not reuse any API credential.
 
 ## File contract
 

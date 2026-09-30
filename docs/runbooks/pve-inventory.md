@@ -1,4 +1,4 @@
-# PVE inventory — 2026-09-30
+# PVE inventory — 2026-10-01
 
 Read-only PVE API inspection succeeded on node `pve`. Host has 36 CPU threads and about
 126 GiB visible RAM. Existing VM IDs 100–111 are running. No VM was stopped or deleted.
@@ -18,9 +18,11 @@ Read-only PVE API inspection succeeded on node `pve`. Host has 36 CPU threads an
 | 110 | dev | 2 | 60 |
 | 111 | dev-agent | 10 | 60 |
 
-Storage: `local-lvm` about 816 GiB; `zfs-mirror-18t` about 16.2 TiB;
-`fnos-disk` and `hf-cache-disk` each report about 8.97 TiB. Their shared physical backing
-must be verified before provisioning: reported per-pool availability must not be added together.
+Read-only follow-up confirmed physical ZFS pool `aux-10t` is `ONLINE`. `hf-cache-disk` maps to
+`aux-10t/hf-cache`; `fnos-disk` maps to `aux-10t/fnos`. Both logical storages share that physical
+pool, so their reported free space must not be added together. `zfs-mirror-18t` is a separate
+`ONLINE` pool. VM 103's 2 TiB data volume is mounted as ext4 at `/srv/hf-cache`; its guest IP is
+`192.168.0.103`. The PVE host IP is `192.168.0.10`.
 
 Desired layout: `infra/pve/desired-vms.json`. The existing auth VM is an additional resource
 outside the planned 11 VMs; consolidating OIDC into Docker Server is needed before final RAM allocation.
