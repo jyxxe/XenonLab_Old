@@ -22,7 +22,7 @@ def install(app, catalogue, file, authorize, allowed, load_row):
     lock = threading.Lock()
     jobs = {}
     endpoint = os.getenv("EMBEDDING_URL")
-    credential = os.getenv("EMBEDDING_SERVICE_TOKEN")
+    credential = os.getenv("EMBEDDING_SERVICE_TOKEN") or os.getenv("EMBEDDING_CLIENT_SECRET_FILE")
     tokenizer_path = os.getenv("D100M_TOKENIZER_PATH")
 
     def configured():
@@ -33,9 +33,11 @@ def install(app, catalogue, file, authorize, allowed, load_row):
 
     def embedding(texts):
         with httpx.Client(timeout=120, trust_env=False) as client:
+            from .oauth import service_token
+
             result = client.post(
                 endpoint.rstrip("/") + "/v1/embeddings",
-                headers={"Authorization": "Bearer " + credential},
+                headers={"Authorization": "Bearer " + service_token("EMBEDDING")},
                 json={"model": "fast", "input": texts},
             )
         if result.status_code != 200:

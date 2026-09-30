@@ -59,6 +59,10 @@ def create_app(settings=None):
         if not all(200 <= dimension <= 4000 for dimension in body.default_size):
             raise APIError(422, "INVALID_SIZE", "application size outside bounds")
 
+    @app.get("/api/v1/auth/config")
+    def auth_config():
+        return {"issuer": app.state.settings.issuer, "client_id": "desktop"}
+
     @app.get("/api/v1/apps")
     def apps(request: Request, actor=Depends(scope("desktop:read"))):
         with connect(path) as db:

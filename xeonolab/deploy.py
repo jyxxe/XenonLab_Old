@@ -1,3 +1,6 @@
+import json
+import os
+import subprocess
 import time
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -74,8 +77,8 @@ def create_app(settings=None):
 
     @app.post("/api/v1/releases/{rid}/approve")
     def approve(rid: str, request: Request, actor=Depends(scope("deploy:approve"))):
-        if actor.kind != "human":
-            raise APIError(403, "HUMAN_REQUIRED", "human approval required")
+        if actor.kind not in ("human", "policy"):
+            raise APIError(403, "HUMAN_REQUIRED", "human or authorized policy approval required")
         with transaction(path) as db:
             if not db.execute("SELECT 1 FROM releases WHERE id=?", (rid,)).fetchone():
                 raise APIError(404, "RELEASE_NOT_FOUND", "release not found")
@@ -171,10 +174,39 @@ def create_app(settings=None):
                 raise APIError(409, "RELEASE_MISMATCH", "lease is bound to another release")
             if unresolved(db):
                 raise APIError(409, "DEPLOYMENT_UNRESOLVED", "deployment already running")
-        # Deliberately no command-from-request executor, Docker socket or root credentials.
-        raise APIError(
-            503, "EXECUTOR_NOT_CONFIGURED", "production executor must be installed before deployments"
-        )
+            executor = os.getenv("DEPLOY_EXECUTOR_PATH")
+            if not executor:
+                raise APIError(
+                    503, "EXECUTOR_NOT_CONFIGURED", "production executor must be installed before deployments"
+                )
+            did = str(uuid4())
+            manifest = json.loads(
+                db.execute("SELECT manifest FROM releases WHERE id=?", (body.release_id,)).fetchone()[0]
+            )
+            db.execute(
+                "INSERT INTO deployments VALUES(?,?,?,?,?)",
+                (did, body.release_id, actor.sub, body.epoch, "deploying"),
+            )
+            audit(db, actor, "deployment.started", did)
+        state = "failed"
+        try:
+            result = subprocess.run(
+                [executor],
+                input=json.dumps({"manifest": manifest, "deployment_id": did, "epoch": body.epoch}),
+                text=True,
+                capture_output=True,
+                timeout=600,
+            )
+            if result.returncode == 0:
+                candidate = json.loads(result.stdout).get("state")
+                if candidate in ("completed", "rolled_back"):
+                    state = candidate
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+        with transaction(path) as db:
+            db.execute("UPDATE deployments SET state=? WHERE id=?", (state, did))
+            audit(db, actor, "deployment." + state, did)
+        return response(request, {"deployment_id": did, "state": state})
 
     @app.get("/api/v1/deployments/{did}")
     def deployment(did: str, request: Request, actor=Depends(scope("deploy:read"))):

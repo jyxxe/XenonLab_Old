@@ -39,6 +39,7 @@ class Settings:
     audience: str = "xeonolab"
     public_key: str = ""
     dev_tokens: dict | None = None
+    role_scopes: dict | None = None
 
     @classmethod
     def environment(cls, service):
@@ -47,8 +48,13 @@ class Settings:
             os.getenv("APP_MODE", "production"),
             os.getenv("OIDC_ISSUER", ""),
             os.getenv("OIDC_AUDIENCE", "xeonolab"),
-            os.getenv("OIDC_PUBLIC_KEY", ""),
+            (
+                Path(os.environ["OIDC_PUBLIC_KEY_FILE"]).read_text()
+                if os.getenv("OIDC_PUBLIC_KEY_FILE")
+                else os.getenv("OIDC_PUBLIC_KEY", "")
+            ),
             json.loads(os.getenv("DEV_TOKENS_JSON", "{}")),
+            json.loads(os.getenv("OIDC_ROLE_SCOPES_JSON", "{}")),
         )
 
 
@@ -74,7 +80,10 @@ def identity(request: Request):
             )
         except jwt.PyJWTError:
             raise APIError(401, "INVALID_TOKEN", "invalid access token") from None
-    return Identity(claims["sub"], set(claims.get("scope", "").split()), claims.get("agent_kind", "human"))
+    scopes = set(claims.get("scope", "").split())
+    for role in claims.get("realm_access", {}).get("roles", []):
+        scopes.update((settings.role_scopes or {}).get(role, []))
+    return Identity(claims["sub"], scopes, claims.get("agent_kind", "human"))
 
 
 def scope(name):

@@ -1,0 +1,48 @@
+(xeonolab-desktop) {
+  tls internal
+  encode zstd gzip
+  header X-Content-Type-Options nosniff
+  header Referrer-Policy no-referrer
+  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/*
+  handle @desktop_api {
+    reverse_proxy 127.0.0.1:8101
+  }
+  handle /api/v1/* {
+    reverse_proxy 192.168.0.104:8100
+  }
+  handle /health/* {
+    reverse_proxy 127.0.0.1:8101
+  }
+  handle /xeonolab-ca.crt {
+    root * /var/lib/xeonolab/public
+    file_server
+  }
+  handle {
+    root * /opt/xeonolab/current/apps/desktop-web/dist
+    try_files {path} /index.html
+    file_server
+  }
+}
+https://xenon.lan, https://192.168.0.101:9443 {
+  import xeonolab-desktop
+}
+https://library.xenon.lan {
+  import xeonolab-desktop
+  header Content-Security-Policy "frame-ancestors https://xenon.lan https://192.168.0.101:9443"
+}
+https://auth.xenon.lan {
+  tls internal
+  reverse_proxy 192.168.0.109:8180
+}
+https://tools.xenon.lan {
+  tls internal
+  reverse_proxy 192.168.0.106:8102
+}
+https://deploy.xenon.lan {
+  tls internal
+  reverse_proxy 192.168.0.106:8103
+}
+https://llm.xenon.lan {
+  tls internal
+  reverse_proxy 192.168.0.106:8105
+}

@@ -22,3 +22,9 @@ select = ["E4", "E7", "E9", "F", "I"]
 "xeonolab/vendor/**" = ["ALL"]
 [project.scripts]
 xlctl = "xeonolab.cli:xlctl"
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+[tool.uv.sources]
+torch = [{index = "pytorch-cpu", marker = "sys_platform == 'linux'"}]

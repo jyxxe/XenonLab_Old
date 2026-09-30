@@ -1,0 +1,25 @@
+[Unit]
+Description=XeonoLab %i
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=xeonolab
+Group=xeonolab
+EnvironmentFile=/etc/xeonolab/%i.env
+WorkingDirectory=/opt/xeonolab/current
+ExecStart=/opt/xeonolab/current/.venv/bin/uvicorn xeonolab.services:create_app --factory --host ${BIND_HOST} --port ${PORT} --no-proxy-headers
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=180
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xeonolab -/srv/xelibrary/core/xeonolab
+ReadOnlyPaths=/opt/xeonolab /etc/xeonolab
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+[Install]
+WantedBy=multi-user.target
