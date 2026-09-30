@@ -24,7 +24,7 @@
 | 15 | 定理区数据模型 | 部分实现 / 已发布，生产读写验收待做 | XeLibrary 定理字段、confidence/provenance、formal/review 状态分离、修订历史、依赖与 evidence refs 已随 release `7779e286` 部署。正向授权读写尚未在线验收；Lean 验证器仍未实现，详见 `xeonolab/theorems.py`。 |
 | 16 | API 总体规范 | 部分实现 / 未做生产验收 | `common.py` 提供版本化 API、认证、request ID、错误格式、ETag；缺少完整兼容策略。 |
 | 17 | 通用运维 API | 部分实现 / 未做生产验收 | 四个运维端点由 `common.py` 提供；ready 目前只用可选 callable。 |
-| 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；协调器报告 `runtime/browser-private/issue41-results/report.json` 有 34+ 项真实 Chrome UI 检查。此证据覆盖 Issue #41 桌面路径，仍不等于本节所有 registry/API/security 条款都已验收。 |
+| 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；Issue #41 有 34+ 项真实 Chrome UI 检查。2026-10-01 本地合成 API 浏览器回归覆盖知识库切表/分页、历史恢复、附件重试、ACL/settings、LaunchPad 与 Work/Issue links，未发现新缺陷，记录见 `docs/acceptance/browser-qa-2026-10-01.md`。这仍不等于本节所有 registry/API/security 条款或生产登录路径已验收。 |
 | 19 | OpenWebUI → XeLibrary Tool API | 部分实现 / 未做生产验收 | Tool Gateway 有 search/query/get 且转发用户 bearer；attachment/theorem/derive/proposal 工具缺少。 |
 | 20 | XeLibrary Catalog / Path API | 部分实现 / 未做生产验收 | 没有独立 path/catalog CRUD；路径是 table 的逻辑字段。 |
 | 21 | XeLibrary Table API | 部分实现 / 未做完整生产验收 | 建表、schema、move、list/get 已实现；管理员 + If-Match 保护的空表删除已随 `03adae4` 部署，并对行、附件、向量、索引任务和活动上传 fail closed。部署后已验证路由授权拦截与服务健康，但未用管理员身份实际删除隔离表。表统计等 API 仍缺。 |
@@ -74,7 +74,7 @@
 | 65 | OpenTelemetry | 部分机制 / 关键能力缺失 | 计划明确 V1 可先有 request ID/log/metrics；distributed tracing 未实施。 |
 | 66 | XeLibrary 内部一致性 | 部分实现 / 未做生产验收 | `.xl` 事务、FTS、附件引用、index revisions 有实现；跨 catalogue/.xl 原子性及 outbox 未实现。 |
 | 67 | 删除语义 | 部分实现 / 未做生产验收 | 行软删除立即过滤、当前 ACL 和索引重检存在；附件对象 GC 尚未实现。 |
-| 68 | 权限与向量查询 | 部分实现 / 未做生产验收 | 检索候选返回前按当前 ACL/行状态复核；规模/严格 topK 生产保证未验证。 |
+| 68 | 权限与向量查询 | 本地实现 / 测试通过 / 未发布 | Issue #70 已按每表每请求复用 ACL 快照，并用 `(resource_type,resource_id)` 复合索引范围读取 row ACL；回归测试向隔离 catalogue 注入 12,000 条其他表 row ACL，执行实际请求 SQL 的 `EXPLAIN QUERY PLAN`，确认命中范围索引且不扫描 ACL 表。语义保持 row/table/最近路径优先级、显式拒绝、账户树继承及下一请求可见 ACL 更新。合并提交 `193724a`；生产发布、真实查询负载和严格 topK 保证仍未验收。 |
 | 69 | fnOS 边界 | 部分实现 / 外部验证未覆盖 | 有 fnOS VM/数据边界记录；独立认证/平台停机时访问未在本轮实测。 |
 | 70 | 备份 | 部分实现 / 未做生产验收 | XeLibrary backup/verify/restore 有脚本与故障测试；`docs/runbooks/deployment.md` 记载 2026-09-30 实际备份及 integrity/pg_restore 检查。定期自动化、异地存储和完整模型权重副本仍缺。 |
 | 71 | XeLibrary 恢复顺序 | 部分实现 / 未做生产验收 | 恢复脚本与 runbook 有顺序；`dd6a397` / `docs/implementation-status.md` 记录发布前 quiesced backup 和 isolated restore（含空 object store 回归）通过。完整 PVE 灾难恢复与跨 catalogue/.xl 原子快照仍未验证。 |
@@ -132,7 +132,8 @@ Rate Limit 实现按每个服务 `DATA_DIR/rate-limits.sqlite3` 持久化滑动�
 
 ## 2026-10-01 源码验证
 
-- `uv run pytest -q`：189 passed；有 Starlette/httpx 弃用提示和 pytest 临时目录清理警告。
+- `uv run pytest`：211 passed；有 Starlette/httpx 弃用提示和 pytest 临时目录清理警告。
 - 桌面 `npm test`：11 passed；`npm run test:work-browser`：1 passed，覆盖 Work 分页、游标去重/循环、旧响应丢弃、loaded-only 筛选与 Forgejo 链接。
 - 桌面 `npm run build`、`uv run python scripts/export_openapi.py`、`git diff --check`：通过。
+- Issue #70 的 5,000 行本地基准中，选择查询约从 1,143 ms 降至 33 ms；本机 TestClient 合成数据不代表生产 SLO。
 - 生产阈值校准、跨进程外部服务压测、限流日志保留检查与真实 429 HTTP smoke 未执行。

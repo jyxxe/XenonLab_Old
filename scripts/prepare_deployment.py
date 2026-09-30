@@ -119,8 +119,8 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "migration_manifest": "no session schema migration; durable browser sessions retained; temporary provider errors preserve refresh credentials",
-            "test_report": "189 backend tests; 11 desktop tests; 1 Work pagination browser acceptance; OpenAPI export; TypeScript/Vite build",
+            "migration_manifest": "no database schema migration; request-local ACL snapshot and indexed ACL lookup only",
+            "test_report": "211 backend tests; 11 desktop tests including synthetic Work browser acceptance; Issue 70 ACL query-plan regression; OpenAPI export; TypeScript/Vite build",
         }
     )
 )
