@@ -1934,7 +1934,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TheoremWrite"
+                "$ref": "#/components/schemas/TheoremCreate"
               }
             }
           }
@@ -1945,6 +1945,14 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Theorem revision",
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
@@ -1983,6 +1991,14 @@
               "application/json": {
                 "schema": {}
               }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Theorem revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
           },
           "422": {
@@ -2009,6 +2025,15 @@
               "type": "string",
               "title": "Theorem Id"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "If-Match"
+            }
           }
         ],
         "requestBody": {
@@ -2028,7 +2053,18 @@
               "application/json": {
                 "schema": {}
               }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Updated theorem revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
+          },
+          "412": {
+            "description": "If-Match does not match the current theorem revision"
           },
           "422": {
             "description": "Validation Error",
@@ -2093,6 +2129,15 @@
               "type": "string",
               "title": "Theorem Id"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "If-Match"
+            }
           }
         ],
         "responses": {
@@ -2102,7 +2147,75 @@
               "application/json": {
                 "schema": {}
               }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Updated theorem revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
+          },
+          "412": {
+            "description": "If-Match does not match the current theorem revision"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/theorems/{theorem_id}/reject": {
+      "post": {
+        "summary": "Reject Theorem",
+        "operationId": "reject_theorem_api_v1_theorems__theorem_id__reject_post",
+        "parameters": [
+          {
+            "name": "theorem_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Theorem Id"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Updated theorem revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match does not match the current theorem revision"
           },
           "422": {
             "description": "Validation Error",
@@ -2239,6 +2352,15 @@
               "type": "string",
               "title": "Theorem Id"
             }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "If-Match"
+            }
           }
         ],
         "requestBody": {
@@ -2258,7 +2380,18 @@
               "application/json": {
                 "schema": {}
               }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Updated theorem revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
             }
+          },
+          "412": {
+            "description": "If-Match does not match the current theorem revision"
           },
           "422": {
             "description": "Validation Error",
@@ -2746,6 +2879,114 @@
         ],
         "title": "TableCreate"
       },
+      "TheoremCreate": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "minLength": 2,
+            "title": "Path"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "statement_natural": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Statement Natural"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Assumptions"
+          },
+          "proof_natural": {
+            "type": "string",
+            "maxLength": 200000,
+            "title": "Proof Natural",
+            "default": ""
+          },
+          "formal_statement": {
+            "type": "string",
+            "maxLength": 200000,
+            "title": "Formal Statement",
+            "default": ""
+          },
+          "lean_source": {
+            "type": "string",
+            "maxLength": 500000,
+            "title": "Lean Source",
+            "default": ""
+          },
+          "lean_version": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Lean Version",
+            "default": ""
+          },
+          "dependency_lock": {
+            "type": "string",
+            "maxLength": 20000,
+            "title": "Dependency Lock",
+            "default": ""
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Depends On"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 64,
+            "title": "Evidence Refs"
+          },
+          "formal_status": {
+            "type": "string",
+            "const": "none",
+            "title": "Formal Status",
+            "default": "none"
+          },
+          "confidence": {
+            "$ref": "#/components/schemas/Confidence"
+          },
+          "provenance": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Provenance",
+            "default": ""
+          },
+          "review_status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "proposed"
+            ],
+            "title": "Review Status",
+            "default": "proposed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "path",
+          "title",
+          "statement_natural"
+        ],
+        "title": "TheoremCreate"
+      },
       "TheoremPatch": {
         "properties": {
           "path": {
@@ -2878,17 +3119,6 @@
             ],
             "title": "Evidence Refs"
           },
-          "formal_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Formal Status"
-          },
           "confidence": {
             "anyOf": [
               {
@@ -2909,17 +3139,6 @@
               }
             ],
             "title": "Provenance"
-          },
-          "review_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Review Status"
           }
         },
         "additionalProperties": false,
@@ -2965,109 +3184,6 @@
           "query"
         ],
         "title": "TheoremSearch"
-      },
-      "TheoremWrite": {
-        "properties": {
-          "path": {
-            "type": "string",
-            "maxLength": 1024,
-            "minLength": 2,
-            "title": "Path"
-          },
-          "title": {
-            "type": "string",
-            "maxLength": 300,
-            "minLength": 1,
-            "title": "Title"
-          },
-          "statement_natural": {
-            "type": "string",
-            "maxLength": 20000,
-            "minLength": 1,
-            "title": "Statement Natural"
-          },
-          "assumptions": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "maxItems": 64,
-            "title": "Assumptions"
-          },
-          "proof_natural": {
-            "type": "string",
-            "maxLength": 200000,
-            "title": "Proof Natural",
-            "default": ""
-          },
-          "formal_statement": {
-            "type": "string",
-            "maxLength": 200000,
-            "title": "Formal Statement",
-            "default": ""
-          },
-          "lean_source": {
-            "type": "string",
-            "maxLength": 500000,
-            "title": "Lean Source",
-            "default": ""
-          },
-          "lean_version": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Lean Version",
-            "default": ""
-          },
-          "dependency_lock": {
-            "type": "string",
-            "maxLength": 20000,
-            "title": "Dependency Lock",
-            "default": ""
-          },
-          "depends_on": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "maxItems": 64,
-            "title": "Depends On"
-          },
-          "evidence_refs": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "maxItems": 64,
-            "title": "Evidence Refs"
-          },
-          "formal_status": {
-            "type": "string",
-            "title": "Formal Status",
-            "default": "none"
-          },
-          "confidence": {
-            "$ref": "#/components/schemas/Confidence"
-          },
-          "provenance": {
-            "type": "string",
-            "maxLength": 4000,
-            "title": "Provenance",
-            "default": ""
-          },
-          "review_status": {
-            "type": "string",
-            "title": "Review Status",
-            "default": "proposed"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "path",
-          "title",
-          "statement_natural"
-        ],
-        "title": "TheoremWrite"
       },
       "UploadStart": {
         "properties": {

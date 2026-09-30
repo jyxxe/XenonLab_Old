@@ -9,9 +9,10 @@ pretending to verify anything.
 
 import json
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import uuid4
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -81,6 +82,11 @@ class TheoremWrite(BaseModel):
         return value
 
 
+class TheoremCreate(TheoremWrite):
+    formal_status: Literal["none"] = "none"
+    review_status: Literal["draft", "proposed"] = "proposed"
+
+
 class TheoremPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str | None = None
@@ -94,10 +100,8 @@ class TheoremPatch(BaseModel):
     dependency_lock: str | None = None
     depends_on: list[str] | None = None
     evidence_refs: list[str] | None = None
-    formal_status: str | None = None
     confidence: Confidence | None = None
     provenance: str | None = None
-    review_status: str | None = None
 
 
 class EvidenceAppend(BaseModel):
@@ -196,14 +200,19 @@ def install(app, catalogue, allowed, audit):
             stack.extend(graph.get(node, []))
         return False
 
-    def resolve(db, ids):
+    def resolve(db, ids, actor):
         summaries = []
         for theorem_id in ids:
             row = db.execute("SELECT * FROM theorems WHERE id=?", (theorem_id,)).fetchone()
             if row is None:
                 summaries.append({"theorem_id": theorem_id, "missing": True})
                 continue
-            payload = json.loads(row["payload"])
+            theorem = load(db, theorem_id)
+            if not visible(actor, theorem):
+                # Hidden and nonexistent targets have the same public shape.
+                summaries.append({"theorem_id": theorem_id, "missing": True})
+                continue
+            payload = theorem
             summaries.append(
                 {
                     "theorem_id": theorem_id,
@@ -252,11 +261,18 @@ def install(app, catalogue, allowed, audit):
             next_cursor=page[limit - 1]["theorem_id"] if len(page) > limit else None,
         )
 
-    @app.post("/api/v1/theorems", status_code=201)
-    def create_theorem(body: TheoremWrite, request: Request, actor=Depends(scope("xelibrary:theorem:propose"))):
+    @app.post(
+        "/api/v1/theorems",
+        status_code=201,
+        responses={
+            201: {"headers": {"ETag": {"description": "Theorem revision", "schema": {"type": "string"}}}}
+        },
+    )
+    def create_theorem(body: TheoremCreate, request: Request, actor=Depends(scope("xelibrary:theorem:propose"))):
         theorem_id = str(uuid4())
         payload = body.model_dump()
         with transaction(catalogue) as db:
+            writable(actor, {"theorem_id": theorem_id, "path": body.path, "created_by": actor.sub})
             if dependency_cycle(db, theorem_id, body.depends_on):
                 raise APIError(422, "THEOREM_CYCLE", "dependency cycle or self reference")
             write(db, theorem_id, payload, actor, created=actor.sub, created_at=stamp())
@@ -266,17 +282,27 @@ def install(app, catalogue, allowed, audit):
             response(request, theorem), status_code=201, headers={"ETag": etag(theorem["revision"])}
         )
 
-    @app.get("/api/v1/theorems/{theorem_id}")
+    @app.get(
+        "/api/v1/theorems/{theorem_id}",
+        responses={200: {"headers": {"ETag": {"description": "Theorem revision", "schema": {"type": "string"}}}}},
+    )
     def get_theorem(theorem_id: str, request: Request, actor=Depends(scope("xelibrary:theorem:read"))):
         with connect(catalogue) as db:
             theorem = visible_or_404(actor, load(db, theorem_id))
         return JSONResponse(response(request, theorem), headers={"ETag": etag(theorem["revision"])})
 
-    @app.patch("/api/v1/theorems/{theorem_id}")
+    @app.patch(
+        "/api/v1/theorems/{theorem_id}",
+        responses={
+            200: {"headers": {"ETag": {"description": "Updated theorem revision", "schema": {"type": "string"}}}},
+            412: {"description": "If-Match does not match the current theorem revision"},
+        },
+    )
     def patch_theorem(
         theorem_id: str,
         body: TheoremPatch,
         request: Request,
+        if_match: str = Header(..., alias="If-Match"),
         actor=Depends(scope("xelibrary:theorem:propose")),
     ):
         with transaction(catalogue) as db:
@@ -317,12 +343,22 @@ def install(app, catalogue, allowed, audit):
             [{"revision": row["revision"], "actor": row["actor"], "at": row["at"], **json.loads(row["payload"])} for row in rows],
         )
 
-    @app.post("/api/v1/theorems/{theorem_id}/promote")
+    @app.post(
+        "/api/v1/theorems/{theorem_id}/promote",
+        responses={
+            200: {"headers": {"ETag": {"description": "Updated theorem revision", "schema": {"type": "string"}}}},
+            412: {"description": "If-Match does not match the current theorem revision"},
+        },
+    )
     def promote_theorem(
-        theorem_id: str, request: Request, actor=Depends(scope("xelibrary:theorem:promote"))
+        theorem_id: str,
+        request: Request,
+        if_match: str = Header(..., alias="If-Match"),
+        actor=Depends(scope("xelibrary:theorem:promote")),
     ):
         with transaction(catalogue) as db:
-            current = load(db, theorem_id)
+            current = visible_or_404(actor, load(db, theorem_id))
+            writable(actor, current)
             precondition(request, current["revision"])
             if current["review_status"] == "promoted":
                 raise APIError(409, "THEOREM_PROMOTED", "theorem is already promoted")
@@ -337,11 +373,41 @@ def install(app, catalogue, allowed, audit):
         audit(actor, "theorem.promoted", theorem_id)
         return JSONResponse(response(request, theorem), headers={"ETag": etag(theorem["revision"])})
 
+    @app.post(
+        "/api/v1/theorems/{theorem_id}/reject",
+        responses={
+            200: {"headers": {"ETag": {"description": "Updated theorem revision", "schema": {"type": "string"}}}},
+            412: {"description": "If-Match does not match the current theorem revision"},
+        },
+    )
+    def reject_theorem(
+        theorem_id: str,
+        request: Request,
+        if_match: str = Header(..., alias="If-Match"),
+        actor=Depends(scope("xelibrary:theorem:promote")),
+    ):
+        with transaction(catalogue) as db:
+            current = visible_or_404(actor, load(db, theorem_id))
+            writable(actor, current)
+            precondition(request, current["revision"])
+            if current["review_status"] != "proposed":
+                raise APIError(409, "THEOREM_NOT_PROPOSED", "only proposed theorems can be rejected")
+            payload = {
+                key: value
+                for key, value in current.items()
+                if key not in ("theorem_id", "created_by", "created_at", "updated_at", "revision")
+            }
+            payload["review_status"] = "rejected"
+            write(db, theorem_id, payload, actor)
+            theorem = load(db, theorem_id)
+        audit(actor, "theorem.rejected", theorem_id)
+        return JSONResponse(response(request, theorem), headers={"ETag": etag(theorem["revision"])})
+
     @app.get("/api/v1/theorems/{theorem_id}/dependencies")
     def dependencies(theorem_id: str, request: Request, actor=Depends(scope("xelibrary:theorem:read"))):
         with connect(catalogue) as db:
             theorem = visible_or_404(actor, load(db, theorem_id))
-            result = resolve(db, theorem["depends_on"])
+            result = resolve(db, theorem["depends_on"], actor)
         return response(request, result)
 
     @app.get("/api/v1/theorems/{theorem_id}/dependents")
@@ -357,6 +423,7 @@ def install(app, catalogue, allowed, audit):
                     for theorem in rows
                     if theorem_id in theorem["depends_on"] and visible(actor, theorem)
                 ],
+                actor,
             )
         return response(request, result)
 
@@ -366,16 +433,25 @@ def install(app, catalogue, allowed, audit):
             theorem = visible_or_404(actor, load(db, theorem_id))
         return response(request, {"evidence_refs": theorem["evidence_refs"], "revision": theorem["revision"]})
 
-    @app.post("/api/v1/theorems/{theorem_id}/evidence")
+    @app.post(
+        "/api/v1/theorems/{theorem_id}/evidence",
+        responses={
+            200: {"headers": {"ETag": {"description": "Updated theorem revision", "schema": {"type": "string"}}}},
+            412: {"description": "If-Match does not match the current theorem revision"},
+        },
+    )
     def add_evidence(
         theorem_id: str,
         body: EvidenceAppend,
         request: Request,
+        if_match: str = Header(..., alias="If-Match"),
         actor=Depends(scope("xelibrary:theorem:propose")),
     ):
         with transaction(catalogue) as db:
             current = visible_or_404(actor, load(db, theorem_id))
             writable(actor, current)
+            if current["review_status"] == "promoted" and "xelibrary:theorem:promote" not in actor.scopes:
+                raise APIError(403, "THEOREM_PROMOTED", "promoted theorems require theorem:promote")
             precondition(request, current["revision"])
             payload = {
                 key: value

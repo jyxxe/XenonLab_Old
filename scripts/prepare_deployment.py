@@ -6,13 +6,13 @@ import os
 import subprocess
 from pathlib import Path
 
+from xeonolab.role_scopes import OIDC_ROLE_SCOPES
+
 root = Path("runtime/deploy-secrets")
 credentials = json.loads((root / "credentials.json").read_text())
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 public = (root / "deploy-key.pub").read_text().strip()
-roles = {
-    "platform-admin": "accounts:manage dev:read dev:write desktop:read desktop:admin xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:admin deploy:read llm:use".split()
-}
+roles = OIDC_ROLE_SCOPES
 services = {
     "101": {"desktop-web": 8101},
     "104": {"xelibrary": 8100},
