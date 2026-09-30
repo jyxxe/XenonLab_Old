@@ -59,16 +59,49 @@ def _issuer_for_origin(settings, value):
     return issuer
 
 
+def _oidc_ssl_context():
+    """Use platform trust roots and add the configured local CA when present."""
+    context = ssl.create_default_context()
+    ca_file = os.getenv("OIDC_CA_FILE")
+    if ca_file:
+        context.load_verify_locations(cafile=ca_file)
+    return context
+
+
 def install(app):
     path = app.state.settings.data_dir / "browser-sessions.sqlite"
     with transaction(path) as db:
         db.execute("""CREATE TABLE IF NOT EXISTS sessions(
             id TEXT PRIMARY KEY, subject TEXT NOT NULL, refresh TEXT NOT NULL,
-            access TEXT NOT NULL, expires REAL NOT NULL, issuer TEXT NOT NULL DEFAULT '')""")
-        if "issuer" not in {row[1] for row in db.execute("PRAGMA table_info(sessions)")}:
-            db.execute("ALTER TABLE sessions ADD COLUMN issuer TEXT NOT NULL DEFAULT ''")
-        db.execute("UPDATE sessions SET issuer=? WHERE issuer=''", (app.state.settings.issuer,))
+            access TEXT NOT NULL, expires REAL NOT NULL)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS session_issuers(
+            session_id TEXT PRIMARY KEY, issuer TEXT NOT NULL)""")
+        session_columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
+        if "issuer" in session_columns:
+            # Collapse the short-lived six-column schema from the prior local
+            # release while preserving its per-session issuers.
+            db.execute(
+                """INSERT OR IGNORE INTO session_issuers(session_id,issuer)
+                   SELECT id,COALESCE(NULLIF(issuer,''),?) FROM sessions""",
+                (app.state.settings.issuer,),
+            )
+            db.execute("ALTER TABLE sessions RENAME TO sessions_with_issuer")
+            db.execute("""CREATE TABLE sessions(
+                id TEXT PRIMARY KEY, subject TEXT NOT NULL, refresh TEXT NOT NULL,
+                access TEXT NOT NULL, expires REAL NOT NULL)""")
+            db.execute("""INSERT INTO sessions(id,subject,refresh,access,expires)
+                          SELECT id,subject,refresh,access,expires FROM sessions_with_issuer""")
+            db.execute("DROP TABLE sessions_with_issuer")
+        db.execute(
+            "INSERT OR IGNORE INTO session_issuers(session_id,issuer) SELECT id,? FROM sessions",
+            (app.state.settings.issuer,),
+        )
+        db.execute("DELETE FROM session_issuers WHERE session_id NOT IN (SELECT id FROM sessions)")
     path.chmod(0o600)
+
+    def delete_session(db, session_id):
+        db.execute("DELETE FROM session_issuers WHERE session_id=?", (session_id,))
+        db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
 
     def origin(request):
         value = request.headers.get("Origin")
@@ -79,8 +112,7 @@ def install(app):
     def exchange(data, issuer):
         endpoint = _token_endpoint(app, issuer)
         try:
-            context = ssl.create_default_context(cafile=os.getenv("OIDC_CA_FILE"))
-            with httpx.Client(verify=context, trust_env=False, timeout=20) as client:
+            with httpx.Client(verify=_oidc_ssl_context(), trust_env=False, timeout=20) as client:
                 result = client.post(endpoint, data={"client_id": "desktop", **data})
             if result.status_code == 400:
                 body = result.json()
@@ -139,18 +171,12 @@ def install(app):
         with transaction(path) as db:
             old = request.cookies.get(COOKIE)
             if old:
-                db.execute("DELETE FROM sessions WHERE id=?", (hashlib.sha256(old.encode()).hexdigest(),))
+                delete_session(db, hashlib.sha256(old.encode()).hexdigest())
             db.execute(
-                "INSERT INTO sessions(id,subject,refresh,access,expires,issuer) VALUES(?,?,?,?,?,?)",
-                (
-                    session_id,
-                    claims["sub"],
-                    tokens["refresh_token"],
-                    tokens["access_token"],
-                    claims["exp"],
-                    issuer,
-                ),
+                "INSERT INTO sessions VALUES(?,?,?,?,?)",
+                (session_id, claims["sub"], tokens["refresh_token"], tokens["access_token"], claims["exp"]),
             )
+            db.execute("INSERT INTO session_issuers(session_id,issuer) VALUES(?,?)", (session_id, issuer))
         result = output(tokens["access_token"], claims["exp"])
         result.set_cookie(
             COOKIE, cookie, max_age=630720000, secure=True, httponly=True, samesite="strict", path="/"
@@ -164,7 +190,12 @@ def install(app):
         session_id = hashlib.sha256(cookie.encode()).hexdigest()
         # Serialize rotating refresh credentials across requests and workers.
         with transaction(path) as db:
-            row = db.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+            row = db.execute(
+                """SELECT sessions.*, COALESCE(session_issuers.issuer, ?) AS issuer
+                   FROM sessions LEFT JOIN session_issuers ON session_issuers.session_id=sessions.id
+                   WHERE sessions.id=?""",
+                (app.state.settings.issuer, session_id),
+            ).fetchone()
             if not row:
                 raise APIError(401, "NO_SESSION", "sign in required")
             if row["expires"] > time.time() + 60:
@@ -179,9 +210,9 @@ def install(app):
                         APIError(401, "DESKTOP_ACCESS_REVOKED", "desktop permission revoked")
                         if "desktop:read" not in actor.scopes
                         else None
-                    )
+                )
                 if revoked:
-                    db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+                    delete_session(db, session_id)
                 else:
                     return output(row["access"], row["expires"], cookie)
             else:
@@ -212,7 +243,7 @@ def install(app):
                         )
                         return output(tokens["access_token"], claims["exp"], cookie)
                 if revoked:
-                    db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+                    delete_session(db, session_id)
         raise revoked
 
     @app.post("/api/v1/auth/session/logout")
@@ -220,7 +251,7 @@ def install(app):
         origin(request)
         cookie = request.cookies.get(COOKIE, "")
         with transaction(path) as db:
-            db.execute("DELETE FROM sessions WHERE id=?", (hashlib.sha256(cookie.encode()).hexdigest(),))
+            delete_session(db, hashlib.sha256(cookie.encode()).hexdigest())
         result = JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
         result.delete_cookie(COOKIE, secure=True, httponly=True, samesite="strict", path="/")
         return result

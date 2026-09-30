@@ -15,10 +15,13 @@ The browser verifies that discovery's issuer is an exact match and that the
 authorization, token, and JWKS URLs remain under that issuer's HTTPS origin and
 realm path. The server binds code exchange and refresh to the selected issuer,
 checks the signed token's issuer, audience, expiry and subject, and stores the
-issuer with each persistent session. Existing session rows without that column
-are assigned the legacy `OIDC_ISSUER` during startup, so the current IP sessions
-continue to refresh during the staged migration. PKCE S256, state, exact callback
-origin, account authorization, and offline-session behavior remain required.
+issuer in a separate `session_issuers` table keyed by session id. The original
+five-column `sessions` table stays unchanged, so an older release can still use
+its positional five-value insert during rollback. At startup, rows without a
+side-table entry are assigned the legacy `OIDC_ISSUER`; reads also fall back to
+that issuer. Existing IP sessions therefore continue to refresh during staged
+migration and rollback. PKCE S256, state, exact callback origin, account
+authorization, and offline-session behavior remain required.
 
 ## Required operator configuration
 
