@@ -9,7 +9,7 @@ export function MenuClock({timezone}:{timezone:string}){
   let time='',date='';
   try{time=now.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:zone(timezone)});date=now.toLocaleDateString('zh-CN',{weekday:'short',month:'long',day:'numeric',timeZone:zone(timezone)})}
   catch{time=now.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});date=now.toLocaleDateString('zh-CN',{weekday:'short',month:'long',day:'numeric'})}
-  return <time className="menu-clock" title={timezone==='system'?'浏览器时区':timezone}>{date} {time}</time>;
+  return <time className="menu-clock" title={timezone==='system'?'浏览器时区':timezone}><span className="clock-date">{date}</span> <span className="clock-time">{time}</span></time>;
 }
 export function ClockWidget({timezone}:{timezone:string}){
   const [now,setNow]=useState(()=>new Date());

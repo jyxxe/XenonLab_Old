@@ -87,6 +87,12 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     assert changed["widgets"] == ["clock", "status"]
     changed = client.patch(url, headers=auth(), json={"widgets": ["clock"]}).json()["data"]
     assert changed["widgets"] == ["clock"]
+    assert changed["dock_size"] == "medium" and changed["dock_autohide"] is False
+    assert changed["restore_windows"] is True and changed["reduced_motion"] is False
+    changed = client.patch(
+        url, headers=auth(), json={"dock_size": "large", "dock_autohide": True, "reduced_motion": True}
+    ).json()["data"]
+    assert changed["dock_size"] == "large" and changed["dock_autohide"] is True and changed["reduced_motion"] is True
     assert client.get(url, headers=auth("bob")).json()["data"]["theme"] == "system"
     for invalid in (
         {"timezone": "Unknown/Zone"},
@@ -94,6 +100,8 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
         {"unexpected": True},
         {"widgets": ["bogus"]},
         {"widgets": "clock"},
+        {"dock_size": "huge"},
+        {"reduced_motion": "not-a-bool"},
     ):
         assert client.patch(url, headers=auth(), json=invalid).status_code == 422
     restarted = TestClient(create_app("desktop-web", settings))

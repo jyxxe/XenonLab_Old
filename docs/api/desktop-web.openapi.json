@@ -1262,6 +1262,61 @@
               }
             ],
             "title": "Widgets"
+          },
+          "dock_size": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dock Size"
+          },
+          "dock_autohide": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dock Autohide"
+          },
+          "restore_windows": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restore Windows"
+          },
+          "animations": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Animations"
+          },
+          "reduced_motion": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduced Motion"
           }
         },
         "additionalProperties": false,

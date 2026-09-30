@@ -1,0 +1,109 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import '../src/design-system/tokens.css';
+import '../src/design-system/primitives.css';
+import '../src/shell/shell.css';
+import '../src/style.css';
+import {ToastProvider} from '../src/design-system/primitives';
+import {DesktopShell} from '../src/shell/DesktopShell';
+
+// The shell talks to the platform through injected functions; this fixture keeps the
+// same surface with deterministic, synthetic data so browser acceptance runs offline.
+type Call = {method: string; path: string; body: any};
+const calls: Call[] = [];
+const stored = (key: string, fallback: any) => {
+  try {
+    const value = sessionStorage.getItem(`shell-fixture:${key}`);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+const preferences = stored('preferences', {
+  theme: 'dark',
+  accent: 'blue',
+  wallpaper: 'aurora',
+  timezone: 'UTC',
+  widgets: ['clock', 'status'],
+  dock_size: 'medium',
+  dock_autohide: false,
+  restore_windows: true,
+  animations: true,
+  reduced_motion: false,
+});
+const layout: {dock: string[]; windows: any[]} = stored('layout', {dock: [], windows: []});
+const work = Array.from({length: 5}, (_, index) => ({
+  id: `fixture-${index + 1}`,
+  repository: 'xenon-admin/XeonoLab',
+  issue_id: 70 + index,
+  title: `Synthetic issue ${70 + index}`,
+  status: index === 0 ? 'claimed' : index === 4 ? 'completed' : 'queued',
+  holder: index === 0 ? 'fixture-user-0001' : null,
+  expires: 0,
+  epoch: 1,
+  claim_active: index === 0,
+}));
+
+async function api(path: string, init: RequestInit = {}): Promise<any> {
+  const method = (init.method || 'GET').toUpperCase();
+  const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
+  calls.push({method, path, body});
+  if (path === '/users/me') {
+    return {subject: 'fixture-user-0001', kind: 'human', scopes: ['xelibrary:read', 'dev:read', 'desktop:read']};
+  }
+  if (path === '/apps') return [];
+  if (path === '/users/me/preferences') {
+    if (method === 'PATCH' && body) {
+      Object.assign(preferences, body);
+      sessionStorage.setItem('shell-fixture:preferences', JSON.stringify(preferences));
+    }
+    return {...preferences};
+  }
+  if (path === '/users/me/layout') {
+    if (method === 'PUT' && body) {
+      layout.dock = body.dock || [];
+      layout.windows = body.windows || [];
+      sessionStorage.setItem('shell-fixture:layout', JSON.stringify(layout));
+    }
+    return {dock: [...layout.dock], windows: layout.windows.map(win => ({...win}))};
+  }
+  if (path.startsWith('/work')) {
+    const url = new URL(path, 'http://fixture.local');
+    const cursor = url.searchParams.get('cursor');
+    if (cursor === 'page-2') return {data: work.slice(3), meta: {next_cursor: null}};
+    return {data: work.slice(0, 3), meta: {next_cursor: 'page-2'}};
+  }
+  throw new Error(`unexpected fixture request ${method} ${path}`);
+}
+
+const apiPage = async (path: string, init?: RequestInit) => {
+  const data = await api(path, init);
+  if (path.startsWith('/work')) return {data: data.data, meta: data.meta};
+  return {data, meta: {}};
+};
+const apiRaw = async (path: string, init?: RequestInit) => {
+  const data = await api(path, init);
+  return new Response(JSON.stringify({data}), {status: 200, headers: {'Content-Type': 'application/json'}});
+};
+
+(window as any).shellFixture = {
+  calls,
+  preferences,
+  layout,
+  loggedOut: false,
+  resetCalls: () => calls.splice(0, calls.length),
+};
+
+createRoot(document.getElementById('root')!).render(
+  <ToastProvider>
+    <DesktopShell
+      api={api}
+      apiPage={apiPage}
+      apiRaw={apiRaw}
+      token="fixture-token"
+      onLogout={async () => {
+        (window as any).shellFixture.loggedOut = true;
+      }}
+    />
+  </ToastProvider>,
+);

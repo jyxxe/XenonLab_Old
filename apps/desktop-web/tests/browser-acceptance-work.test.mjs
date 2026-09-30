@@ -71,7 +71,7 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
   const chromePath=process.env.CHROME_BIN||(['/usr/bin/google-chrome','/usr/bin/chromium','/usr/bin/chromium-browser'].find(file=>existsSync(file)));
   if(!chromePath){t.skip('Chrome/Chromium unavailable; run with CHROME_BIN=/path/to/chrome');return}
   const portNumber=await port();
-  const server=await createServer({root:appRoot,server:{host:'127.0.0.1',port:portNumber,strictPort:true}});
+  const server=await createServer({root:appRoot,server:{host:'127.0.0.1',port:portNumber,strictPort:true,watch:null}});
   await server.listen();
   const tempDir=await fs.mkdtemp(path.join(os.tmpdir(),'xelonolab-work-acceptance-'));
   const chrome=spawn(chromePath,['--headless=new','--no-first-run','--no-default-browser-check',`--user-data-dir=${path.join(tempDir,'profile')}`,'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1','--remote-allow-origins=*','about:blank'],{stdio:'ignore'});

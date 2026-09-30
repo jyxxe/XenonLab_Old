@@ -55,6 +55,11 @@ class Preferences(BaseModel):
     widgets: list[Literal["clock", "status"]] = Field(
         default_factory=lambda: ["clock", "status"], max_length=8
     )
+    dock_size: Literal["small", "medium", "large"] = "medium"
+    dock_autohide: bool = False
+    restore_windows: bool = True
+    animations: bool = True
+    reduced_motion: bool = False
 
     @field_validator("timezone")
     @classmethod
@@ -74,6 +79,11 @@ class PreferencePatch(BaseModel):
     wallpaper: str | None = None
     timezone: str | None = None
     widgets: list[str] | None = None
+    dock_size: str | None = None
+    dock_autohide: bool | None = None
+    restore_windows: bool | None = None
+    animations: bool | None = None
+    reduced_motion: bool | None = None
 
 
 class Layout(BaseModel):

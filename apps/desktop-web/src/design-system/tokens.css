@@ -1,0 +1,203 @@
+/*
+ * XeonoLab desktop design tokens.
+ * Single source of truth for color, typography, spacing, radius, elevation and motion.
+ * Themes are selected through `data-theme="light|dark"` on <html>; accents through
+ * `data-accent="blue|purple|green|orange"`; wallpapers through `data-wallpaper`.
+ */
+:root {
+  /* Color: surfaces */
+  --background: #17181c;
+  --surface: #202127;
+  --surface-elevated: #292a31;
+  --surface-sunken: #131418;
+  --surface-glass: rgba(32, 33, 39, 0.72);
+  --surface-overlay: rgba(12, 13, 16, 0.55);
+
+  /* Color: text */
+  --text-primary: #f2f3f7;
+  --text-secondary: #b9bdc9;
+  --text-muted: #8a8f9d;
+  --text-inverse: #ffffff;
+
+  /* Color: lines */
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+
+  /* Color: semantic */
+  --accent: #4c8dff;
+  --accent-hover: #67a0ff;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-contrast: #ffffff;
+  --danger: #ff5d55;
+  --danger-soft: color-mix(in srgb, var(--danger) 16%, transparent);
+  --warning: #ffb340;
+  --warning-soft: color-mix(in srgb, var(--warning) 16%, transparent);
+  --success: #32d16d;
+  --success-soft: color-mix(in srgb, var(--success) 16%, transparent);
+  --info: var(--accent);
+
+  /* Color: controls */
+  --control: rgba(255, 255, 255, 0.08);
+  --control-hover: rgba(255, 255, 255, 0.14);
+  --control-active: rgba(255, 255, 255, 0.2);
+  --control-selected: var(--accent-soft);
+
+  /* Radius */
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-window: 12px;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow-menu: 0 8px 28px rgba(0, 0, 0, 0.32);
+  --shadow-window: 0 24px 64px rgba(0, 0, 0, 0.45);
+  --shadow-dock: 0 12px 36px rgba(0, 0, 0, 0.3);
+  --shadow-window-inactive: 0 14px 34px rgba(0, 0, 0, 0.3);
+
+  /* Spacing scale */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 24px;
+  --spacing-6: 32px;
+
+  /* Typography */
+  --font-ui: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 15px;
+  --font-size-xl: 20px;
+  --line-height: 1.5;
+
+  /* Controls and chrome */
+  --control-height-sm: 22px;
+  --control-height: 28px;
+  --control-height-lg: 34px;
+  --menubar-height: 30px;
+  --titlebar-height: 38px;
+  --dock-gap: 10px;
+  --focus-ring: 0 0 0 2px var(--background), 0 0 0 4px color-mix(in srgb, var(--accent) 70%, transparent);
+
+  /* Motion */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 260ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --ease-spring: cubic-bezier(0.32, 1.4, 0.5, 1);
+
+  /* Layering */
+  --z-windows: 100;
+  --z-widgets: 90;
+  --z-dock: 500;
+  --z-window-chrome: 600;
+  --z-menubar: 700;
+  --z-popover: 800;
+  --z-launcher: 900;
+  --z-modal: 1000;
+  --z-toast: 1100;
+
+  /* Wallpaper */
+  --wallpaper: radial-gradient(ellipse at 70% 75%, rgba(72, 90, 121, 0.55), transparent 65%),
+    radial-gradient(ellipse at 20% 35%, #233b61, transparent 60%), #10131b;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --background: #eef0f5;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-sunken: #e6e9f0;
+  --surface-glass: rgba(255, 255, 255, 0.75);
+  --surface-overlay: rgba(40, 44, 54, 0.35);
+
+  --text-primary: #1d1f26;
+  --text-secondary: #4c5160;
+  --text-muted: #7b8091;
+  --text-inverse: #ffffff;
+
+  --border: rgba(0, 0, 0, 0.12);
+  --border-strong: rgba(0, 0, 0, 0.22);
+  --border-subtle: rgba(0, 0, 0, 0.06);
+
+  --accent: #2f6fdd;
+  --accent-hover: #245fca;
+  --accent-contrast: #ffffff;
+  --danger: #d93a34;
+  --warning: #b06d05;
+  --success: #1e8f4b;
+
+  --control: rgba(0, 0, 0, 0.06);
+  --control-hover: rgba(0, 0, 0, 0.11);
+  --control-active: rgba(0, 0, 0, 0.16);
+
+  --shadow-menu: 0 8px 24px rgba(30, 35, 45, 0.18);
+  --shadow-window: 0 20px 50px rgba(30, 35, 45, 0.28);
+  --shadow-dock: 0 10px 28px rgba(30, 35, 45, 0.22);
+  --shadow-window-inactive: 0 10px 26px rgba(30, 35, 45, 0.16);
+
+  --wallpaper: radial-gradient(ellipse at 75% 80%, rgba(140, 165, 210, 0.6), transparent 65%),
+    radial-gradient(ellipse at 15% 25%, #cdd9ee, transparent 60%), #dfe5ef;
+
+  color-scheme: light;
+}
+
+:root[data-accent="purple"] {
+  --accent: #9a6bdf;
+  --accent-hover: #ab81e8;
+}
+:root[data-accent="green"] {
+  --accent: #2f9d72;
+  --accent-hover: #3cb384;
+}
+:root[data-accent="orange"] {
+  --accent: #d9782a;
+  --accent-hover: #e58c43;
+}
+
+:root[data-wallpaper="ocean"] {
+  --wallpaper: radial-gradient(ellipse at 80% 90%, rgba(18, 109, 133, 0.85), transparent 70%), #09182c;
+}
+:root[data-wallpaper="sunset"] {
+  --wallpaper: radial-gradient(ellipse at 20% 100%, rgba(179, 102, 115, 0.85), transparent 70%),
+    radial-gradient(ellipse at 90% 20%, rgba(96, 73, 137, 0.9), transparent 60%), #201a37;
+}
+:root[data-wallpaper="silver"] {
+  --wallpaper: radial-gradient(ellipse at 50% 60%, rgba(89, 100, 121, 0.8), transparent 70%), #202b3b;
+}
+:root[data-theme="light"][data-wallpaper="ocean"] {
+  --wallpaper: radial-gradient(ellipse at 80% 90%, rgba(120, 190, 215, 0.75), transparent 70%), #cfe3ef;
+}
+:root[data-theme="light"][data-wallpaper="sunset"] {
+  --wallpaper: radial-gradient(ellipse at 20% 100%, rgba(226, 160, 170, 0.8), transparent 70%),
+    radial-gradient(ellipse at 90% 20%, rgba(190, 165, 230, 0.8), transparent 60%), #efe6f2;
+}
+:root[data-theme="light"][data-wallpaper="silver"] {
+  --wallpaper: radial-gradient(ellipse at 50% 60%, rgba(190, 200, 214, 0.9), transparent 70%), #e2e6ec;
+}
+
+:root[data-reduced-motion="true"],
+:root[data-animations="off"] {
+  --duration-fast: 0ms;
+  --duration-base: 0ms;
+  --duration-slow: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-reduced-motion="false"]) {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+    --duration-slow: 0ms;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    color-scheme: light;
+  }
+}

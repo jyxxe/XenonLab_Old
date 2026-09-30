@@ -1,0 +1,565 @@
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {ErrorState, Spinner, useToast} from '../design-system/primitives';
+import {ClockWidget, MenuClock, StatusWidget} from '../Widgets';
+import {mergeApps} from './apps';
+import {CommandPalette, type Command, type CommandProvider} from './CommandPalette';
+import {Dock, type DockSize} from './Dock';
+import {LaunchPad} from './LaunchPad';
+import {MenuBar} from './MenuBar';
+import {WindowFrame} from './WindowFrame';
+import {IFrameApp} from './IFrameApp';
+import {
+  activeWindow,
+  clampRect,
+  defaultRect,
+  focusWindow,
+  minSizeOf,
+  nextWindowId,
+  restoreWindows,
+  serializeWindows,
+  toggleMaximize,
+} from './window-manager.js';
+import type {API, APIPage, APIRaw, DesktopApp, RegistryApp, UserPreferences, WindowState} from './types';
+
+const RECENT_KEY = 'xeonolab.recent-apps';
+
+const defaultPreferences: UserPreferences = {
+  theme: 'system',
+  accent: 'blue',
+  wallpaper: 'aurora',
+  timezone: 'system',
+  widgets: ['clock', 'status'],
+  dock_size: 'medium',
+  dock_autohide: false,
+  restore_windows: true,
+  animations: true,
+  reduced_motion: false,
+};
+
+function loadRecent(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    return Array.isArray(value) ? value.filter(item => typeof item === 'string').slice(0, 6) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function DesktopShell({
+  api,
+  apiPage,
+  apiRaw,
+  token,
+  onLogout,
+}: {
+  api: API;
+  apiPage: APIPage;
+  apiRaw: APIRaw;
+  token: string;
+  onLogout: () => Promise<void>;
+}) {
+  const {push} = useToast();
+  const [apps, setApps] = useState<DesktopApp[]>([]);
+  const [windows, setWindows] = useState<WindowState[]>([]);
+  const [dockIds, setDockIds] = useState<string[]>([]);
+  const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
+  const [subject, setSubject] = useState('');
+  const [userLabel, setUserLabel] = useState('');
+  const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [launchpadOpen, setLaunchpadOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [recent, setRecent] = useState<string[]>(loadRecent);
+  const [badges, setBadges] = useState<Record<string, number>>({});
+  const viewport = useRef({width: innerWidth, height: innerHeight});
+
+  const activeId = activeWindow(windows)?.id ?? null;
+  const activeApp = useMemo(() => {
+    const win = windows.find(item => item.id === activeId);
+    return win ? apps.find(app => app.id === win.app_id) ?? null : null;
+  }, [activeId, windows, apps]);
+
+  const connect = useCallback(async () => {
+    setLoadError('');
+    try {
+      const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
+      const [layout, stored] = await Promise.all([api('/users/me/layout'), api('/users/me/preferences')]);
+      const available = mergeApps(registry as RegistryApp[], me.scopes || []);
+      const prefs: UserPreferences = {...defaultPreferences, ...stored};
+      const known = (id: string) => available.find(app => app.id === id);
+      const storedDock = Array.isArray(layout.dock) ? layout.dock.filter((id: string) => known(id)) : [];
+      const nextDock = storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
+      setApps(available);
+      setDockIds(nextDock);
+      setPreferences(prefs);
+      setSubject(me.subject || '');
+      setUserLabel(me.subject ? String(me.subject).slice(0, 8) : '本地账户');
+      setWindows(prefs.restore_windows === false ? [] : restoreWindows(layout.windows, known, viewport.current));
+      setReady(true);
+    } catch (error) {
+      setLoadError(String(error));
+    }
+  }, [api]);
+
+  useEffect(() => {
+    void connect();
+  }, [connect]);
+
+  useEffect(() => {
+    const media = matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => {
+      const theme = preferences.theme === 'system' ? (media.matches ? 'dark' : 'light') : preferences.theme;
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.accent = preferences.accent;
+      document.documentElement.dataset.wallpaper = preferences.wallpaper;
+      document.documentElement.dataset.reducedMotion = preferences.reduced_motion ? 'true' : 'false';
+      document.documentElement.dataset.animations = preferences.animations ? 'on' : 'off';
+    };
+    apply();
+    media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
+  }, [preferences]);
+
+  const saveLayout = useCallback(
+    async (overrides?: {windows?: WindowState[]; dock?: string[]}) => {
+      const payload = {
+        dock: overrides?.dock ?? dockIds,
+        windows: serializeWindows(overrides?.windows ?? windows),
+      };
+      await api('/users/me/layout', {method: 'PUT', body: JSON.stringify(payload)});
+    },
+    [api, dockIds, windows],
+  );
+
+  // Persist window geometry and dock order shortly after the user stops changing them.
+  useEffect(() => {
+    if (!ready) return;
+    if (preferences.restore_windows === false) return;
+    const timer = setTimeout(() => {
+      void saveLayout().catch(() => undefined);
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [windows, dockIds, ready, preferences.restore_windows, saveLayout]);
+
+  useEffect(() => {
+    const onResize = () => {
+      viewport.current = {width: innerWidth, height: innerHeight};
+      setWindows(current =>
+        current.map(win => {
+          const app = apps.find(item => item.id === win.app_id);
+          return {...win, ...clampRect(win, viewport.current, minSizeOf(app))};
+        }),
+      );
+    };
+    addEventListener('resize', onResize);
+    return () => removeEventListener('resize', onResize);
+  }, [apps]);
+
+  const openApp = useCallback(
+    (id: string) => {
+      const app = apps.find(item => item.id === id);
+      if (!app) return;
+      setLaunchpadOpen(false);
+      setPaletteOpen(false);
+      setRecent(current => {
+        const next = [id, ...current.filter(item => item !== id)].slice(0, 6);
+        try {
+          localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+        } catch {
+          /* storage can be unavailable in private modes; recents are cosmetic */
+        }
+        return next;
+      });
+      setWindows(current => {
+        const existing = current.find(win => win.app_id === id);
+        if (app.singleton && existing) {
+          return focusWindow(
+            current.map(win => (win.id === existing.id ? {...win, minimized: false, title: win.title || app.title} : win)),
+            existing.id,
+          );
+        }
+        const rect = defaultRect(app, viewport.current, current.length);
+        return [...current, {id: crypto.randomUUID(), app_id: id, title: app.title, minimized: false, maximized: false, ...rect}];
+      });
+    },
+    [apps],
+  );
+
+  const closeWindow = useCallback((id: string) => setWindows(current => current.filter(win => win.id !== id)), []);
+  const minimizeWindow = useCallback((id: string) => setWindows(current => current.map(win => (win.id === id ? {...win, minimized: true} : win))), []);
+  const restoreWindow = useCallback(
+    (id: string) => setWindows(current => focusWindow(current.map(win => (win.id === id ? {...win, minimized: false} : win)), id)),
+    [],
+  );
+  const toggleWindowMaximize = useCallback((id: string) => {
+    setWindows(current => current.map(win => (win.id === id ? toggleMaximize(win, viewport.current) : win)));
+  }, []);
+  const updateRect = useCallback(
+    (id: string, rect: {x: number; y: number; width: number; height: number}) => {
+      setWindows(current =>
+        current.map(win =>
+          win.id === id ? {...win, ...clampRect(rect, viewport.current, minSizeOf(apps.find(item => item.id === win.app_id)))} : win,
+        ),
+      );
+    },
+    [apps],
+  );
+  const focus = useCallback((id: string) => setWindows(current => focusWindow(current, id)), []);
+
+  const applyPreferences = useCallback(
+    async (patch: Partial<UserPreferences>) => {
+      setPreferences(current => ({...current, ...patch}));
+      try {
+        const saved = await api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch)});
+        setPreferences(current => ({...current, ...saved}));
+      } catch (error) {
+        push({tone: 'danger', title: '偏好保存失败', description: String(error)});
+      }
+    },
+    [api, push],
+  );
+
+  const toggleLaunchPad = useCallback(() => {
+    setLaunchpadOpen(value => !value);
+    setPaletteOpen(false);
+  }, []);
+
+  // Keyboard shortcuts. Browsers reserve a few of these combinations; the command
+  // palette exposes the same actions when a shortcut is not deliverable.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (!mod) return;
+      const key = event.key.toLowerCase();
+      if (key === 'k') {
+        event.preventDefault();
+        setPaletteOpen(value => !value);
+        setLaunchpadOpen(false);
+      } else if (key === 'w' && activeId) {
+        event.preventDefault();
+        closeWindow(activeId);
+      } else if (key === 'm' && activeId) {
+        event.preventDefault();
+        minimizeWindow(activeId);
+      } else if (key === '`') {
+        const next = nextWindowId(windows, activeId, event.shiftKey ? -1 : 1);
+        if (next) {
+          event.preventDefault();
+          restoreWindow(next);
+        }
+      } else if (key === ',' && !event.shiftKey) {
+        event.preventDefault();
+        openApp('settings');
+      } else if (key === ' ') {
+        event.preventDefault();
+        toggleLaunchPad();
+      }
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, [activeId, closeWindow, minimizeWindow, openApp, restoreWindow, toggleLaunchPad, windows]);
+
+  useEffect(() => {
+    const onFocusRefresh = () => {
+      void apiPage('/work?limit=1000')
+        .then(page => {
+          const data = page.data as Array<{status: string; claim_active?: boolean}>;
+          const active = data.filter(item => item.status === 'queued' || item.status === 'claimed').length;
+          setBadges(current => ({...current, issues: active, development: active}));
+        })
+        .catch(() => undefined);
+    };
+    onFocusRefresh();
+    const timer = setInterval(onFocusRefresh, 60000);
+    return () => clearInterval(timer);
+  }, [apiPage]);
+
+  // Messages from sandboxed iframe apps: only whitelisted types and known frames.
+  useEffect(() => {
+    const allowed = new Set(['app.ready', 'app.request_resize', 'app.set_title', 'app.open_app', 'app.notify']);
+    const handler = (event: MessageEvent) => {
+      const win = windows.find(candidate => {
+        const app = apps.find(item => item.id === candidate.app_id);
+        if (!app || app.kind !== 'iframe' || app.origin !== event.origin) return false;
+        const frame = document.getElementById(`frame-${candidate.id}`) as HTMLIFrameElement | null;
+        return frame?.contentWindow === event.source;
+      });
+      if (!win || !event.data || typeof event.data !== 'object' || !allowed.has(event.data.type)) return;
+      const app = apps.find(item => item.id === win.app_id);
+      if (event.data.type === 'app.ready' && app?.origin) {
+        (event.source as Window | null)?.postMessage(
+          {type: 'desktop.ready', theme: preferences.theme, accent: preferences.accent},
+          app.origin,
+        );
+      }
+      if (event.data.type === 'app.set_title' && typeof event.data.title === 'string') {
+        setWindows(current => current.map(item => (item.id === win.id ? {...item, title: event.data.title.slice(0, 80)} : item)));
+      }
+      if (event.data.type === 'app.request_resize') {
+        setWindows(current =>
+          current.map(item =>
+            item.id === win.id
+              ? {
+                  ...item,
+                  ...clampRect(
+                    {
+                      x: item.x,
+                      y: item.y,
+                      width: Number(event.data.width) || item.width,
+                      height: Number(event.data.height) || item.height,
+                    },
+                    viewport.current,
+                    minSizeOf(app),
+                  ),
+                }
+              : item,
+          ),
+        );
+      }
+      if (event.data.type === 'app.notify' && typeof event.data.message === 'string') {
+        push({title: event.data.message.slice(0, 200)});
+      }
+      if (event.data.type === 'app.open_app' && typeof event.data.app_id === 'string') {
+        openApp(event.data.app_id);
+      }
+    };
+    addEventListener('message', handler);
+    return () => removeEventListener('message', handler);
+  }, [windows, apps, preferences, push, openApp]);
+
+  // Relay the session token to the legacy XeLibrary origin that expects it.
+  useEffect(() => {
+    windows.forEach(win => {
+      const app = apps.find(item => item.id === win.app_id);
+      const frame = document.getElementById(`frame-${win.id}`) as HTMLIFrameElement | null;
+      if (app?.kind === 'iframe' && app.id === 'xelibrary' && app.origin === 'https://library.xenon.lan' && frame) {
+        frame.contentWindow?.postMessage({type: 'auth.session_changed', access_token: token}, app.origin);
+      }
+    });
+  }, [token, windows, apps]);
+
+  const providers: CommandProvider[] = useMemo(
+    () => [
+      {
+        id: 'applications',
+        group: '应用程序',
+        provide: query => {
+          const needle = query.trim().toLowerCase();
+          return apps
+            .filter(app => !needle || `${app.title} ${app.id} ${app.description || ''}`.toLowerCase().includes(needle))
+            .map(
+              (app): Command => ({
+                id: `app-${app.id}`,
+                title: app.title,
+                subtitle: app.description,
+                group: '应用程序',
+                icon: app.icon,
+                run: () => openApp(app.id),
+              }),
+            );
+        },
+      },
+      {
+        id: 'windows',
+        group: '窗口',
+        provide: query => {
+          const needle = query.trim().toLowerCase();
+          return windows
+            .filter(win => !needle || win.title.toLowerCase().includes(needle))
+            .map(
+              (win): Command => ({
+                id: `window-${win.id}`,
+                title: win.title,
+                subtitle: win.minimized ? '最小化' : '切换到窗口',
+                group: '窗口',
+                icon: '▭',
+                run: () => restoreWindow(win.id),
+              }),
+            );
+        },
+      },
+      {
+        id: 'system',
+        group: '系统命令',
+        provide: query => {
+          const needle = query.trim().toLowerCase();
+          const commands: Command[] = [
+            {id: 'cmd-settings', title: '打开设置', group: '系统命令', icon: '⚙', run: () => openApp('settings')},
+            {id: 'cmd-system', title: '打开系统状态', group: '系统命令', icon: '◎', run: () => openApp('system')},
+            {id: 'cmd-launchpad', title: '打开 LaunchPad', group: '系统命令', icon: '▦', run: () => setLaunchpadOpen(true)},
+            {id: 'cmd-theme', title: '切换浅色 / 深色外观', group: '系统命令', icon: '◐', run: () => void applyPreferences({theme: preferences.theme === 'dark' ? 'light' : 'dark'})},
+            {id: 'cmd-save-layout', title: '保存窗口布局', group: '系统命令', icon: '⇩', run: () => void saveLayout().then(() => push({tone: 'success', title: '布局已保存'}))},
+            {id: 'cmd-logout', title: '退出登录', group: '系统命令', icon: '⏻', run: () => void onLogout()},
+          ];
+          if (activeApp) {
+            commands.unshift({
+              id: 'cmd-close-window',
+              title: `关闭窗口：${activeApp.title}`,
+              group: '系统命令',
+              icon: '✕',
+              run: () => activeId && closeWindow(activeId),
+            });
+            commands.unshift({
+              id: 'cmd-minimize-window',
+              title: `最小化窗口：${activeApp.title}`,
+              group: '系统命令',
+              icon: '—',
+              run: () => activeId && minimizeWindow(activeId),
+            });
+          }
+          return needle ? commands.filter(command => command.title.toLowerCase().includes(needle)) : commands;
+        },
+      },
+    ],
+    [apps, windows, activeApp, activeId, openApp, restoreWindow, applyPreferences, preferences.theme, saveLayout, push, onLogout, closeWindow, minimizeWindow],
+  );
+
+  const userWithoutWork = !subject;
+  if (loadError) {
+    return (
+      <div className="desktop ds-compact">
+        <MenuBar
+          userLabel={userLabel}
+          activeApp={null}
+          windows={[]}
+          activeWindowId={null}
+          preferences={preferences}
+          onOpenApp={() => undefined}
+          onOpenLaunchPad={() => undefined}
+          onOpenPalette={() => undefined}
+          onCloseWindow={() => undefined}
+          onMinimizeWindow={() => undefined}
+          onToggleMaximize={() => undefined}
+          onSaveLayout={() => undefined}
+          onLogout={() => void onLogout()}
+          onApplyPreferences={patch => void applyPreferences(patch)}
+          clock={<MenuClock timezone={preferences.timezone} />}
+        />
+        <div className="desktop-error">
+          <ErrorState
+            title="无法加载桌面"
+            message={loadError}
+            onRetry={() => void connect()}
+            retryLabel="重试加载"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (!ready) {
+    return (
+      <div className="desktop ds-compact desktop-loading" role="status">
+        <Spinner size="lg" label="正在加载桌面" />
+        <p>正在加载桌面…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="desktop ds-compact">
+      <MenuBar
+        userLabel={userLabel}
+        activeApp={activeApp}
+        windows={windows}
+        activeWindowId={activeId}
+        preferences={preferences}
+        onOpenApp={openApp}
+        onOpenLaunchPad={toggleLaunchPad}
+        onOpenPalette={() => setPaletteOpen(true)}
+        onCloseWindow={closeWindow}
+        onMinimizeWindow={minimizeWindow}
+        onToggleMaximize={toggleWindowMaximize}
+        onSaveLayout={() => void saveLayout().then(() => push({tone: 'success', title: '布局已保存'}))}
+        onLogout={() => void onLogout()}
+        onApplyPreferences={patch => void applyPreferences(patch)}
+        clock={<MenuClock timezone={preferences.timezone} />}
+        status={
+          <>
+            <i className={`ds-status-dot ${userWithoutWork ? 'ds-status-neutral' : 'ds-status-success'}`} aria-hidden="true" />
+            {userWithoutWork ? '受限身份' : '已连接'}
+          </>
+        }
+      />
+
+      <div className="window-layer">
+        {windows.map(win => {
+          const app = apps.find(item => item.id === win.app_id);
+          if (!app) return null;
+          const index = windows.indexOf(win);
+          const isActive = win.id === activeId;
+          return (
+            <WindowFrame
+              key={win.id}
+              win={win}
+              app={app}
+              active={isActive}
+              accentIndex={index}
+              onFocus={() => focus(win.id)}
+              onMove={rect => updateRect(win.id, rect)}
+              onResize={rect => updateRect(win.id, rect)}
+              onMinimize={() => minimizeWindow(win.id)}
+              onToggleMaximize={() => toggleWindowMaximize(win.id)}
+              onClose={() => closeWindow(win.id)}
+            >
+              {app.kind === 'iframe' ? (
+                <IFrameApp app={app} windowId={win.id} theme={preferences.theme} active={isActive} />
+              ) : app.component ? (
+                <app.component
+                  api={api}
+                  apiPage={apiPage}
+                  apiRaw={apiRaw}
+                  app={app}
+                  apps={apps}
+                  openApp={openApp}
+                  preferences={preferences}
+                  applyPreferences={patch => void applyPreferences(patch)}
+                  notify={push}
+                  windowId={win.id}
+                />
+              ) : (
+                <ErrorState title="应用不可用" message={`${app.title} 没有可用的前端实现。`} />
+              )}
+            </WindowFrame>
+          );
+        })}
+      </div>
+
+      {(preferences.widgets || []).length > 0 && (
+        <div className="widgets">
+          {(preferences.widgets || []).includes('clock') && <ClockWidget timezone={preferences.timezone} />}
+          {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
+        </div>
+      )}
+
+      <Dock
+        apps={apps}
+        windows={windows}
+        activeWindowId={activeId}
+        dockIds={dockIds}
+        autoHide={preferences.dock_autohide}
+        size={(preferences.dock_size || 'medium') as DockSize}
+        badges={badges}
+        onLaunch={openApp}
+        onRestore={restoreWindow}
+        onToggleLaunchPad={toggleLaunchPad}
+        onTogglePin={id =>
+          setDockIds(current => (current.includes(id) ? current.filter(item => item !== id) : [...current, id]))
+        }
+        onReorder={(source, target) =>
+          setDockIds(current => {
+            const next = current.filter(id => id !== source);
+            const index = next.indexOf(target);
+            if (index < 0) return [...next, source];
+            next.splice(index, 0, source);
+            return next;
+          })
+        }
+        onCloseWindow={closeWindow}
+      />
+
+      {launchpadOpen && <LaunchPad apps={apps} recentIds={recent} onLaunch={openApp} onClose={() => setLaunchpadOpen(false)} />}
+      <CommandPalette open={paletteOpen} providers={providers} onClose={() => setPaletteOpen(false)} />
+    </div>
+  );
+}
