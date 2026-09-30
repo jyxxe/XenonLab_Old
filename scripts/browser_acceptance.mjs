@@ -124,7 +124,7 @@ async function main() {
   const options = args();
   activeOutDir = path.resolve(options.out);
   await fs.mkdir(activeOutDir, {recursive: true});
-  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], overflow: []};
+  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], expectedPreAuth401: [], overflow: []};
   const config = await privateConfig(options.config, options.caNickname);
   activeSecrets = [config.username, config.password].filter(Boolean);
   const chromePath = options.chrome || '/usr/bin/google-chrome';
@@ -149,6 +149,8 @@ async function main() {
     'about:blank',
   ], {env: process.env, stdio: 'ignore'});
   let cdp;
+  let authenticated = false;
+  const rowLoads = new Map();
   const report = activeReport;
   const redact = value => [config.username, config.password].filter(Boolean).reduce((text, secret) => text.replaceAll(secret, '[redacted]'), safeText(value));
   const check = (name, passed, detail = '') => report.checks.push({name, passed, ...(detail ? {detail: safeText(detail)} : {})});
@@ -166,10 +168,31 @@ async function main() {
       if (event.type === 'error') report.consoleErrors.push(redact(event.args.map(arg => arg.value || arg.description || '').join(' ')));
     });
     cdp.on('Runtime.exceptionThrown', event => report.pageExceptions.push(redact(event.exceptionDetails?.text || 'Uncaught page exception')));
-    cdp.on('Network.responseReceived', event => {
-      if (event.response.status >= 400 && !event.response.url.startsWith('chrome-extension://')) {
-        report.httpErrors.push({status: event.response.status, url: safeText(new URL(event.response.url).pathname)});
+    cdp.on('Network.requestWillBeSent', event => {
+      const url = new URL(event.request.url);
+      if (/\/api\/v1\/tables\/[^/]+\/rows$/.test(url.pathname)) {
+        rowLoads.set(event.requestId, {path: url.pathname, done: false, status: null});
       }
+    });
+    cdp.on('Network.responseReceived', event => {
+      const url = new URL(event.response.url);
+      const rowLoad = rowLoads.get(event.requestId);
+      if (rowLoad) rowLoad.status = event.response.status;
+      if (event.response.status === 401 && url.pathname === '/api/v1/auth/session/token' && !authenticated) {
+        report.expectedPreAuth401.push({status: 401, url: url.pathname});
+        return;
+      }
+      if (event.response.status >= 400 && !event.response.url.startsWith('chrome-extension://')) {
+        report.httpErrors.push({status: event.response.status, url: safeText(url.pathname)});
+      }
+    });
+    cdp.on('Network.loadingFinished', event => {
+      const rowLoad = rowLoads.get(event.requestId);
+      if (rowLoad) rowLoad.done = true;
+    });
+    cdp.on('Network.loadingFailed', event => {
+      const rowLoad = rowLoads.get(event.requestId);
+      if (rowLoad) {rowLoad.done = true; rowLoad.error = safeText(event.errorText);}
     });
     await cdp.call('Page.enable');
     await cdp.call('Runtime.enable');
@@ -212,6 +235,7 @@ async function main() {
     const submitted = await cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(submitSelector)});if(!e)return false;e.click();return true})()`);
     if (!submitted) throw new Error('Identity-provider submit control not found; configure submitSelector in the private config.');
     await waitFor(async () => (await pageUrl()).startsWith(new URL(config.appUrl).origin) && await cdp.evaluate("Boolean(document.querySelector('nav[aria-label=\"应用程序\"]'))"), 'authenticated desktop');
+    authenticated = true;
     check('authenticated desktop and application dock', true);
     await measureOverflow('desktop');
     await screenshot('03-desktop.png');
@@ -226,9 +250,15 @@ async function main() {
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.knowledge-sidebar button:nth-of-type(2)')&&!document.querySelector('.knowledge-sidebar button:nth-of-type(2)').disabled)"), 'knowledge table list loading');
     const tableAvailable = await cdp.evaluate("Boolean(document.querySelector('.knowledge-sidebar button strong'))");
     if (tableAvailable) {
+      const previousRowRequestIds = new Set(rowLoads.keys());
       await cdp.evaluate("document.querySelector('.knowledge-sidebar button:has(strong)')?.click()");
-      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll table'))"), 'knowledge table rows');
-      const rowAvailable = await cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr'))");
+      const rowLoad = await waitFor(() => [...rowLoads].find(([id, request]) => !previousRowRequestIds.has(id) && request.done)?.[1] || null, 'knowledge rows API response');
+      const rowsRequestOk = rowLoad.status >= 200 && rowLoad.status < 300;
+      check('knowledge row list request succeeded', rowsRequestOk, rowLoad.status ? `HTTP ${rowLoad.status}` : rowLoad.error || 'No successful response status');
+      await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,100))))');
+      const rowState = await cdp.evaluate("(()=>({available:Boolean(document.querySelector('.table-scroll tbody tr')),empty:[...document.querySelectorAll('.table-scroll p')].some(p=>p.innerText.trim()==='没有可显示的记录。')}))()");
+      check('knowledge row loading rendered a row or explicit empty state', rowState.available || rowState.empty, `rows available=${rowState.available}; empty state=${rowState.empty}`);
+      const rowAvailable = rowsRequestOk && rowState.available;
       if (rowAvailable) {
         await cdp.evaluate("document.querySelector('.table-scroll tbody tr')?.click()");
         await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.record-editor'))"), 'selected record');
@@ -278,7 +308,7 @@ async function main() {
       check('system panel is titled 系统面板', panelTitle === '系统面板', panelTitle);
       await measureOverflow('system panel dashboard');
       await screenshot('10-system-panel-dashboard.png');
-          const dashboardDetails = await cdp.evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(panelSelector)});if(!d)return {ring:false,roundedRing:false,bars:false,roundedBars:false,meter:false,roundedMeter:false,indexQueue:false,workQueue:false};const visible=e=>e&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';const cardWith=label=>[...d.querySelectorAll('.mac-card')].find(card=>card.querySelector('h3')?.innerText.includes(label));const embedding=cardWith('Embedding 索引队列'),work=cardWith('Harness 任务队列');const ring=d.querySelector('.mac-ring'),ringSegments=[...(ring?.querySelectorAll('.ring-segment')||[])].filter(visible);const meter=d.querySelector('.mac-meter'),meterStyle=meter?getComputedStyle(meter):null;const bars=d.querySelector('.mac-bars'),plots=[...(bars?.querySelectorAll('.mac-plot')||[])].filter(visible),plotStyle=plots[0]?getComputedStyle(plots[0]):null;const corners=style=>style&&parseFloat(style.borderTopLeftRadius)>0&&style.overflowX==='hidden'&&style.overflowY==='hidden';return {ring:Boolean(visible(ring)),roundedRing:ringSegments.some(circle=>circle.getAttribute('stroke-linecap')==='round'||getComputedStyle(circle).strokeLinecap==='round'),bars:Boolean(visible(bars)),roundedBars:plots.length>0&&corners(plotStyle),meter:Boolean(visible(meter)),roundedMeter:Boolean(meterStyle&&parseFloat(meterStyle.borderTopLeftRadius)>0&&meterStyle.overflowX==='hidden'&&meterStyle.overflowY==='hidden'),indexQueue:Boolean(embedding&&visible(embedding)&&visible(embedding.querySelector('.mac-meter[role="img"]'))),workQueue:Boolean(work&&visible(work)&&visible(work.querySelector('.mac-ring[role="img"]')))}})()`);
+          const dashboardDetails = await cdp.evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(panelSelector)});if(!d)return {ring:false,roundedRing:false,bars:false,roundedBars:false,meter:false,roundedMeter:false,indexQueue:false,workQueue:false};const visible=e=>e&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';const cardWith=label=>[...d.querySelectorAll('.mac-card')].find(card=>card.querySelector('h3')?.innerText.includes(label));const embedding=cardWith('我的 Embedding 索引'),work=cardWith('Harness 任务队列');const ring=d.querySelector('.mac-ring'),ringSegments=[...(ring?.querySelectorAll('.ring-segment')||[])].filter(visible);const meter=d.querySelector('.mac-meter'),meterStyle=meter?getComputedStyle(meter):null;const bars=d.querySelector('.mac-bars'),plots=[...(bars?.querySelectorAll('.mac-plot')||[])].filter(visible),plotStyle=plots[0]?getComputedStyle(plots[0]):null;const corners=style=>style&&parseFloat(style.borderTopLeftRadius)>0&&style.overflowX==='hidden'&&style.overflowY==='hidden';return {ring:Boolean(visible(ring)),roundedRing:ringSegments.some(circle=>circle.getAttribute('stroke-linecap')==='round'||getComputedStyle(circle).strokeLinecap==='round'),bars:Boolean(visible(bars)),roundedBars:plots.length>0&&corners(plotStyle),meter:Boolean(visible(meter)),roundedMeter:Boolean(meterStyle&&parseFloat(meterStyle.borderTopLeftRadius)>0&&meterStyle.overflowX==='hidden'&&meterStyle.overflowY==='hidden'),indexQueue:Boolean(embedding&&visible(embedding)&&visible(embedding.querySelector('.mac-meter[role="img"]'))),workQueue:Boolean(work&&visible(work)&&visible(work.querySelector('.mac-ring[role="img"]')))}})()`);
       check('Harness activity ring visible', dashboardDetails.ring);
       check('Harness SVG ring uses rounded stroke-linecap', dashboardDetails.roundedRing, 'requires a visible .ring-segment with stroke-linecap="round"');
       check('mac-bars chart visible', dashboardDetails.bars, 'requires table data for the knowledge overview chart');
