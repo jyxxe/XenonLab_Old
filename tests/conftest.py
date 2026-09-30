@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from xeonolab.common import Settings
 from xeonolab.services import create_app
 
-SCOPES = "xelibrary:read xelibrary:write xelibrary:query xelibrary:attach deploy:read deploy:release deploy:execute hf-cache:read hf-cache:write"
+SCOPES = "xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:theorem:read xelibrary:theorem:propose deploy:read deploy:release deploy:execute hf-cache:read hf-cache:write"
 
 
 @pytest.fixture
