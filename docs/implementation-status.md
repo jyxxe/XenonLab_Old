@@ -191,3 +191,22 @@ Production uploads: release c32fd7f completed; real PKCE test uploaded 18,900,00
 
 
 WebUI session resilience: timers and API renewal no longer clear the workspace on 401 or temporary failure. Temporary provider errors retain persistent session credentials, startup restores retry, and only explicit logout clears UI state. Revocation requires explicit reauthorization and forbids cached-token fallback. Coordinator validation: 82 backend tests, 4 executable frontend session-state tests, Ruff, OpenAPI and frontend build. Keycloak offline absolute lifespan remains disabled; live Chrome fault injection follows activation.
+
+
+### Issue #40 XeLibrary 核心效率评估（OpenCode harness，分支 `opencode/issue-40`）
+
+对"考虑用 Rust/C++ 重写 XeLibrary 核心"做测量与 ADR 决策；未重写、未发布、未关闭 Issue。
+
+- 新增可复现基准 `scripts/benchmark_xelibrary_core.py`（仅本地、dev token、非管理员读身份、
+  进程内 TestClient）与零依赖 Rust 原型 `experiments/xl-vector-scan`（`cargo build --offline`，
+  未接入 `xeonolab`、CI 或发布清单）。
+- 实测 5000 行表（非管理员）：`POST /api/v1/query` 选择性全表扫描 1.12s、行分页 1.17s、
+  FTS 1.25s；同请求内纯 SQLite 扫描+JSON 解码 12.0ms、AST 谓词求值 4.2ms、DSL 解析 27µs。
+  cProfile 归因：`allowed()` 每行新建 catalogue SQLite 连接，占查询耗时 94%。
+- 向量精确扫描 20000×256：现有 JSON 文本 + Python 点积 986ms；f32 二进制 + Python 180ms；
+  Rust 内核 3.1ms（进程 wall 13ms）；三者 best score/checksum 一致（基准内断言校验）。
+- 决策见 `docs/adr/0004-xelibrary-core-performance.md`：V1 不整体重写核心；先按请求批量解析
+  ACL、向量改 f32 或接入已预置的 Qdrant；仅当这些之后仍有实测 CPU 内核瓶颈时，再评估可选
+  PyO3 内核（C++/pybind11 无实测优势）。
+- 92 项后端测试与 Ruff 通过；未改 API 形状，OpenAPI 无 diff。证据：
+  `runtime/verification/issue-40/core-bench-5000x20000.json`。完整 plan 仍未验收。

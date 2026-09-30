@@ -1,0 +1,15 @@
+[package]
+name = "xl-vector-scan"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-dependency prototype of the XeLibrary exact-vector candidate scan (issue #40)"
+license = "Apache-2.0"
+publish = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[[bin]]
+name = "xl-vector-scan"
+path = "src/main.rs"

@@ -10,5 +10,8 @@ runtime/
 node_modules/
 dist/
 
+# Rust prototype build output (experiments/, not a production dependency)
+experiments/xl-vector-scan/target/
+
 # Private OpenCode instructions containing agent-only credentials
 /Agent.md
