@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from xeonolab.backup import validate_data_root
 from xeonolab.services import create_app
 
 from .conftest import auth, put_acl
@@ -176,6 +177,8 @@ def test_table_delete_fails_closed_for_active_upload(library, settings):
 
 def test_table_delete_serializes_row_and_upload_start_across_rename(library, settings, monkeypatch):
     tid = create_empty_table(library, "Delete race fixture")
+    assert table_etag(library, tid)
+    assert validate_data_root(settings.data_dir)[0]["id"] == tid
     table_path = settings.data_dir / "tables" / f"{tid}.xl"
     entered_rename, continue_rename = threading.Event(), threading.Event()
     original_replace = __import__("xeonolab.library", fromlist=["os"]).os.replace

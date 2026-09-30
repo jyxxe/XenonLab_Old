@@ -181,17 +181,17 @@ def create_app(settings=None):
         return root / "tables" / f"{tid}.xl"
 
     @contextmanager
-    def table_lock(tid):
+    def table_lock(tid, *, exclusive=True):
         """Stable cross-process lock path, retained across the table-file rename."""
         try:
             if str(UUID(tid)) != tid:
                 raise ValueError
         except (ValueError, AttributeError):
             raise APIError(404, "XL_TABLE_NOT_FOUND", "table not found") from None
-        lock_dir = table_directory / ".locks"
+        lock_dir = root / ".table-locks"
         lock_dir.mkdir(mode=0o700, exist_ok=True)
         with (lock_dir / f"{tid}.lock").open("a+b") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
             try:
                 yield
             finally:
@@ -211,7 +211,7 @@ def create_app(settings=None):
     @contextmanager
     def table_connect(tid):
         """Hold the stable table lock while opening and reading the database."""
-        with table_lock(tid), connect(file(tid)) as db:
+        with table_lock(tid, exclusive=False), connect(file(tid)) as db:
             meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
             if "deleting" in meta_columns and db.execute("SELECT deleting FROM __xl_meta").fetchone()[0]:
                 raise APIError(404, "XL_TABLE_NOT_FOUND", "table is being deleted")
