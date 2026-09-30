@@ -22,3 +22,10 @@ Cloudflare connector 位于 VM 105，已建立连接。Token 仅存 /etc/cloudfl
 公网 hostname xenon.jyxxe.com 与 *.xenon.jyxxe.com 的 Service： http://192.168.0.101:8080。
 保留 Host，origin 不使用 TLS；该监听仅接受 VM 105 来源。单域名 Tunnel 路由已通过公网健康检查；origin 按 /auth 与 /dev 分发。
 公网 OIDC issuer 切换必须与 callback、iframe origin 和服务端 JWT verifier 一起验证，不能仅改 DNS。
+
+## 网络稳定性记录
+
+公网真实 PKCE 登录与 Forgejo version 曾通过；随后 Cloudflare 所有 QUIC 连接超时，公网出现 1033。
+已改用 HTTP/2，但 TCP 7844 TLS 握手仍超时。VM 105 UFW inactive，API 443 可达；
+公网可靠性尚未验收，需继续排查外部出口对 Tunnel 7844 的可达性。
+不要把曾成功的测试视为持续在线证据。canonical issuer 现为公网 /auth，登录也依赖该连接。

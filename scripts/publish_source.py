@@ -1,6 +1,7 @@
 """Push tracked source to Forgejo; credentials stay in private files and askpass."""
 
 import os
+import sys
 import subprocess
 from pathlib import Path
 
@@ -22,6 +23,9 @@ environment = {
     "XEONOLAB_FORGEJO_CREDENTIALS": str(root / "forgejo-users.json"),
 }
 url = "https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab.git"
+if "--local" in sys.argv:
+    url = "https://192.168.0.101:9445/xenon-admin/XeonoLab.git"
+    environment["GIT_SSL_CAINFO"] = str(root / "lan-root-ca.crt")
 try:
     subprocess.run(["git", "push", url, "--all"], env=environment, check=True)
 finally:
