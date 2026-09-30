@@ -1,0 +1,28 @@
+[Unit]
+Description=Receive authenticated PVE physical-pool capacity samples
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=/etc/xeonolab/pool-telemetry.env
+ExecStart=/usr/bin/python3 /usr/local/libexec/xeonolab-pool-telemetry-receiver
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/xeonolab/pool-telemetry
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
