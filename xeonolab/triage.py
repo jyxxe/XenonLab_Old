@@ -108,7 +108,13 @@ def candidate_numbers(title, issue_id, candidates, links):
             other, kind = link["source"], link["kind"]
         else:
             continue
-        bucket = duplicates if kind == "duplicate_of" else related
+        if kind == "duplicate_of":
+            bucket = duplicates
+        elif kind == "related_to":
+            bucket = related
+        else:
+            # Directional dependency relations are not related-issue hints.
+            continue
         if other != issue_id and other not in bucket:
             bucket.append(other)
     scored = sorted(

@@ -84,6 +84,37 @@ def test_triage_merges_link_graph_and_isolates_repositories(settings):
     assert isolated["duplicates"] == []
 
 
+def test_triage_only_maps_duplicate_and_related_links(settings):
+    client = dev_client(settings)
+    for number, title in (
+        (60, "Flaky index investigation"),
+        (61, "Tomato recipes"),
+        (62, "Blue bicycle"),
+        (63, "Ancient astronomy"),
+        (64, "Ocean currents"),
+        (65, "Woodworking tools"),
+    ):
+        register(client, number, title)
+
+    for target, relation in (
+        (61, "duplicate_of"),
+        (62, "related_to"),
+        (63, "blocked_by"),
+        (64, "blocks"),
+        (65, "supersedes"),
+    ):
+        linked = client.post(
+            "/api/v1/issues/60/links",
+            headers=auth(),
+            json={"repository": REPOSITORY, "target_issue_id": target, "type": relation},
+        )
+        assert linked.status_code == 201, linked.text
+
+    result = triage(client, 60).json()["data"]
+    assert result["duplicates"] == [61]
+    assert result["related"] == [62]
+
+
 def test_triage_requires_dev_scope_and_registered_issue(settings):
     client = dev_client(settings)
     register(client, 40, "Some issue")
