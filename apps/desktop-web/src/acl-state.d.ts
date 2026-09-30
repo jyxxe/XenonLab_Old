@@ -5,3 +5,9 @@ export function mergeManagedGrants(
   draft: Record<string, string[]>,
   accounts: ACLAccount[],
 ): Record<string, string[]>;
+
+export function unknownSubjectsForTree(
+  grants: Record<string, string[]>,
+  accounts: ACLAccount[],
+  treeReady: boolean,
+): string[];

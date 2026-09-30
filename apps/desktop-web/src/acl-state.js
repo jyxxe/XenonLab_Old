@@ -9,3 +9,9 @@ export function mergeManagedGrants(existing, draft, accounts) {
   }
   return result;
 }
+
+export function unknownSubjectsForTree(grants, accounts, treeReady) {
+  if (!treeReady) return [];
+  const managed = new Set((accounts || []).map(account => account.id));
+  return Object.keys(grants || {}).filter(subject => subject !== '*' && !managed.has(subject));
+}

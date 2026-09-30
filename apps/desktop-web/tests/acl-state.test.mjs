@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeManagedGrants } from '../src/acl-state.js';
+import { mergeManagedGrants, unknownSubjectsForTree } from '../src/acl-state.js';
 
 test('ACL edits are limited to account-tree subjects and preserve existing external subjects', () => {
   const existing = {
@@ -29,4 +29,12 @@ test('removing a managed subject grant does not alter unrelated ACL entries', ()
   }, {}, [{ id: 'account-in-tree' }]);
 
   assert.deepEqual(result, { 'other-known-entry': ['attach'] });
+});
+
+test('subjects are classified as outside the account tree only after the tree loads', () => {
+  const grants = { 'account-in-tree': ['read'], 'external-subject': ['attach'], '*': ['read'] };
+  const accounts = [{ id: 'account-in-tree' }];
+
+  assert.deepEqual(unknownSubjectsForTree(grants, [], false), []);
+  assert.deepEqual(unknownSubjectsForTree(grants, accounts, true), ['external-subject']);
 });

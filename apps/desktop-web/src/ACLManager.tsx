@@ -1,5 +1,5 @@
 import React,{useEffect,useState} from 'react';
-import {mergeManagedGrants} from './acl-state.js';
+import {mergeManagedGrants,unknownSubjectsForTree} from './acl-state.js';
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type ResourceType='path'|'table'|'row';
 type ACL={resource_type:ResourceType;resource_id:string;explicit:boolean;grants:Record<string,string[]>;revision:number};
@@ -71,8 +71,7 @@ export function ACLManager({api}:{api:API}){
    catch(e){setMessage(`${String(e)}。若其他管理员已更新，请重新读取后再操作。`)}finally{setBusy(false)}
  }
 
- const accountIds=new Set(accounts.map(account=>account.id));
- const unknownSubjects=loaded?Object.keys(loaded.grants).filter(subject=>subject!=='*'&&!accountIds.has(subject)):[];
+ const unknownSubjects=unknownSubjectsForTree(loaded?.grants||{},accounts,treeReady);
  return <section className="query acl-manager"><h2>知识库 ACL</h2>
    <p>ACL 授权对象是账号 subject，权限为 read、write、attach。优先应用行 ACL，再应用表 ACL 和路径 ACL；未设置显式 ACL 时继续按父级资源及账号树继承。</p>
    <p>当前身份：{identity?.subject||'读取中'} · {isAdmin?'可管理 ACL':'只读身份'}</p>
