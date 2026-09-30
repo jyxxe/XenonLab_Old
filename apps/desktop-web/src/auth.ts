@@ -1,4 +1,5 @@
 type Config = {issuer:string;client_id:string};
+export class SessionFailure extends Error { constructor(public kind:'temporary'|'reauthorize', message:string){super(message);this.name='SessionFailure';} }
 const encode=(bytes:Uint8Array)=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 async function config():Promise<Config>{const r=await fetch('/api/v1/auth/config');if(!r.ok)throw Error('身份服务配置不可用');return r.json();}
 async function discovery(c:Config){const r=await fetch(c.issuer+'/.well-known/openid-configuration');if(!r.ok)throw Error('身份服务不可用');const d=await r.json();if(d.issuer!==c.issuer)throw Error('身份服务 issuer 不一致');return d;}
@@ -15,11 +16,12 @@ export async function callback():Promise<{token:string;expires:number}|null>{
  history.replaceState(null,'',location.pathname);
  if(parameters.has('error'))throw Error('登录未完成');if(!saved)throw Error('登录请求已失效');
  const data=JSON.parse(saved);if(parameters.get('state')!==data.state||Date.now()-data.created>600000)throw Error('登录状态校验失败');
- const r=await fetch('/api/v1/auth/session/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:parameters.get('code'),redirect:data.redirect,verifier:data.verifier})});
- const result=await r.json();if(!r.ok)throw Error(result.error?.message||'登录令牌交换失败');return result;
+ let r:Response;try{r=await fetch('/api/v1/auth/session/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:parameters.get('code'),redirect:data.redirect,verifier:data.verifier})})}catch{throw new SessionFailure('temporary','身份服务暂时不可用，请重试')}
+ const result=await r.json().catch(()=>({}));if(!r.ok){if(r.status>=500||r.status===429)throw new SessionFailure('temporary',result.error?.message||'身份服务暂时不可用，请重试');throw new SessionFailure('reauthorize',result.error?.message||'登录令牌交换失败，请重新授权')}return result;
 }
 export async function sessionToken():Promise<{token:string;expires:number}|null>{
- const r=await fetch('/api/v1/auth/session/token',{method:'POST'});
- if(r.status===401)return null;if(!r.ok)throw Error('登录续期服务暂不可用');return r.json();
+ let r:Response;try{r=await fetch('/api/v1/auth/session/token',{method:'POST'})}catch{throw new SessionFailure('temporary','登录续期暂不可用，正在重试')}
+ const result=await r.json().catch(()=>({}));if(r.status===401){if(result.error?.code==='NO_SESSION')return null;throw new SessionFailure('reauthorize',result.error?.message||'登录已撤销，需要重新授权')}
+ if(!r.ok)throw new SessionFailure('temporary',result.error?.message||'登录续期暂不可用，正在重试');return result;
 }
 export async function logout(){const r=await fetch('/api/v1/auth/session/logout',{method:'POST'});if(!r.ok)throw Error('退出失败，请重试');}

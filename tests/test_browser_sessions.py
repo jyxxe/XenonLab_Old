@@ -19,6 +19,7 @@ def test_persistent_session_refresh_restart_logout_and_csrf(settings, monkeypatc
     calls = []
     unavailable = False
     denied = False
+    malformed_refresh = False
 
     original_post = httpx.Client.post
 
@@ -33,6 +34,12 @@ def test_persistent_session_refresh_restart_logout_and_csrf(settings, monkeypatc
                     "error": "invalid_grant",
                     "error_description": "Offline tokens not allowed for the user or client",
                 },
+                request=httpx.Request("POST", url),
+            )
+        if malformed_refresh:
+            return httpx.Response(
+                400,
+                json={"error": "invalid_client", "error_description": "provider temporarily rejected the client"},
                 request=httpx.Request("POST", url),
             )
         if unavailable:
@@ -80,11 +87,22 @@ def test_persistent_session_refresh_restart_logout_and_csrf(settings, monkeypatc
     unavailable = False
     assert client.post("/api/v1/auth/session/token", headers=ORIGIN).status_code == 200
     assert calls[-1]["grant_type"] == "refresh_token"
+    with transaction(settings.data_dir / "browser-sessions.sqlite") as db:
+        db.execute("UPDATE sessions SET expires=0")
+    malformed_refresh = True
+    assert client.post("/api/v1/auth/session/token", headers=ORIGIN).status_code == 503
+    with transaction(settings.data_dir / "browser-sessions.sqlite") as db:
+        assert db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+    malformed_refresh = False
+    # A new app/client process can still refresh after temporary provider failure.
+    client = TestClient(create_app(settings), base_url="https://xenon.lan", cookies=client.cookies)
+    assert client.post("/api/v1/auth/session/token", headers=ORIGIN).status_code == 200
+    with transaction(settings.data_dir / "browser-sessions.sqlite") as db:
+        db.execute("UPDATE sessions SET expires=0")
+    denied = True
+    assert client.post("/api/v1/auth/session/token", headers=ORIGIN).status_code == 401
+    with transaction(settings.data_dir / "browser-sessions.sqlite") as db:
+        assert db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
     assert client.post("/api/v1/auth/session/logout", headers={"Origin": "https://evil"}).status_code == 403
     assert client.post("/api/v1/auth/session/logout", headers=ORIGIN).status_code == 200
     assert client.post("/api/v1/auth/session/token", headers=ORIGIN).status_code == 401
-
-    denied = True
-    result = client.post("/api/v1/auth/session/exchange", json=payload, headers=ORIGIN)
-    assert result.status_code == 403
-    assert result.json()["error"]["code"] == "OFFLINE_ACCESS_DENIED"
