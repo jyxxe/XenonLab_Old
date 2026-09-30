@@ -1,6 +1,6 @@
 http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
   bind 192.168.0.101
-  @outside not remote_ip 192.168.0.105
+  @outside not remote_ip 192.168.0.105 192.168.0.101
   handle @outside {
     respond "Tunnel connector required" 403
   }

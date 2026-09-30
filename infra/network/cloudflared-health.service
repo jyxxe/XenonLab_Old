@@ -1,0 +1,13 @@
+[Unit]
+Description=Recover a disconnected Cloudflare Tunnel connector
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/cloudflared-health.py
+RuntimeDirectory=cloudflared-health
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run/cloudflared-health
