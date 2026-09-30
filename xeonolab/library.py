@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
-from .query import evaluate, parse, path_matches
+from .query import evaluate, parse, path_matches, sort_key
 
 TYPES = {
     "string",
@@ -521,6 +521,7 @@ def create_app(settings=None):
         plan = parse(body.expression)
         with connect(catalogue) as db:
             tables = [dict(t) for t in db.execute("SELECT * FROM tables ORDER BY id")]
+        target = plan.offset + plan.limit
         matches = []
         for table in tables:
             if not path_matches(table["path"], plan.path) or not allowed(actor, table, "read"):
@@ -532,9 +533,12 @@ def create_app(settings=None):
                         plan.predicate, row["values"]
                     ):
                         matches.append({"table_id": table["id"], "path": table["path"], **row})
-                    if len(matches) >= plan.limit:
-                        return response(request, matches, approximate=False)
-        return response(request, matches, approximate=False)
+                        if plan.order is None and len(matches) >= target:
+                            return response(request, matches[plan.offset:], approximate=False)
+        if plan.order is not None:
+            # Global ordering has to see the whole matching set before slicing.
+            matches.sort(key=lambda item: sort_key(plan.order, item["values"]), reverse=plan.descending)
+        return response(request, matches[plan.offset:target], approximate=False)
 
     @app.post("/api/v1/query/validate")
     @app.post("/api/v1/query/explain")
@@ -546,6 +550,9 @@ def create_app(settings=None):
                 "path": plan.path,
                 "ast": plan.predicate,
                 "limit": plan.limit,
+                "offset": plan.offset,
+                "order_by": plan.order,
+                "descending": plan.descending,
                 "execution": "bounded AST interpreter",
                 "approximate": False,
             },
