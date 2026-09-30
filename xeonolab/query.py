@@ -18,6 +18,17 @@ from lark import Lark, Transformer, UnexpectedInput
 
 from .common import APIError
 
+NULL_LITERAL = object()
+FUNCTION_ARITY = {
+    "lower": (1, 1),
+    "upper": (1, 1),
+    "len": (1, 1),
+    "coalesce": (1, None),
+    "date": (1, 1),
+    "year": (1, 1),
+    "month": (1, 1),
+}
+
 GRAMMAR = r"""
 start: "FROM"i STRING ["WHERE"i expr] ["ORDER"i "BY"i operand [direction]] ["LIMIT"i INT] ["OFFSET"i INT]
 direction: ASC | DESC
@@ -73,13 +84,18 @@ class AST(Transformer):
         return False
 
     def null(self, x):
-        return None
+        return NULL_LITERAL
 
     def field_ref(self, x):
         return ("field", str(x[0]))
 
     def func(self, x):
-        return ("func", str(x[0]).lower(), list(x[1:]))
+        arguments = x[1:]
+        # Lark preserves an empty optional production as a None child. Keep an
+        # explicit NULL_LITERAL argument distinct so arity checks remain sound.
+        if arguments == [None]:
+            arguments = []
+        return ("func", str(x[0]).lower(), list(arguments))
 
     def compare(self, x):
         return ("compare", x[0], str(x[1]), x[2])
@@ -155,6 +171,8 @@ def parse(expression):
         raise APIError(422, "QUERY_TOO_LARGE", "expression exceeds 8192 characters")
     try:
         plan = parser.parse(expression)
+        validate_function_arities(plan.predicate)
+        validate_function_arities(plan.order)
         if (
             not 1 <= plan.limit <= 1000
             or not 0 <= plan.offset <= 100000
@@ -164,6 +182,31 @@ def parse(expression):
         return plan
     except (UnexpectedInput, ValueError, RecursionError):
         raise APIError(422, "INVALID_QUERY", "invalid or unsupported Query DSL") from None
+
+
+def validate_function_arities(node):
+    if isinstance(node, tuple):
+        if node and node[0] == "func":
+            minimum, maximum = FUNCTION_ARITY[node[1]]
+            count = len(node[2])
+            if count < minimum or (maximum is not None and count > maximum):
+                raise ValueError("invalid function argument count")
+        for child in node:
+            validate_function_arities(child)
+    elif isinstance(node, list):
+        for child in node:
+            validate_function_arities(child)
+
+
+def json_ast(node):
+    """Return the internal AST with NULL_LITERAL restored to JSON null."""
+    if node is NULL_LITERAL:
+        return None
+    if isinstance(node, tuple):
+        return tuple(json_ast(child) for child in node)
+    if isinstance(node, list):
+        return [json_ast(child) for child in node]
+    return node
 
 
 def field(values, name):
@@ -235,6 +278,8 @@ def like_match(value, pattern):
 
 
 def resolve(node, values):
+    if node is NULL_LITERAL:
+        return None
     if isinstance(node, tuple) and node:
         if node[0] == "field":
             return field(values, node[1])

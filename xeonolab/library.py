@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
-from .query import evaluate, parse, path_matches, sort_key
+from .query import evaluate, json_ast, parse, path_matches, sort_key
 
 TYPES = {
     "string",
@@ -548,10 +548,10 @@ def create_app(settings=None):
             request,
             {
                 "path": plan.path,
-                "ast": plan.predicate,
+                "ast": json_ast(plan.predicate),
                 "limit": plan.limit,
                 "offset": plan.offset,
-                "order_by": plan.order,
+                "order_by": json_ast(plan.order),
                 "descending": plan.descending,
                 "execution": "bounded AST interpreter",
                 "approximate": False,

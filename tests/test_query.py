@@ -24,6 +24,10 @@ def test_plan_defaults_and_clauses():
 def test_invalid_unsupported_and_injected_expressions():
     for expression in (
         'FROM "/**" WHERE FOO(title) = 1',
+        'FROM "/**" WHERE LOWER() IS NULL',
+        'FROM "/**" WHERE LOWER(title, title) = "x"',
+        'FROM "/**" WHERE LEN(title, 1) = 1',
+        'FROM "/**" WHERE COALESCE() IS NULL',
         'FROM "/**" WHERE EXISTS(attachments WHERE media_type = "application/pdf")',
         'FROM "/**" SEARCH TEXT "一致收敛" USING fast',
         'FROM "数学"',
@@ -76,6 +80,7 @@ def test_scalar_functions():
     assert where("LEN(number) IS NULL", values)
     assert where("COALESCE(missing, 3) = 3", values)
     assert where('COALESCE(missing, title) = "Alpha"', values)
+    assert where('COALESCE(null, title) = "Alpha"', values)
     assert where('DATE(created) = "2026-09-30"', values)
     assert where("YEAR(created) = 2026 AND MONTH(created) = 9", values)
     assert where("YEAR(missing) IS NULL", values)
@@ -150,6 +155,13 @@ def test_query_endpoint_orders_pages_and_explains(library):
     ).json()["data"]
     assert explain["offset"] == 1 and explain["descending"] is True
     assert explain["order_by"] == ["field", "score"] and explain["limit"] == 2
+    null_explain = library.post(
+        "/api/v1/query/explain",
+        headers=auth(),
+        json={"expression": 'FROM "/测试/**" WHERE title = null'},
+    )
+    assert null_explain.status_code == 200
+    assert null_explain.json()["data"]["ast"] == ["compare", ["field", "title"], "=", None]
 
 
 def test_query_endpoint_operators_and_rejected_injection(library):
