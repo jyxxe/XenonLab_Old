@@ -86,8 +86,8 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChange
  return <section className="attachment-panel" aria-label="记录附件">
   <h4>附件</h4><p role="status" aria-live="polite">{message}</p>
   {progress!==null&&<label>分片上传进度 <progress max="100" value={progress}>{progress}%</progress> {progress}%</label>}
-  {canAttach&&<><label>上传附件（大于 16 MiB 时分片，最大 2 GiB）<input type="file" disabled={busy} onChange={event=>{const file=event.currentTarget.files?.[0];if(file){setResume(null);void upload(file)}event.currentTarget.value=''}}/></label>
-   {resume&&<><button disabled={busy} onClick={()=>void upload(resume.file,resume)}>继续重试分片上传</button><button disabled={busy} onClick={()=>void cancelUpload()}>取消分片上传</button></>}
+  {canAttach&&<><label>上传附件（大于 16 MiB 时分片，最大 2 GiB）<input type="file" disabled={busy||Boolean(resume)} onChange={event=>{const file=event.currentTarget.files?.[0];if(file){setResume(null);void upload(file)}event.currentTarget.value=''}}/></label>
+   {resume&&<><p role="status">当前分片会话未完成。请继续重试或取消后再选择其他文件。</p><button disabled={busy} onClick={()=>void upload(resume.file,resume)}>继续重试分片上传</button><button disabled={busy} onClick={()=>void cancelUpload()}>取消分片上传</button></>}
    <form onSubmit={event=>{event.preventDefault();void bind()}}><label>关联此表中已有附件 ID<input value={sourceId} onChange={event=>setSourceId(event.target.value)} placeholder="附件 ID"/></label><button disabled={busy||!sourceId.trim()}>关联附件</button></form></>}
   {!items.length&&<p>当前记录没有附件。</p>}
   <ul>{items.map(item=><li key={item.attachment_id}><div><strong>{item.filename}</strong><small>{item.media_type} · {item.size.toLocaleString()} 字节 · {new Date(item.created_at).toLocaleString()}</small><small>{item.attachment_id}</small></div><button disabled={busy} onClick={()=>void download(item)}>鉴权下载</button>{canAttach&&<button disabled={busy} onClick={()=>void unbind(item)}>解除关联</button>}</li>)}</ul>
