@@ -59,3 +59,12 @@ Forgejo webhook 自动同步、triage、自动评论/标签联动和任务续租
 发布 commit c1effc8d463522084dae818e1742d06890442116；deployment
 8460739e-1805-4c1a-87b7-297e9786b034 completed，lease 已释放。
 22 项测试、TypeScript build、真实双身份并发与 holder 检查通过。
+
+## 真实 webhook 验收
+
+2026-09-30 已上线 commit cccf63b5565127f8cd7306c0f4ce436fbfeee4f3，deployment
+64f0a9d1-2d85-4c0a-8cfb-d53c0392ede7 completed，lease 已释放。
+Forgejo Issue #33 为实际联调记录，创建自动入队、关闭撤销 claim、重开入队、最终关闭通过。
+仅 issues 事件驱动同步，其余事件仅记录；ALLOWED_HOST_LIST 固定 192.168.0.101，
+webhook HTTP 8081 仅接受 Forgejo 110 来源，服务再次校验签名。Secret 以私密文件提供。
+仍需完善同一 updated_at 的冲突事件处理与主动 reconcile，不能以此次常规路径验收推断全部故障恢复完成。
