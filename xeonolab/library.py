@@ -66,6 +66,10 @@ class Restore(BaseModel):
     revision: int = Field(ge=1)
 
 
+class AttachmentBind(BaseModel):
+    attachment_id: str = Field(min_length=1, max_length=64)
+
+
 class ACLWrite(BaseModel):
     grants: dict[str, list[str]]
 
@@ -745,9 +749,104 @@ def create_app(settings=None):
                 "INSERT INTO __xl_attachments VALUES(?,?,?,?,?,?,?,?)",
                 (aid, row_id, digest, filename, media, len(content), now(), "{}"),
             )
+            db.execute("UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?", (now(),))
+        audit(actor, "attachment.created", f"{table_id}:{row_id}:{aid}")
         return response(
             request, {"attachment_id": aid, "object_hash": digest, "size": len(content), "media_type": media}
         )
+
+    def attachment_metadata(row):
+        return {
+            "attachment_id": row["attachment_id"],
+            "row_id": row["row_id"],
+            "filename": row["filename"],
+            "media_type": row["media_type"],
+            "size": row["size"],
+            "created_at": row["created_at"],
+            "metadata": json.loads(row["metadata_json"]),
+        }
+
+    @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
+    def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        authorize(actor, tid, "read", rid)
+        with connect(file(tid)) as db:
+            load_row(db, rid)
+            rows = db.execute(
+                "SELECT * FROM __xl_attachments WHERE row_id=? ORDER BY created_at,attachment_id", (rid,)
+            ).fetchall()
+        return response(request, [attachment_metadata(row) for row in rows])
+
+    @app.post("/api/v1/tables/{tid}/rows/{rid}/attachments", status_code=201)
+    def bind_attachment(
+        tid: str,
+        rid: str,
+        body: AttachmentBind,
+        request: Request,
+        actor=Depends(scope("xelibrary:attach")),
+    ):
+        authorize(actor, tid, "attach", rid)
+        with transaction(file(tid)) as db:
+            load_row(db, rid)
+            source = db.execute(
+                "SELECT * FROM __xl_attachments WHERE attachment_id=?", (body.attachment_id,)
+            ).fetchone()
+            if source is None:
+                raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found in this table")
+            actor.require("xelibrary:read")
+            authorize(actor, tid, "read", source["row_id"])
+            load_row(db, source["row_id"])
+            if source["row_id"] == rid:
+                return JSONResponse(response(request, attachment_metadata(source)))
+            aid = str(uuid4())
+            db.execute(
+                "INSERT INTO __xl_attachments VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    aid,
+                    rid,
+                    source["object_hash"],
+                    source["filename"],
+                    source["media_type"],
+                    source["size"],
+                    now(),
+                    source["metadata_json"],
+                ),
+            )
+            db.execute("UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?", (now(),))
+            result = db.execute("SELECT * FROM __xl_attachments WHERE attachment_id=?", (aid,)).fetchone()
+        audit(actor, "attachment.bound", f"{tid}:{rid}:{aid}")
+        return JSONResponse(response(request, attachment_metadata(result)), status_code=201)
+
+    @app.delete("/api/v1/tables/{tid}/rows/{rid}/attachments/{aid}")
+    def unbind_attachment(
+        tid: str,
+        rid: str,
+        aid: str,
+        request: Request,
+        actor=Depends(scope("xelibrary:attach")),
+    ):
+        authorize(actor, tid, "attach", rid)
+        with transaction(file(tid)) as db:
+            load_row(db, rid)
+            attachment = db.execute(
+                "SELECT attachment_id FROM __xl_attachments WHERE attachment_id=? AND row_id=?", (aid, rid)
+            ).fetchone()
+            if attachment is None:
+                raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found for row")
+            db.execute("DELETE FROM __xl_attachments WHERE attachment_id=? AND row_id=?", (aid, rid))
+            db.execute("UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?", (now(),))
+        audit(actor, "attachment.unbound", f"{tid}:{rid}:{aid}")
+        return response(request, {"attachment_id": aid, "unbound": True})
+
+    @app.get("/api/v1/attachments/{aid}")
+    def get_attachment(aid: str, table_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        table = authorize(actor, table_id, "read")
+        with connect(file(table_id)) as db:
+            attachment = db.execute("SELECT * FROM __xl_attachments WHERE attachment_id=?", (aid,)).fetchone()
+            if attachment is None:
+                raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found")
+            authorize(actor, table_id, "read", attachment["row_id"])
+            load_row(db, attachment["row_id"])
+        return response(request, {"table_id": table["id"], **attachment_metadata(attachment)})
 
     @app.get("/api/v1/attachments/{aid}/content")
     def download(aid: str, table_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):

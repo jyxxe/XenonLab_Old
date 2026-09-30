@@ -1,13 +1,15 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {initialColumns,SchemaEditor,type Column} from './SchemaEditor';
+import {Attachments} from './Attachments';
 
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{request_id?:string;next_cursor?:string|null;[key:string]:any}}>
+type APIRaw=(path:string,init?:RequestInit)=>Promise<Response>;
 type Table={id:string;name:string;path:string;table_revision?:number;schema_revision?:number};
 type Row={_row_id:string;_revision:number;_created_at:string;_updated_at:string;_deleted_at:string|null;values:Record<string,any>};
 type ScopeResponse={scopes:string[]};
 
-export function Knowledge({api,apiPage}:{api:API;apiPage?:APIPage}){
+export function Knowledge({api,apiPage,apiRaw}:{api:API;apiPage?:APIPage;apiRaw:APIRaw}){
  const [tables,setTables]=useState<Table[]>([]),[table,setTable]=useState<Table|null>(null),[rows,setRows]=useState<Row[]>([]);
  const [tableCursor,setTableCursor]=useState<string|null>(null),[rowsCursor,setRowsCursor]=useState<string|null>(null),[loadingTables,setLoadingTables]=useState(false),[loadingRows,setLoadingRows]=useState(false);
  const [selected,setSelected]=useState<Row|null>(null),[columns,setColumns]=useState<Column[]>([]),[values,setValues]=useState<Record<string,any>>({});
@@ -149,6 +151,7 @@ export function Knowledge({api,apiPage}:{api:API;apiPage?:APIPage}){
   <div className="table-scroll"><table><thead><tr>{columns.map(c=><th key={c.name}>{c.name}</th>)}<th>状态</th><th>Revision</th></tr></thead><tbody>{rows.map(r=><tr key={r._row_id} onClick={()=>select(r)} className={selected?._row_id===r._row_id?'active':''}>{columns.map(c=><td key={c.name}>{typeof r.values[c.name]==='object'&&r.values[c.name]!==null?JSON.stringify(r.values[c.name]):String(r.values[c.name]??'')}</td>)}<td>{r._deleted_at?'已软删除':'正常'}</td><td>{r._revision}</td></tr>)}</tbody></table>{!rows.length&&<p>没有可显示的记录。</p>}</div>{rowsCursor&&<button disabled={loadingRows} onClick={()=>void loadMoreRows()}>{loadingRows?'加载中…':'加载更多记录'}</button>}
   {selected&&<section className="record-editor"><h3>{selected._deleted_at?'已软删除记录':'记录'} · revision {selected._revision}</h3>{columns.map(c=><label key={c.name}>{c.name} <small>{c.type}</small>{c.type==='boolean'?<select disabled={!canWrite||Boolean(selected._deleted_at)||busy} value={String(values[c.name]??'')} onChange={e=>setValues(v=>({...v,[c.name]:e.target.value===''?null:e.target.value==='true'}))}><option value="">空</option><option value="true">是</option><option value="false">否</option></select>:<textarea disabled={!canWrite||Boolean(selected._deleted_at)||busy} value={typeof values[c.name]==='object'&&values[c.name]!==null?JSON.stringify(values[c.name]):String(values[c.name]??'')} onChange={e=>value(c,e.target.value)}/>}</label>)}
    {!selected._deleted_at&&<><button disabled={!canWrite||busy} onClick={()=>void saveRow()}>保存记录</button><button disabled={!canWrite||busy} onClick={()=>void removeRow()}>软删除记录</button></>}
+   {!selected._deleted_at&&table&&<Attachments key={`${table.id}:${selected._row_id}`} tableId={table.id} rowId={selected._row_id} api={api} apiPage={apiPage} apiRaw={apiRaw} canAttach={scopes.includes('xelibrary:attach')} onChanged={()=>refreshTableMetadata(table.id)}/>}
    <section className="record-history"><h4>记录历史</h4>{history.map(revision=><article key={revision._revision}><strong>Revision {revision._revision} · {revision._deleted_at?'已软删除':'有效'}</strong><small>{revision._updated_at}</small><pre>{JSON.stringify(revision.values,null,2)}</pre><button disabled={busy||revision._revision===selected._revision} onClick={()=>setPreview(revision)}>查看</button><button disabled={!canWrite||busy||revision._revision===selected._revision} onClick={()=>void restore(revision._revision)}>恢复此版本</button></article>)}{!history.length&&<p>暂无历史记录。</p>}{preview&&<p role="status">正在查看 revision {preview._revision}。恢复会新增一个 revision，并保留当前历史。</p>}</section>
   </section>}
  </>}</div></div>
