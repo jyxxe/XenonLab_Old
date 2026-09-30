@@ -58,3 +58,7 @@ D100M 实际模型端到端 smoke 通过；React/TypeScript production build 与
 已补齐单行历史 revision 读取、restore 创建新 revision 与管理员 purge。
 restore 校验当前 schema 与 If-Match，保留历史；purge 删除行历史、索引和附件引用，
 保留独立审计，内容寻址对象的实际垃圾回收仍待实现。18 项测试通过。
+
+优先级更新：Issues/Forgejo、权限页面和 Harness 协作优先。
+已实现身份 scopes 展示、管理员 ACL 读取/编辑页面、管理员审计查询 API；19 项测试与前端构建通过。
+公网主域已确定 xenon.jyxxe.com；Cloudflare 原 no-tunnel 例外已被用户撤销。

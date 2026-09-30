@@ -63,6 +63,10 @@ def create_app(settings=None):
     def auth_config():
         return {"issuer": app.state.settings.issuer, "client_id": "desktop"}
 
+    @app.get("/api/v1/users/me")
+    def me(request: Request, actor=Depends(scope("desktop:read"))):
+        return response(request, {"subject": actor.sub, "kind": actor.kind, "scopes": sorted(actor.scopes)})
+
     @app.get("/api/v1/apps")
     def apps(request: Request, actor=Depends(scope("desktop:read"))):
         with connect(path) as db:

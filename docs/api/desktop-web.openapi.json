@@ -87,6 +87,22 @@
         }
       }
     },
+    "/api/v1/users/me": {
+      "get": {
+        "summary": "Me",
+        "operationId": "me_api_v1_users_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/apps": {
       "get": {
         "summary": "Apps",

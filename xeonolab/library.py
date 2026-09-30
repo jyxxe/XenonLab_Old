@@ -548,6 +548,41 @@ def create_app(settings=None):
             },
         )
 
+    @app.get("/api/v1/acl/{resource_type}/{resource_id:path}")
+    def get_acl(
+        resource_type: str, resource_id: str, request: Request, actor=Depends(scope("xelibrary:admin"))
+    ):
+        if resource_type not in ("path", "table", "row"):
+            raise APIError(422, "INVALID_RESOURCE", "unsupported ACL resource")
+        with connect(catalogue) as db:
+            row = db.execute(
+                "SELECT grants FROM acl WHERE resource_type=? AND resource_id=?", (resource_type, resource_id)
+            ).fetchone()
+        return response(
+            request,
+            {
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "explicit": row is not None,
+                "grants": json.loads(row[0]) if row else {},
+            },
+        )
+
+    @app.get("/api/v1/audit")
+    def audit_list(
+        request: Request, limit: int = 100, cursor: str = "", actor=Depends(scope("xelibrary:admin"))
+    ):
+        if not 1 <= limit <= 1000:
+            raise APIError(422, "INVALID_LIMIT", "limit outside range")
+        with connect(catalogue) as db:
+            rows = [
+                dict(r)
+                for r in db.execute("SELECT * FROM audit WHERE id>? ORDER BY id LIMIT ?", (cursor, limit + 1))
+            ]
+        return response(
+            request, rows[:limit], next_cursor=rows[limit - 1]["id"] if len(rows) > limit else None
+        )
+
     @app.put("/api/v1/acl/{resource_type}/{resource_id:path}")
     def put_acl(
         resource_type: str,

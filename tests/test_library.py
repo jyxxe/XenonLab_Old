@@ -193,3 +193,17 @@ def test_restore_revision_and_admin_purge(library):
         == 200
     )
     assert library.get(path + "/revisions/1", headers=auth("admin")).status_code == 404
+
+
+def test_acl_inspection_and_audit_are_admin_only(library):
+    tid, _ = seed(library)
+    path = f"/api/v1/acl/table/{tid}"
+    assert library.get(path, headers=auth()).status_code == 403
+    assert library.get("/api/v1/audit", headers=auth()).status_code == 403
+    assert library.get(path, headers=auth("admin")).json()["data"]["explicit"] is False
+    assert library.put(path, headers=auth("admin"), json={"grants": {"bob": ["read"]}}).status_code == 200
+    assert library.get(path, headers=auth("admin")).json()["data"]["grants"] == {"bob": ["read"]}
+    assert any(
+        r["event"] == "acl.changed"
+        for r in library.get("/api/v1/audit", headers=auth("admin")).json()["data"]
+    )

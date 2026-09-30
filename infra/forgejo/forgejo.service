@@ -1,0 +1,17 @@
+[Unit]
+Description=Forgejo development collaboration
+After=network.target
+[Service]
+User=forgejo
+Group=forgejo
+WorkingDirectory=/var/lib/forgejo
+Environment=USER=forgejo HOME=/var/lib/forgejo
+ExecStart=/usr/local/bin/forgejo web --config /etc/forgejo/app.ini
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/forgejo /etc/forgejo
+PrivateTmp=true
+[Install]
+WantedBy=multi-user.target

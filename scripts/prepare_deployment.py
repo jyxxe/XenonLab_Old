@@ -95,7 +95,7 @@ artifact = {
             "commit": commit,
             "artifacts": [artifact],
             "migration_manifest": "bootstrap-v1-no-existing-data-migration",
-            "test_report": "18 tests; frontend build; D100M model smoke",
+            "test_report": "19 tests; frontend build; D100M model smoke",
         }
     )
 )
