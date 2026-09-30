@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
 from .common import APIError, connect, response, scope, transaction
+from .jobs import JobStore
 from .query import path_matches
 from .services import Search
 
@@ -20,7 +21,7 @@ class IndexRequest(BaseModel):
 
 def install(app, catalogue, file, authorize, allowed, load_row):
     lock = threading.Lock()
-    jobs = {}
+    jobs = JobStore(catalogue)
     endpoint = os.getenv("EMBEDDING_URL")
     credential = os.getenv("EMBEDDING_SERVICE_TOKEN") or os.getenv("EMBEDDING_CLIENT_SECRET_FILE")
     tokenizer_path = os.getenv("D100M_TOKENIZER_PATH")
@@ -70,9 +71,9 @@ def install(app, catalogue, file, authorize, allowed, load_row):
 
     def run(job_id, tid, actor):
         if not lock.acquire(blocking=False):
-            jobs[job_id].update(status="failed", error="index worker busy")
+            jobs.update(job_id, status="failed", error="index worker busy")
             return
-        jobs[job_id]["status"] = "running"
+        jobs.update(job_id, status="running")
         try:
             table = authorize(actor, tid, "read")
             initialize(tid)
@@ -99,9 +100,9 @@ def install(app, catalogue, file, authorize, allowed, load_row):
                         "UPDATE __xl_changes SET indexed_revision=? WHERE row_id=? AND revision<=?",
                         (row["_revision"], rid, row["_revision"]),
                     )
-            jobs[job_id]["status"] = "completed"
+            jobs.update(job_id, status="completed")
         except Exception:
-            jobs[job_id].update(status="failed", error="indexing failed; check embedding dependency")
+            jobs.update(job_id, status="failed", error="indexing failed; check embedding dependency")
         finally:
             lock.release()
 
@@ -115,17 +116,18 @@ def install(app, catalogue, file, authorize, allowed, load_row):
         configured()
         authorize(actor, body.table_id, "read")
         job_id = str(uuid4())
-        jobs[job_id] = {"job_id": job_id, "owner": actor.sub, "status": "queued"}
+        jobs.create(job_id, actor.sub, body.table_id)
         background.add_task(run, job_id, body.table_id, actor)
         return response(request, {"job_id": job_id})
 
     @app.get("/api/v1/jobs/{job_id}")
     def job(job_id: str, request: Request, actor=Depends(scope("xelibrary:admin"))):
-        if job_id not in jobs:
-            raise APIError(404, "JOB_NOT_FOUND", "job not found or service restarted")
-        if jobs[job_id]["owner"] != actor.sub:
+        data = jobs.get(job_id)
+        if data is None:
+            raise APIError(404, "JOB_NOT_FOUND", "job not found")
+        if data["owner"] != actor.sub:
             raise APIError(403, "FORBIDDEN", "job belongs to another caller")
-        return response(request, jobs[job_id])
+        return response(request, data)
 
     @app.post("/api/v1/search/semantic")
     def semantic(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
