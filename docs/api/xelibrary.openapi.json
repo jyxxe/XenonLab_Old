@@ -270,6 +270,66 @@
             }
           }
         }
+      },
+      "delete": {
+        "summary": "Delete Table",
+        "operationId": "delete_table_api_v1_tables__tid__delete",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Current table revision ETag."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "The caller does not have administrator scope."
+          },
+          "404": {
+            "description": "The table does not exist."
+          },
+          "409": {
+            "description": "The table is non-empty, busy, or has active work."
+          },
+          "412": {
+            "description": "If-Match is missing or does not match the current ETag."
+          },
+          "503": {
+            "description": "The table file is unavailable."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Requires `xelibrary:admin` scope and the current table ETag. Deletes empty tables only; rows, attachments, vector references, active index jobs, and active uploads must be cleared first."
       }
     },
     "/api/v1/tables/{tid}/move": {

@@ -1,14 +1,19 @@
+import fcntl
 import hashlib
 import json
+import logging
 import math
+import os
 import re
+import shutil
 import sqlite3
 import stat
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, Header, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -106,6 +111,57 @@ def create_app(settings=None):
         if "explicit" not in acl_columns:
             db.execute("ALTER TABLE acl ADD COLUMN explicit INTEGER NOT NULL DEFAULT 1")
 
+    table_directory = root / "tables"
+
+    def cleanup_table_uploads(tid):
+        upload_database = root / "uploads.sqlite"
+        if not upload_database.exists():
+            return
+        with connect(upload_database) as db:
+            upload_ids = [row[0] for row in db.execute("SELECT upload_id FROM uploads WHERE table_id=?", (tid,))]
+        with transaction(upload_database) as db:
+            db.execute("DELETE FROM uploads WHERE table_id=?", (tid,))
+        upload_root = root / "objects" / ".uploads"
+        for upload_id in upload_ids:
+            try:
+                normalized_upload_id = str(UUID(upload_id))
+            except ValueError:
+                continue
+            shutil.rmtree(upload_root / normalized_upload_id, ignore_errors=True)
+            (upload_root / ".locks" / f"{normalized_upload_id}.lock").unlink(missing_ok=True)
+
+    def recover_table_deletions():
+        """Finish or undo an interrupted table deletion before serving requests."""
+        with connect(catalogue) as db:
+            table_ids = {row[0] for row in db.execute("SELECT id FROM tables")}
+        for tombstone in table_directory.glob(".*.xl.deleting"):
+            table_id = tombstone.name[1 : -len(".xl.deleting")]
+            try:
+                if str(UUID(table_id)) != table_id:
+                    continue
+            except ValueError:
+                continue
+            with table_lock(table_id):
+                target = table_directory / f"{table_id}.xl"
+                if table_id in table_ids:
+                    if not target.exists():
+                        os.replace(tombstone, target)
+                    else:
+                        tombstone.unlink(missing_ok=True)
+                else:
+                    cleanup_table_uploads(table_id)
+                    tombstone.unlink(missing_ok=True)
+        # A crash after setting the durable marker but before renaming left the
+        # canonical table in place. The catalogue decides that this deletion rolls back.
+        for table_id in table_ids:
+            with table_lock(table_id):
+                target = table_directory / f"{table_id}.xl"
+                if target.is_file():
+                    with transaction(target) as db:
+                        columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+                        if "deleting" in columns:
+                            db.execute("UPDATE __xl_meta SET deleting=0")
+
     def audit(actor, event, resource):
         with transaction(catalogue) as db:
             db.execute(
@@ -122,7 +178,47 @@ def create_app(settings=None):
     def file(tid):
         # tid is looked up before it is ever used in a filesystem path.
         table_info(tid)
-        return root / "tables" / f"{tid}.xl"
+        path = root / "tables" / f"{tid}.xl"
+        if not path.is_file():
+            raise APIError(503, "XL_TABLE_STORAGE_UNAVAILABLE", "table file is unavailable")
+        return path
+
+    @contextmanager
+    def table_lock(tid, *, exclusive=True):
+        """Stable cross-process lock path, retained across the table-file rename."""
+        try:
+            if str(UUID(tid)) != tid:
+                raise ValueError
+        except (ValueError, AttributeError):
+            raise APIError(404, "XL_TABLE_NOT_FOUND", "table not found") from None
+        lock_dir = root / ".table-locks"
+        lock_dir.mkdir(mode=0o700, exist_ok=True)
+        with (lock_dir / f"{tid}.lock").open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    @contextmanager
+    def table_transaction(tid):
+        """Serialize table mutations across API workers and reject deleting tables."""
+        with table_lock(tid), transaction(file(tid)) as db:
+            meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+            if "deleting" not in meta_columns:
+                db.execute("ALTER TABLE __xl_meta ADD COLUMN deleting INTEGER NOT NULL DEFAULT 0")
+            if db.execute("SELECT deleting FROM __xl_meta").fetchone()[0]:
+                raise APIError(404, "XL_TABLE_NOT_FOUND", "table is being deleted")
+            yield db
+
+    @contextmanager
+    def table_connect(tid):
+        """Hold the stable table lock while opening and reading the database."""
+        with table_lock(tid, exclusive=False), connect(file(tid)) as db:
+            meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+            if "deleting" in meta_columns and db.execute("SELECT deleting FROM __xl_meta").fetchone()[0]:
+                raise APIError(404, "XL_TABLE_NOT_FOUND", "table is being deleted")
+            yield db
 
     def allowed(actor, table, action, row_id=None):
         if "xelibrary:admin" in actor.scopes:
@@ -155,7 +251,9 @@ def create_app(settings=None):
         return table
 
     def metadata(db):
-        return dict(db.execute("SELECT * FROM __xl_meta").fetchone())
+        result = dict(db.execute("SELECT * FROM __xl_meta").fetchone())
+        result.pop("deleting", None)
+        return result
 
     def columns(db):
         return [json.loads(x[0]) for x in db.execute("SELECT definition FROM __xl_schema ORDER BY position")]
@@ -296,9 +394,125 @@ def create_app(settings=None):
     @app.get("/api/v1/tables/{tid}/schema")
     def get_table(tid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         table = authorize(actor, tid, "read")
-        with connect(file(tid)) as db:
+        with table_connect(tid) as db:
             data = {**table, **metadata(db), "columns": columns(db)}
         return JSONResponse(response(request, data), headers={"ETag": etag(data["table_revision"])})
+
+    @app.delete(
+        "/api/v1/tables/{tid}",
+        responses={
+            403: {"description": "The caller does not have administrator scope."},
+            404: {"description": "The table does not exist."},
+            409: {"description": "The table is non-empty, busy, or has active work."},
+            412: {"description": "If-Match is missing or does not match the current ETag."},
+            503: {"description": "The table file is unavailable."},
+        },
+        openapi_extra={
+            "description": (
+                "Requires `xelibrary:admin` scope and the current table ETag. Deletes empty tables only; "
+                "rows, attachments, vector references, active index jobs, and active uploads must be cleared first."
+            ),
+            "parameters": [
+                {
+                    "name": "If-Match",
+                    "in": "header",
+                    "required": True,
+                    "schema": {"type": "string"},
+                    "description": "Current table revision ETag.",
+                }
+            ],
+        },
+    )
+    def delete_table(tid: str, request: Request, actor=Depends(scope("xelibrary:admin"))):
+        with table_lock(tid):
+            authorize(actor, tid, "write")
+            target = file(tid)
+            if not target.is_file():
+                raise APIError(503, "XL_TABLE_STORAGE_UNAVAILABLE", "table file is unavailable")
+
+            # Deletion is deliberately limited to empty tables. Row history and vector facts
+            # are removed through the existing row purge flow before the containing table.
+            with transaction(file(tid)) as db:
+                meta = metadata(db)
+                meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+                if "deleting" not in meta_columns:
+                    db.execute("ALTER TABLE __xl_meta ADD COLUMN deleting INTEGER NOT NULL DEFAULT 0")
+                precondition(request, meta["table_revision"])
+                rows = db.execute("SELECT count(*) FROM data").fetchone()[0]
+                attachments = db.execute("SELECT count(*) FROM __xl_attachments").fetchone()[0]
+                vectors_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='__xl_vectors'"
+                ).fetchone()
+                vectors = db.execute("SELECT count(*) FROM __xl_vectors").fetchone()[0] if vectors_table else 0
+            if attachments:
+                raise APIError(
+                    409,
+                    "TABLE_HAS_ATTACHMENTS",
+                    "unbind or purge every attachment reference before deleting the table",
+                )
+            if rows:
+                raise APIError(409, "TABLE_NOT_EMPTY", "purge every row before deleting the table")
+            if vectors:
+                raise APIError(409, "TABLE_HAS_VECTORS", "remove derived vector references before deleting the table")
+
+            with connect(catalogue) as db:
+                jobs_exists = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_jobs'"
+                ).fetchone()
+                jobs = [json.loads(row[0]) for row in db.execute("SELECT payload FROM index_jobs")] if jobs_exists else []
+            if any(job.get("table_id") == tid and job.get("status") in ("queued", "running") for job in jobs):
+                raise APIError(409, "TABLE_INDEX_ACTIVE", "wait for the table's index job to finish")
+
+            upload_database = root / "uploads.sqlite"
+            if upload_database.exists():
+                with connect(upload_database) as db:
+                    active = db.execute(
+                        "SELECT 1 FROM uploads WHERE table_id=? AND completed=0 AND cancelled=0 LIMIT 1", (tid,)
+                    ).fetchone()
+                if active:
+                    raise APIError(409, "TABLE_UPLOAD_ACTIVE", "finish or cancel uploads before deleting the table")
+
+            with connect(target) as db:
+                checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if checkpoint and checkpoint[0]:
+                    raise APIError(409, "TABLE_BUSY", "table has active readers or writers")
+            with transaction(target) as db:
+                db.execute("UPDATE __xl_meta SET deleting=1")
+            tombstone = table_directory / f".{tid}.xl.deleting"
+            try:
+                os.replace(target, tombstone)
+            except BaseException:
+                with transaction(target) as db:
+                    db.execute("UPDATE __xl_meta SET deleting=0")
+                raise
+            try:
+                with transaction(catalogue) as db:
+                    current = db.execute("SELECT 1 FROM tables WHERE id=?", (tid,)).fetchone()
+                    if current is None:
+                        raise APIError(404, "XL_TABLE_NOT_FOUND", "table not found")
+                    db.execute("DELETE FROM acl WHERE resource_type='table' AND resource_id=?", (tid,))
+                    db.execute(
+                        "DELETE FROM acl WHERE resource_type='row' AND resource_id LIKE ?",
+                        (tid + ":%",),
+                    )
+                    db.execute("DELETE FROM tables WHERE id=?", (tid,))
+                    db.execute(
+                        "INSERT INTO audit VALUES(?,?,?,?,?)",
+                        (str(uuid4()), actor.sub, "table.deleted", tid, now()),
+                    )
+            except BaseException:
+                if tombstone.exists() and not target.exists():
+                    os.replace(tombstone, target)
+                    with transaction(target) as db:
+                        db.execute("UPDATE __xl_meta SET deleting=0")
+                raise
+
+            cleanup_table_uploads(tid)
+            try:
+                tombstone.unlink(missing_ok=True)
+            except OSError:
+                logging.getLogger(__name__).exception("unable to remove deleted table tombstone")
+            return response(request, {"table_id": tid, "deleted": True})
 
     @app.patch("/api/v1/tables/{tid}/schema")
     def update_schema(tid: str, body: SchemaWrite, request: Request, actor=Depends(scope("xelibrary:admin"))):
@@ -308,7 +522,7 @@ def create_app(settings=None):
             c.type not in TYPES for c in body.columns
         ):
             raise APIError(422, "INVALID_SCHEMA", "duplicate field or unsupported type")
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             meta = metadata(db)
             precondition(request, meta["table_revision"])
             if db.execute("SELECT count(*) FROM data").fetchone()[0] > 10000:
@@ -354,7 +568,7 @@ def create_app(settings=None):
         path = clean_path(body.path)
         if not allowed(actor, {**table, "path": path, "id": ""}, "write"):
             raise APIError(403, "XL_FORBIDDEN", "destination path permission denied")
-        with transaction(catalogue) as catalog, transaction(file(tid)) as db:
+        with table_transaction(tid) as db, transaction(catalogue) as catalog:
             meta = metadata(db)
             precondition(request, meta["table_revision"])
             try:
@@ -371,7 +585,7 @@ def create_app(settings=None):
     @app.post("/api/v1/tables/{tid}/rows", status_code=201)
     def create_row(tid: str, body: RowWrite, request: Request, actor=Depends(scope("xelibrary:write"))):
         authorize(actor, tid, "write")
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             key = request.headers.get("Idempotency-Key")
             digest = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
             idempotency_key = f"{actor.sub}:{key}" if key else None
@@ -411,7 +625,7 @@ def create_app(settings=None):
         table = authorize(actor, tid, "read")
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
-        with connect(file(tid)) as db:
+        with table_connect(tid) as db:
             rows = [
                 decode(r)
                 for r in db.execute(
@@ -427,7 +641,7 @@ def create_app(settings=None):
     @app.get("/api/v1/tables/{tid}/rows/{rid}")
     def get_row(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         authorize(actor, tid, "read", rid)
-        with connect(file(tid)) as db:
+        with table_connect(tid) as db:
             row = load_row(db, rid)
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
@@ -436,7 +650,7 @@ def create_app(settings=None):
         tid: str, rid: str, body: RowWrite, request: Request, actor=Depends(scope("xelibrary:write"))
     ):
         authorize(actor, tid, "write", rid)
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             row = load_row(db, rid)
             precondition(request, row["_revision"])
             values = {**row["values"], **validate_values(columns(db), body.values, True)}
@@ -461,7 +675,7 @@ def create_app(settings=None):
         authorize(actor, tid, "write", rid)
         if purge:
             actor.require("xelibrary:admin")
-            with transaction(file(tid)) as db:
+            with table_transaction(tid) as db:
                 row = load_row(db, rid, True)
                 precondition(request, row["_revision"])
                 for name, column in [
@@ -479,7 +693,7 @@ def create_app(settings=None):
                 db.execute("DELETE FROM acl WHERE resource_type='row' AND resource_id=?", (f"{tid}:{rid}",))
             audit(actor, "row.purged", f"{tid}:{rid}")
             return response(request, {"deleted": True, "purged": True})
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             row = load_row(db, rid)
             precondition(request, row["_revision"])
             db.execute("UPDATE data SET _deleted_at=?,_revision=_revision+1 WHERE _row_id=?", (now(), rid))
@@ -491,7 +705,7 @@ def create_app(settings=None):
     @app.get("/api/v1/tables/{tid}/rows/{rid}/revisions")
     def revisions(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         authorize(actor, tid, "read", rid)
-        with connect(file(tid)) as db:
+        with table_connect(tid) as db:
             load_row(db, rid, True)
             rows = [
                 json.loads(r[0])
@@ -504,7 +718,7 @@ def create_app(settings=None):
     @app.get("/api/v1/tables/{tid}/rows/{rid}/revisions/{revision}")
     def revision(tid: str, rid: str, revision: int, request: Request, actor=Depends(scope("xelibrary:read"))):
         authorize(actor, tid, "read", rid)
-        with connect(file(tid)) as db:
+        with table_connect(tid) as db:
             load_row(db, rid, True)
             old = db.execute(
                 "SELECT snapshot FROM __xl_changes WHERE row_id=? AND revision=?", (rid, revision)
@@ -516,7 +730,7 @@ def create_app(settings=None):
     @app.post("/api/v1/tables/{tid}/rows/{rid}/restore")
     def restore(tid: str, rid: str, body: Restore, request: Request, actor=Depends(scope("xelibrary:write"))):
         authorize(actor, tid, "write", rid)
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             current = load_row(db, rid, True)
             precondition(request, current["_revision"])
             old = db.execute(
@@ -546,7 +760,7 @@ def create_app(settings=None):
         for table in tables:
             if not path_matches(table["path"], plan.path) or not allowed(actor, table, "read"):
                 continue
-            with connect(file(table["id"])) as db:
+            with table_connect(table["id"]) as db:
                 for raw in db.execute("SELECT * FROM data WHERE _deleted_at IS NULL ORDER BY _row_id"):
                     row = decode(raw)
                     if allowed(actor, table, "read", row["_row_id"]) and evaluate(
@@ -746,7 +960,7 @@ def create_app(settings=None):
         actor=Depends(scope("xelibrary:attach")),
     ):
         authorize(actor, table_id, "attach", row_id)
-        with connect(file(table_id)) as db:
+        with table_connect(table_id) as db:
             load_row(db, row_id)
         content = await upload.read(16 * 1024 * 1024 + 1)
         if len(content) > 16 * 1024 * 1024:
@@ -764,7 +978,7 @@ def create_app(settings=None):
             if content.startswith(b"%PDF-")
             else ("image/png" if content.startswith(b"\x89PNG\r\n\x1a\n") else "application/octet-stream")
         )
-        with transaction(file(table_id)) as db:
+        with table_transaction(table_id) as db:
             load_row(db, row_id)
             db.execute(
                 "INSERT INTO __xl_attachments VALUES(?,?,?,?,?,?,?,?)",
@@ -797,12 +1011,15 @@ def create_app(settings=None):
         attachment_metadata=attachment_metadata,
         response=response,
         now=now,
+        table_transaction=table_transaction,
+        table_connect=table_connect,
     )
+    recover_table_deletions()
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
     def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         authorize(actor, tid, "read", rid)
-        with connect(file(tid)) as db:
+        with table_connect(tid) as db:
             load_row(db, rid)
             rows = db.execute(
                 "SELECT * FROM __xl_attachments WHERE row_id=? ORDER BY created_at,attachment_id", (rid,)
@@ -818,7 +1035,7 @@ def create_app(settings=None):
         actor=Depends(scope("xelibrary:attach")),
     ):
         authorize(actor, tid, "attach", rid)
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             load_row(db, rid)
             source = db.execute(
                 "SELECT * FROM __xl_attachments WHERE attachment_id=?", (body.attachment_id,)
@@ -858,7 +1075,7 @@ def create_app(settings=None):
         actor=Depends(scope("xelibrary:attach")),
     ):
         authorize(actor, tid, "attach", rid)
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             load_row(db, rid)
             attachment = db.execute(
                 "SELECT attachment_id FROM __xl_attachments WHERE attachment_id=? AND row_id=?", (aid, rid)
@@ -873,7 +1090,7 @@ def create_app(settings=None):
     @app.get("/api/v1/attachments/{aid}")
     def get_attachment(aid: str, table_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         table = authorize(actor, table_id, "read")
-        with connect(file(table_id)) as db:
+        with table_connect(table_id) as db:
             attachment = db.execute("SELECT * FROM __xl_attachments WHERE attachment_id=?", (aid,)).fetchone()
             if attachment is None:
                 raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found")
@@ -884,7 +1101,7 @@ def create_app(settings=None):
     @app.get("/api/v1/attachments/{aid}/content")
     def download(aid: str, table_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         authorize(actor, table_id, "read")
-        with connect(file(table_id)) as db:
+        with table_connect(table_id) as db:
             attachment = db.execute("SELECT * FROM __xl_attachments WHERE attachment_id=?", (aid,)).fetchone()
             if attachment is None:
                 raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found")
@@ -923,7 +1140,7 @@ def create_app(settings=None):
     from .services import Search
     from .theorems import install as install_theorems
 
-    install(app, catalogue, file, authorize, allowed, load_row)
+    install(app, catalogue, file, authorize, allowed, load_row, table_transaction, table_connect)
     install_theorems(app, catalogue, allowed, audit)
 
     @app.post("/api/v1/search/hybrid")
@@ -943,7 +1160,7 @@ def create_app(settings=None):
         for table in tables:
             if not path_matches(table["path"], body.path) or not allowed(actor, table, "read"):
                 continue
-            with connect(file(table["id"])) as db:
+            with table_connect(table["id"]) as db:
                 for hit in db.execute(
                     "SELECT row_id,bm25(__xl_fts) AS rank FROM __xl_fts WHERE __xl_fts MATCH ?", (fts_query,)
                 ):
@@ -984,7 +1201,7 @@ def create_app(settings=None):
             )
 
         for table in tables:
-            with connect(file(table["id"])) as db:
+            with table_connect(table["id"]) as db:
                 rows += db.execute("SELECT COUNT(*) FROM data WHERE _deleted_at IS NULL").fetchone()[0]
                 try:
                     chunks += db.execute("SELECT COUNT(*) FROM __xl_vectors").fetchone()[0]
