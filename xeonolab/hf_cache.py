@@ -360,6 +360,14 @@ def create_app(
             else "evict_low_priority" if percent < 90 else "retain_protected"
         )
 
+    def require_prefetch_headroom(usage):
+        if usage.pressure_percent >= 80:
+            raise APIError(
+                507,
+                "DISK_WATERMARK",
+                "speculative cache prefetch disabled at or above the 80% disk watermark",
+            )
+
     def storage_usage(request=None):
         nonlocal last_watermark
         try:
@@ -567,7 +575,15 @@ def create_app(
                 break
         return removed, usage
 
-    def ensure_item(body, progress=lambda value, phase: None, requested_revision=None, request=None):
+    def ensure_item(
+        body,
+        progress=lambda value, phase: None,
+        requested_revision=None,
+        request=None,
+        speculative_prefetch=False,
+    ):
+        if speculative_prefetch:
+            require_prefetch_headroom(storage_usage(request))
         requested_revision = requested_revision or body.revision
         progress(5, "resolving_revision")
         resolved_revision = (
@@ -608,6 +624,8 @@ def create_app(
                 usage = storage_usage(request)
                 if recover_pending_evictions():
                     usage = storage_usage(request)
+                if speculative_prefetch:
+                    require_prefetch_headroom(usage)
                 used_percent = usage.pressure_percent
                 if used_percent >= 90:
                     raise APIError(
@@ -742,8 +760,14 @@ def create_app(
                 update_job(job_id, progress=value, phase=phase)
 
             try:
-                storage_usage()  # restarted jobs must also fail closed before cache access
-                result = ensure_item(body, progress, row["requested_revision"])
+                usage = storage_usage()  # restarted jobs must also fail closed before cache access
+                require_prefetch_headroom(usage)
+                result = ensure_item(
+                    body,
+                    progress,
+                    row["requested_revision"],
+                    speculative_prefetch=True,
+                )
                 update_job(
                     job_id, status="succeeded", progress=100, phase="ready", item_id=result["id"], error=""
                 )
@@ -762,7 +786,7 @@ def create_app(
             return
 
     def enqueue(body):
-        storage_usage()
+        require_prefetch_headroom(storage_usage())
         requested_revision = body.revision
         resolved_revision = resolve_revision(body.repo_type, body.repo_id, requested_revision)
         if not isinstance(resolved_revision, str) or not REVISION.fullmatch(resolved_revision):
@@ -770,6 +794,7 @@ def create_app(
         pinned_body = body.model_copy(update={"revision": resolved_revision})
         job_id = str(uuid4())
         now = time.time()
+        require_prefetch_headroom(storage_usage())
         with transaction(db_path) as db:
             db.execute(
                 "INSERT INTO prefetch_jobs(id,payload,status,progress,phase,attempts,max_attempts,item_id,error,created,updated,requested_revision,resolved_revision) "
@@ -825,7 +850,7 @@ def create_app(
 
     @app.post("/api/v1/cache/prefetch/jobs/{job_id}/retry")
     def retry_prefetch(job_id: str, request: Request, actor=Depends(scope("hf-cache:write"))):
-        storage_usage()
+        require_prefetch_headroom(storage_usage())
         with transaction(db_path) as db:
             row = db.execute("SELECT * FROM prefetch_jobs WHERE id=?", (job_id,)).fetchone()
             if not row:
