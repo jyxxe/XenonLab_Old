@@ -218,9 +218,14 @@ def base_app(service, settings=None):
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def metrics():
-        return (
+        rendered = (
             f'xeonolab_requests_total{{service="{service}"}} {app.state.requests}\n'
             f'xeonolab_errors_total{{service="{service}"}} {app.state.errors}\n'
+        )
+        extra = getattr(app.state, "metrics_extra", None)
+        return PlainTextResponse(
+            rendered + (extra() if extra else ""),
+            media_type="text/plain; version=0.0.4",
         )
 
     return app

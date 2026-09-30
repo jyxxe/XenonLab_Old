@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -272,9 +273,19 @@ def create_app(
                 max_age_seconds=metrics_max_age,
             )
     else:
+        if app.state.settings.mode == "production":
 
-        def usage_provider(path):
-            return shutil.disk_usage(path)
+            def usage_provider(_path):
+                raise APIError(
+                    503,
+                    "STORAGE_TELEMETRY_UNAVAILABLE",
+                    "trusted storage telemetry is not configured",
+                )
+
+        else:
+
+            def usage_provider(path):
+                return shutil.disk_usage(path)
 
     try:
         cache_quota = int(os.getenv("HF_CACHE_MAX_BYTES", str(2 * 1024**4)))
@@ -282,7 +293,47 @@ def create_app(
         raise RuntimeError("HF_CACHE_MAX_BYTES must be a positive integer") from None
     if cache_quota <= 0:
         raise RuntimeError("HF_CACHE_MAX_BYTES must be a positive integer")
-    app.state.ready_check = lambda: True
+    cache_counters = {
+        "download_bytes_total": 0,
+        "hit_total": 0,
+        "miss_total": 0,
+        "evicted_bytes_total": 0,
+    }
+    cache_metrics_lock = threading.Lock()
+
+    def add_counter(name, amount=1):
+        with cache_metrics_lock:
+            cache_counters[name] += amount
+
+    def cache_metrics():
+        with connect(db_path) as db:
+            usage_bytes = db.execute("SELECT COALESCE(SUM(bytes),0) FROM items").fetchone()[0]
+        with cache_metrics_lock:
+            counters = dict(cache_counters)
+        return (
+            "# HELP hfcache_usage_bytes Bytes currently stored in verified HF-cache items.\n"
+            "# TYPE hfcache_usage_bytes gauge\n"
+            f"hfcache_usage_bytes {usage_bytes}\n"
+            "# HELP hfcache_download_bytes_total Bytes in successfully downloaded snapshots.\n"
+            "# TYPE hfcache_download_bytes_total counter\n"
+            f"hfcache_download_bytes_total {counters['download_bytes_total']}\n"
+            "# HELP hfcache_hit_total Requests served from a verified cache snapshot.\n"
+            "# TYPE hfcache_hit_total counter\n"
+            f"hfcache_hit_total {counters['hit_total']}\n"
+            "# HELP hfcache_miss_total Requests that required a new snapshot download.\n"
+            "# TYPE hfcache_miss_total counter\n"
+            f"hfcache_miss_total {counters['miss_total']}\n"
+            "# HELP hfcache_evicted_bytes_total Bytes removed from HF-cache items.\n"
+            "# TYPE hfcache_evicted_bytes_total counter\n"
+            f"hfcache_evicted_bytes_total {counters['evicted_bytes_total']}\n"
+        )
+
+    app.state.metrics_extra = cache_metrics
+
+    def log_cache_event(event, **fields):
+        logging.getLogger("xeonolab").info(
+            json.dumps({"service": "hf-cache", "event": event, **fields}, sort_keys=True)
+        )
 
     def storage_usage():
         try:
@@ -325,6 +376,12 @@ def create_app(
                 503, "STORAGE_TELEMETRY_UNAVAILABLE", "trusted storage telemetry unavailable"
             ) from None
 
+    def storage_ready():
+        storage_usage()
+        return True
+
+    app.state.ready_check = storage_ready
+
     def get_item(db, item_id):
         row = db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
         if not row:
@@ -365,6 +422,8 @@ def create_app(
     def collect(target_percent, *, low_only=False):
         usage = storage_usage()
         removed = []
+        removed_details = []
+        removed_bytes = 0
         priority_filter = "AND i.priority='low'" if low_only else ""
         with transaction(db_path) as db:
             rows = db.execute(
@@ -381,10 +440,46 @@ def create_app(
                 shutil.rmtree(item_path)
                 db.execute("DELETE FROM items WHERE id=?", (row["id"],))
                 removed.append(row["id"])
+                removed_details.append((row["id"], row["bytes"]))
+                removed_bytes += row["bytes"]
+                previous = usage
                 usage = storage_usage()
+                if (
+                    usage.pool,
+                    usage.pool_total,
+                    usage.pool_used,
+                    usage.pool_free,
+                    usage.guest_total,
+                    usage.guest_used,
+                    usage.guest_free,
+                ) == (
+                    previous.pool,
+                    previous.pool_total,
+                    previous.pool_used,
+                    previous.pool_free,
+                    previous.guest_total,
+                    previous.guest_used,
+                    previous.guest_free,
+                ):
+                    log_cache_event(
+                        "cache.gc.telemetry_stalled",
+                        evicted_count=len(removed),
+                        evicted_bytes=removed_bytes,
+                    )
+                    break
+        if removed:
+            add_counter("evicted_bytes_total", removed_bytes)
+            for item_id, item_bytes in removed_details:
+                log_cache_event("cache.item.evicted", item_id=item_id, bytes=item_bytes)
         return removed, usage
 
     def ensure_item(body, progress=lambda value, phase: None, requested_revision=None):
+        if (
+            app.state.settings.mode == "production"
+            and not metrics_path
+            and storage_usage_provider is None
+        ):
+            storage_usage()
         requested_revision = requested_revision or body.revision
         progress(5, "resolving_revision")
         resolved_revision = resolve_revision(body.repo_type, body.repo_id, body.revision)
@@ -408,9 +503,13 @@ def create_app(
                         "requested_revision": requested_revision,
                     }
                 progress(100, "cached")
+                add_counter("hit_total")
+                log_cache_event("cache.hit", item_id=old["id"])
                 return result
             if old:
                 raise APIError(500, "CACHE_INTEGRITY_FAILURE", "cached snapshot failed manifest verification")
+            add_counter("miss_total")
+            log_cache_event("cache.miss", repo_type=body.repo_type, repo_id=body.repo_id)
             item_id = str(uuid4())
             final = root / item_id
             staging = root / ("." + item_id + ".partial")
@@ -485,6 +584,8 @@ def create_app(
                         **public_item(db, row),
                         "requested_revision": requested_revision,
                     }
+                add_counter("download_bytes_total", total)
+                log_cache_event("cache.download.completed", item_id=item_id, bytes=total)
                 progress(100, "ready")
                 return result
             except Exception:
@@ -567,6 +668,7 @@ def create_app(
             return
 
     def enqueue(body):
+        storage_usage()
         requested_revision = body.revision
         resolved_revision = resolve_revision(body.repo_type, body.repo_id, requested_revision)
         if not isinstance(resolved_revision, str) or not REVISION.fullmatch(resolved_revision):
@@ -623,6 +725,7 @@ def create_app(
 
     @app.post("/api/v1/cache/prefetch/jobs/{job_id}/retry")
     def retry_prefetch(job_id: str, request: Request, actor=Depends(scope("hf-cache:write"))):
+        storage_usage()
         with transaction(db_path) as db:
             row = db.execute("SELECT * FROM prefetch_jobs WHERE id=?", (job_id,)).fetchone()
             if not row:
@@ -763,7 +866,10 @@ def create_app(
                 raise APIError(500, "CACHE_PATH_INVALID", "refusing to delete outside cache root")
             shutil.rmtree(item_path)
             db.execute("DELETE FROM items WHERE id=?", (item_id,))
-            return response(request, {"id": item_id, "evicted": True})
+            item_bytes = row["bytes"]
+        add_counter("evicted_bytes_total", item_bytes)
+        log_cache_event("cache.item.evicted", item_id=item_id, bytes=item_bytes)
+        return response(request, {"id": item_id, "evicted": True})
 
     @app.post("/api/v1/cache/items/{item_id}/leases")
     def acquire_lease(item_id: str, request: Request, actor=Depends(scope("hf-cache:write"))):

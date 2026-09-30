@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from xeonolab import hf_cache
-from xeonolab.common import APIError, transaction
+from xeonolab.common import APIError, Identity, transaction
 
 from .conftest import auth
 
@@ -506,3 +507,99 @@ def test_stale_pool_metrics_preserve_cached_reads_but_block_downloads(settings, 
         new_item = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/new"))
         assert new_item.status_code == 503
         assert new_item.json()["error"]["code"] == "STORAGE_TELEMETRY_UNAVAILABLE"
+
+
+def test_production_requires_pool_telemetry_for_ensure_and_prefetch(settings, monkeypatch):
+    monkeypatch.delenv("HF_CACHE_POOL_METRICS_FILE", raising=False)
+    production_settings = type(settings)(settings.data_dir, mode="production")
+    downloads = []
+    api = TestClient(
+        hf_cache.create_app(
+            production_settings,
+            download_backend=lambda *args: downloads.append(args),
+            revision_resolver=lambda *_args: REV,
+        )
+    )
+    api.app.state.authorization_resolver = lambda _token: Identity(
+        "operator", {"hf-cache:read", "hf-cache:write"}
+    )
+    with api:
+        ready = api.get("/health/ready")
+        storage = api.get("/api/v1/cache/storage", headers=auth())
+        ensure = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload())
+        prefetch = api.post("/api/v1/cache/prefetch", headers=auth(), json=ensure_payload())
+        assert ready.status_code == storage.status_code == ensure.status_code == prefetch.status_code == 503
+        assert ready.json()["error"]["code"] == storage.json()["error"]["code"] == ensure.json()[
+            "error"
+        ]["code"] == prefetch.json()[
+            "error"
+        ]["code"] == (
+            "STORAGE_TELEMETRY_UNAVAILABLE"
+        )
+        assert downloads == []
+        with hf_cache.connect(settings.data_dir / "hf-cache.sqlite") as db:
+            assert db.execute("SELECT COUNT(*) FROM prefetch_jobs").fetchone()[0] == 0
+
+
+def test_cache_domain_metrics_and_events_track_hits_downloads_and_evictions(settings, caplog):
+    caplog.set_level(logging.INFO, "xeonolab")
+    with client(settings) as api:
+        first = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        hit = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        assert hit["status"] == "cached"
+        assert api.post(f"/api/v1/cache/items/{first['id']}/evict", headers=auth()).status_code == 200
+        metrics_response = api.get("/metrics")
+        assert metrics_response.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
+        metrics = metrics_response.text
+        assert "hfcache_usage_bytes 0\n" in metrics
+        assert "hfcache_download_bytes_total " + str(first["bytes"]) + "\n" in metrics
+        assert "hfcache_hit_total 1\n" in metrics
+        assert "hfcache_miss_total 1\n" in metrics
+        assert "hfcache_evicted_bytes_total " + str(first["bytes"]) + "\n" in metrics
+    assert '"event": "cache.miss"' in caplog.text
+    assert '"event": "cache.download.completed"' in caplog.text
+    assert '"event": "cache.hit"' in caplog.text
+    assert '"event": "cache.item.evicted"' in caplog.text
+
+
+def test_gc_stops_after_one_item_when_pool_telemetry_does_not_advance(settings, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, "xeonolab")
+    pool = {"used": 5_000}
+
+    def static_pool(_path):
+        return SimpleNamespace(
+            pool="aux-10t", total=10_000, used=pool["used"], free=10_000 - pool["used"]
+        )
+
+    monkeypatch.setattr(
+        hf_cache.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=10_000, used=5_000, free=5_000),
+    )
+    api = TestClient(
+        hf_cache.create_app(
+            settings,
+            download_backend=local_download,
+            revision_resolver=lambda *_args: REV,
+            storage_usage_provider=static_pool,
+        )
+    )
+    with api:
+        ids = [
+            api.post(
+                "/api/v1/cache/ensure",
+                headers=auth(),
+                json=ensure_payload(repo_id=f"org/gc-{index}"),
+            ).json()["data"]["id"]
+            for index in range(3)
+        ]
+        pool["used"] = 9_500
+        result = api.post(
+            "/api/v1/cache/gc", headers=auth(), json={"target_usage_percent": 75}
+        ).json()["data"]
+        assert len(result["evicted"]) == 1
+        assert result["evicted"][0] in ids
+        assert result["target_reached"] is False
+        remaining = api.get("/api/v1/cache/items", headers=auth()).json()["data"]
+        assert len(remaining) == 2
+    assert '"event": "cache.gc.telemetry_stalled"' in caplog.text
