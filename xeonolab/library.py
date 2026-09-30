@@ -220,6 +220,12 @@ def create_app(settings=None):
                 raise APIError(404, "XL_TABLE_NOT_FOUND", "table is being deleted")
             yield db
 
+    def remove_qdrant_points(tid, row_id=None):
+        """Synchronously remove derived points before committing source changes."""
+        cleanup = getattr(app.state, "qdrant_remove_points", None)
+        if cleanup:
+            cleanup(tid, row_id)
+
     def allowed(actor, table, action, row_id=None):
         if "xelibrary:admin" in actor.scopes:
             return True
@@ -532,6 +538,10 @@ def create_app(settings=None):
                 if active:
                     raise APIError(409, "TABLE_UPLOAD_ACTIVE", "finish or cancel uploads before deleting the table")
 
+            # The table lock prevents an index job from publishing new points
+            # between cleanup and the canonical file/catalogue deletion.
+            remove_qdrant_points(tid)
+
             with connect(target) as db:
                 checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 if checkpoint and checkpoint[0]:
@@ -631,6 +641,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db, transaction(catalogue) as catalog:
             meta = metadata(db)
             precondition(request, meta["table_revision"])
+            remove_qdrant_points(tid)
             try:
                 catalog.execute("UPDATE tables SET path=? WHERE id=?", (path, tid))
             except Exception:
@@ -713,6 +724,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db:
             row = load_row(db, rid)
             precondition(request, row["_revision"])
+            remove_qdrant_points(tid, rid)
             values = {**row["values"], **validate_values(columns(db), body.values, True)}
             db.execute(
                 "UPDATE data SET values_json=?,_revision=_revision+1,_updated_at=? WHERE _row_id=?",
@@ -738,6 +750,7 @@ def create_app(settings=None):
             with table_transaction(tid) as db:
                 row = load_row(db, rid, True)
                 precondition(request, row["_revision"])
+                remove_qdrant_points(tid, rid)
                 for name, column in [
                     ("data", "_row_id"),
                     ("__xl_changes", "row_id"),
@@ -756,6 +769,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db:
             row = load_row(db, rid)
             precondition(request, row["_revision"])
+            remove_qdrant_points(tid, rid)
             db.execute("UPDATE data SET _deleted_at=?,_revision=_revision+1 WHERE _row_id=?", (now(), rid))
             change(db, load_row(db, rid, True), "delete")
             db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
@@ -793,6 +807,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db:
             current = load_row(db, rid, True)
             precondition(request, current["_revision"])
+            remove_qdrant_points(tid, rid)
             old = db.execute(
                 "SELECT snapshot FROM __xl_changes WHERE row_id=? AND revision=?", (rid, body.revision)
             ).fetchone()

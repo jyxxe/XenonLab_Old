@@ -1,10 +1,11 @@
 """Single-node exact-vector bootstrap index; facts always revalidated in .xl."""
 
 import json
+import logging
 import os
 import threading
 from typing import Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 from fastapi import BackgroundTasks, Depends, Request
@@ -12,6 +13,8 @@ from pydantic import BaseModel
 
 from .common import APIError, connect, response, scope
 from .jobs import JobStore
+from .qdrant import FAST_TEXT_COLLECTION, FAST_TEXT_DIMENSIONS, QdrantAdapter
+from .qdrant import configured as qdrant_configured
 from .query import path_matches
 from .services import Search
 
@@ -68,12 +71,19 @@ def install(
     endpoint = os.getenv("EMBEDDING_URL")
     credential = os.getenv("EMBEDDING_SERVICE_TOKEN") or os.getenv("EMBEDDING_CLIENT_SECRET_FILE")
     tokenizer_path = os.getenv("D100M_TOKENIZER_PATH")
+    logger = logging.getLogger(__name__)
 
     def configured():
         if not endpoint or not credential or not tokenizer_path:
             raise APIError(
                 503, "SEARCH_NOT_CONFIGURED", "embedding URL, service token and D100M tokenizer required"
             )
+
+    def backend_configured():
+        configured_qdrant = qdrant_configured()
+        if not configured_qdrant and getattr(app.state.settings, "mode", "production") != "development":
+            raise APIError(503, "QDRANT_NOT_CONFIGURED", "Qdrant service configuration is required")
+        return configured_qdrant
 
     def embedding(texts):
         with httpx.Client(timeout=120, trust_env=False) as client:
@@ -97,43 +107,121 @@ def install(
             if "chunker_version" not in {row[1] for row in db.execute("PRAGMA table_info(__xl_vectors)")}:
                 db.execute("ALTER TABLE __xl_vectors ADD COLUMN chunker_version TEXT")
 
+    def remove_points(table_id, row_id=None):
+        if not backend_configured():
+            return
+        client = QdrantAdapter()
+        try:
+            if row_id is None:
+                client.delete_table(table_id)
+                operation = "table"
+            else:
+                client.delete_row(table_id, row_id)
+                operation = "row"
+            app.state.metrics.counter(
+                "xelibrary_qdrant_cleanup_total",
+                help="Successful remote Qdrant point cleanup operations.",
+                resource=operation,
+            )
+        except APIError:
+            app.state.metrics.counter(
+                "xelibrary_qdrant_cleanup_failures_total",
+                help="Failed remote Qdrant point cleanup operations.",
+                resource="row" if row_id is not None else "table",
+            )
+            logger.warning("Qdrant point cleanup failed", extra={"table_id": table_id})
+            raise
+        finally:
+            client.close()
+
+    app.state.qdrant_remove_points = remove_points
+
+    def point_id(table_id, row_id, revision, model_revision, column, ordinal):
+        identity = f"{table_id}:{row_id}:{revision}:{model_revision}:{CHUNKER_VERSION}:{column}:{ordinal}"
+        return str(uuid5(NAMESPACE_URL, identity))
+
     def run(job_id, tid, actor):
         if not lock.acquire(blocking=False):
             jobs.update(job_id, status="failed", error="index worker busy")
             return
         jobs.update(job_id, status="running")
+        client = None
         try:
             from tokenizers import Tokenizer
 
+            configured()
             table = authorize(actor, tid, "read")
             initialize(tid)
+            use_qdrant = backend_configured()
+            if use_qdrant:
+                client = QdrantAdapter()
+                client.ensure_collection()
             tokenizer = Tokenizer.from_file(tokenizer_path)
             with table_connect(tid) as db:
                 ids = [r[0] for r in db.execute("SELECT _row_id FROM data WHERE _deleted_at IS NULL")]
             for rid in ids:
+                table = authorize(actor, tid, "read")
                 if not allowed(actor, table, "read", rid):
                     continue
                 with table_connect(tid) as db:
                     row = load_row(db, rid)
-                encoded = []
-                for column, chunk in chunk_documents(tokenizer, row["values"], table["path"], table["name"]):
-                    vectors, revision = embedding([chunk])
+                encoded, points = [], []
+                for ordinal, (column, chunk) in enumerate(
+                    chunk_documents(tokenizer, row["values"], table["path"], table["name"])
+                ):
+                    vectors, model_revision = embedding([chunk])
+                    vector = vectors[0]
+                    if use_qdrant and len(vector) != FAST_TEXT_DIMENSIONS:
+                        raise APIError(
+                            503, "EMBEDDING_DIMENSION_MISMATCH", "fast_text requires 256D vectors"
+                        )
+                    chunk_id = point_id(tid, rid, row["_revision"], model_revision, column, ordinal)
                     encoded.append(
                         (
                             rid,
                             row["_revision"],
-                            str(uuid4()),
+                            chunk_id,
                             column,
                             chunk,
-                            json.dumps(vectors[0]),
-                            revision,
+                            json.dumps(vector),
+                            model_revision,
                             CHUNKER_VERSION,
                         )
                     )
+                    points.append(
+                        {
+                            "id": chunk_id,
+                            "vector": {FAST_TEXT_COLLECTION: vector},
+                            "payload": {
+                                "table_id": tid,
+                                "row_id": rid,
+                                "row_revision": row["_revision"],
+                                "chunk_id": chunk_id,
+                                "column": column,
+                                "path": table["path"],
+                                "model_revision": model_revision,
+                                "chunker_version": CHUNKER_VERSION,
+                            },
+                        }
+                    )
+
+                # Serialize the source revision check and remote upsert against
+                # row writes. Qdrant IDs are deterministic, so retries overwrite
+                # points from an interrupted run instead of duplicating them.
                 with table_transaction(tid) as db:
                     current = load_row(db, rid)
-                    if current["_revision"] != row["_revision"]:
+                    current_table = authorize(actor, tid, "read")
+                    if current["_revision"] != row["_revision"] or not allowed(
+                        actor, current_table, "read", rid
+                    ):
                         continue
+                    if current_table["path"] != table["path"] or current_table["name"] != table["name"]:
+                        continue
+                    old_ids = [r[0] for r in db.execute("SELECT chunk_id FROM __xl_vectors WHERE row_id=?", (rid,))]
+                    if client:
+                        client.upsert(points)
+                        keep_ids = {point["id"] for point in points}
+                        client.delete_ids(point_id for point_id in old_ids if point_id not in keep_ids)
                     db.execute("DELETE FROM __xl_vectors WHERE row_id=?", (rid,))
                     db.executemany("INSERT INTO __xl_vectors VALUES(?,?,?,?,?,?,?,?)", encoded)
                     db.execute(
@@ -142,8 +230,11 @@ def install(
                     )
             jobs.update(job_id, status="completed")
         except Exception:
-            jobs.update(job_id, status="failed", error="indexing failed; check embedding dependency")
+            app.state.metrics.counter("xelibrary_index_failures_total", help="Failed XeLibrary index jobs.")
+            jobs.update(job_id, status="failed", error="indexing failed; check search dependencies")
         finally:
+            if client:
+                client.close()
             lock.release()
 
     @app.post("/api/v1/index/reindex", status_code=202)
@@ -154,9 +245,15 @@ def install(
         actor=Depends(scope("xelibrary:admin")),
     ):
         configured()
+        authorize(actor, body.table_id, "read")
+        if backend_configured():
+            client = QdrantAdapter()
+            try:
+                client.ensure_collection()
+            finally:
+                client.close()
         job_id = str(uuid4())
         with table_transaction(body.table_id):
-            authorize(actor, body.table_id, "read")
             jobs.create(job_id, actor.sub, body.table_id)
         background.add_task(run, job_id, body.table_id, actor)
         return response(request, {"job_id": job_id})
@@ -187,13 +284,8 @@ def install(
             raise APIError(403, "FORBIDDEN", "job belongs to another caller")
         return response(request, data)
 
-    @app.post("/api/v1/search/semantic")
-    def semantic(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
-        configured()
-        if body.mode == "quality":
-            raise APIError(503, "QWEN_UNAVAILABLE", "quality worker not configured")
-        vectors, model_revision = embedding([body.query])
-        query = vectors[0]
+    def exact_bootstrap(body, request, actor, query, model_revision):
+        """Use the explicitly development-only SQLite bootstrap backend."""
         with connect(catalogue) as db:
             tables = [dict(t) for t in db.execute("SELECT * FROM tables")]
         results, missing = [], 0
@@ -210,18 +302,21 @@ def install(
                     if not permits("read", rid):
                         continue
                     row = load_row(db, rid)
-                    if any(row["values"].get(k) != v for k, v in body.filters.items()):
+                    if any(row["values"].get(key) != value for key, value in body.filters.items()):
                         continue
                     hits = db.execute(
                         "SELECT * FROM __xl_vectors WHERE row_id=? AND revision=? AND model_revision=?"
                         " AND chunker_version=?",
                         (rid, row["_revision"], model_revision, CHUNKER_VERSION),
                     ).fetchall()
-                    if not hits:
+                    compatible = [hit for hit in hits if len(json.loads(hit["vector"])) == len(query)]
+                    if not compatible:
                         missing += 1
                         continue
-                    best = max(hits, key=lambda h: sum(x * y for x, y in zip(query, json.loads(h["vector"]))))
-                    # Current row state, revision and ACL checked after candidate retrieval as well.
+                    best = max(
+                        compatible,
+                        key=lambda hit: sum(x * y for x, y in zip(query, json.loads(hit["vector"]))),
+                    )
                     current = load_row(db, rid)
                     if current["_revision"] != row["_revision"] or not permits("read", rid):
                         continue
@@ -239,12 +334,111 @@ def install(
                             "indexed_revision": best["revision"],
                         }
                     )
-        results.sort(key=lambda r: r["score"], reverse=True)
+        results.sort(key=lambda result: result["score"], reverse=True)
         return response(
             request,
             results[: body.limit],
             partial=bool(missing),
             missing_embeddings=missing,
             index_backend="sqlite_exact_bootstrap",
+            model_revision=model_revision,
+        )
+
+    @app.post("/api/v1/search/semantic")
+    def semantic(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        configured()
+        if body.mode == "quality":
+            raise APIError(503, "QWEN_UNAVAILABLE", "quality worker not configured")
+        use_qdrant = backend_configured()
+        vectors, model_revision = embedding([body.query])
+        query = vectors[0]
+        if not use_qdrant:
+            return exact_bootstrap(body, request, actor, query, model_revision)
+        if len(query) != FAST_TEXT_DIMENSIONS:
+            raise APIError(503, "EMBEDDING_DIMENSION_MISMATCH", "fast_text requires 256D vectors")
+        client = QdrantAdapter()
+        try:
+            client.ensure_collection()
+            candidate_limit = min(max(body.limit * 10, 100), 1000)
+            candidates = client.query(query, candidate_limit, model_revision)
+        finally:
+            client.close()
+
+        # Qdrant payload is a candidate hint only. Re-read and reauthorize every
+        # candidate against the current catalogue, ACL and .xl revision.
+        by_row, stale_rows = {}, set()
+        for candidate in candidates:
+            payload = candidate.get("payload") if isinstance(candidate, dict) else None
+            if not isinstance(payload, dict):
+                continue
+            tid, rid = payload.get("table_id"), payload.get("row_id")
+            row_revision = payload.get("row_revision")
+            chunk_id, column = payload.get("chunk_id"), payload.get("column")
+            if (
+                not isinstance(tid, str)
+                or not isinstance(rid, str)
+                or not isinstance(row_revision, int)
+                or not isinstance(chunk_id, str)
+                or not isinstance(column, str)
+                or payload.get("model_revision") != model_revision
+                or payload.get("chunker_version") != CHUNKER_VERSION
+            ):
+                continue
+            try:
+                table = authorize(actor, tid, "read")
+                permits = request_acl(actor, table)
+                if not permits("read", rid) or not path_matches(table["path"], body.path):
+                    continue
+                if payload.get("path") != table["path"]:
+                    stale_rows.add((tid, rid))
+                    continue
+                with table_connect(tid) as db:
+                    row = load_row(db, rid)
+                    if row["_revision"] != row_revision:
+                        stale_rows.add((tid, rid))
+                        continue
+                    indexed = db.execute(
+                        "SELECT 1 FROM __xl_vectors WHERE row_id=? AND revision=? AND chunk_id=? "
+                        "AND model_revision=? AND chunker_version=?",
+                        (rid, row_revision, chunk_id, model_revision, CHUNKER_VERSION),
+                    ).fetchone()
+                    if not indexed or column not in row["values"]:
+                        stale_rows.add((tid, rid))
+                        continue
+                    if any(row["values"].get(key) != value for key, value in body.filters.items()):
+                        continue
+                    current = load_row(db, rid)
+                    if current["_revision"] != row_revision or not permits("read", rid):
+                        continue
+                    if authorize(actor, tid, "read")["path"] != table["path"]:
+                        stale_rows.add((tid, rid))
+                        continue
+            except APIError as error:
+                if error.status in (403, 404):
+                    continue
+                raise
+            key = (tid, rid)
+            result = {
+                "table_id": tid,
+                "row_id": rid,
+                "row_revision": row_revision,
+                "path": table["path"],
+                "score": float(candidate.get("score", 0)),
+                "score_type": "d100m_cosine",
+                "snippet": str(current["values"][column])[:240],
+                "matched_chunks": [{"chunk_id": chunk_id, "column": column}],
+                "approximate": True,
+                "indexed_revision": row_revision,
+            }
+            if key not in by_row or result["score"] > by_row[key]["score"]:
+                by_row[key] = result
+        results = sorted(by_row.values(), key=lambda result: result["score"], reverse=True)[: body.limit]
+        missing = len(stale_rows)
+        return response(
+            request,
+            results,
+            partial=bool(missing or (len(candidates) >= candidate_limit and len(results) < body.limit)),
+            missing_embeddings=missing,
+            index_backend="qdrant_fast_text",
             model_revision=model_revision,
         )

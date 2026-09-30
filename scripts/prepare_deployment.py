@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from xeonolab.deploy_secrets import copy_qdrant_api_key
 from xeonolab.role_scopes import OIDC_ROLE_SCOPES
 
 root = Path("runtime/deploy-secrets")
@@ -77,8 +78,14 @@ for node, entries in services.items():
                 "EMBEDDING_CLIENT_ID=embedding-indexer",
                 "EMBEDDING_CLIENT_SECRET_FILE=/etc/xeonolab/embedding-client-secret",
                 "D100M_TOKENIZER_PATH=/opt/xeonolab/d100m-tokenizer.json",
+                "QDRANT_URL=https://192.168.0.109:6333",
+                "QDRANT_API_KEY_FILE=/etc/xeonolab/qdrant-api-key",
+                "QDRANT_CA_FILE=/etc/xeonolab/lan-root-ca.crt",
             ]
             (dest / "embedding-client-secret").write_text(credentials["embedding_secret"])
+            # Copy the protected source key as an opaque file. Never put its
+            # contents in generated environment files or command output.
+            copy_qdrant_api_key(root / "qdrant-api-key", dest / "qdrant-api-key")
         if service == "dev-agent":
             lines += [
                 "FORGEJO_WEBHOOK_SECRET_FILE=/etc/xeonolab/forgejo-webhook-secret",
