@@ -37,7 +37,11 @@
 
 ## 多 Harness 领取与隔离
 
-协调器通过 POST /api/v1/work/{id}/claim 认领，保存 holder、epoch、expires。claim 是工作调度租约，不是共享文件锁或生产授权。409 时重新读取状态，不争抢。使用独立 worktree、自己的分支和临时测试对象。当前最长 TTL 3600 秒，尚无续租接口；到期前向协调器报告，由其合法释放并重新认领，更新 epoch，旧 epoch 不再用于写入。
+协调器通过 POST /api/v1/work/{id}/claim 认领，保存 holder、epoch、expires；到期前可用
+POST /api/v1/work/{id}/renew（body epoch、ttl_seconds 30–3600）续租，续租仅当前 holder、当前
+epoch 且未过期时成功，且不改变 epoch。claim 是工作调度租约，不是共享文件锁或生产授权。409 时
+重新读取状态，不争抢。使用独立 worktree、自己的分支和临时测试对象。租约过期或被重新认领后必须
+停止写入并重新 claim（epoch+1），旧 epoch 的 renew/release 均被拒绝。
 
 远端测试数据创建、清理、Issue、PR、push、release/complete 均由协调器执行。完成实现后由协调器先验收、提交 PR，再按实际完成状态释放工作租约；completed 不自动代表上线或关闭 Issue。遇到任务来源冲突先核对 Issue 状态，使用固定来源 reconcile，不提供任意上游 URL。
 

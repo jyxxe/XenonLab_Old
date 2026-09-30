@@ -247,6 +247,54 @@
         }
       }
     },
+    "/api/v1/work/{work_id}/renew": {
+      "post": {
+        "summary": "Renew",
+        "description": "Extend an active claim. Renewal keeps the epoch; expiry or re-claim fences it.",
+        "operationId": "renew_api_v1_work__work_id__renew_post",
+        "parameters": [
+          {
+            "name": "work_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Work Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Renew"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/work/{work_id}/release": {
       "post": {
         "summary": "Release",
@@ -535,6 +583,27 @@
           "epoch"
         ],
         "title": "Release"
+      },
+      "Renew": {
+        "properties": {
+          "epoch": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Epoch"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "maximum": 3600.0,
+            "minimum": 30.0,
+            "title": "Ttl Seconds",
+            "default": 900
+          }
+        },
+        "type": "object",
+        "required": [
+          "epoch"
+        ],
+        "title": "Renew"
       },
       "TriageRequest": {
         "properties": {

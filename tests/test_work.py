@@ -253,3 +253,71 @@ def test_equal_timestamp_conflict_blocks_until_source_reconciliation(settings, m
     assert result.status_code == 200 and result.json()["data"]["status"] == "queued"
     assert result.json()["data"]["title"] == "Current source"
     assert client.post(path + "/claim", headers=auth(), json={}).status_code == 200
+
+
+def test_renew_extends_active_claim_and_fences_stale_or_expired_holders(settings, monkeypatch):
+    from xeonolab import work
+    from xeonolab.common import connect
+
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    clock = [2000.0]
+    monkeypatch.setattr(work.time, "time", lambda: clock[0])
+    client = TestClient(create_app("dev-agent", settings))
+    item = client.post(
+        "/api/v1/work",
+        headers=auth(),
+        json={"repository": "owner/repo", "issue_id": 3, "title": "Renewal test"},
+    ).json()["data"]
+    path = "/api/v1/work/" + item["id"]
+    claimed = client.post(path + "/claim", headers=auth(), json={"ttl_seconds": 30}).json()["data"]
+    assert claimed["holder"] == "alice" and claimed["expires"] == 2030.0
+    clock[0] += 20
+
+    # Missing dev:write scope, another holder, a stale epoch, TTL bounds and 404 are all rejected.
+    assert (
+        client.post(path + "/renew", headers=auth("opencode"), json={"epoch": claimed["epoch"]}).status_code
+        == 403
+    )
+    assert (
+        client.post(path + "/renew", headers=auth("bob"), json={"epoch": claimed["epoch"]}).status_code == 409
+    )
+    assert (
+        client.post(path + "/renew", headers=auth(), json={"epoch": claimed["epoch"] + 1}).status_code == 409
+    )
+    assert (
+        client.post(
+            path + "/renew", headers=auth(), json={"epoch": claimed["epoch"], "ttl_seconds": 10}
+        ).status_code
+        == 422
+    )
+    assert client.post("/api/v1/work/missing/renew", headers=auth(), json={"epoch": 1}).status_code == 404
+
+    renewed = client.post(
+        path + "/renew", headers=auth(), json={"epoch": claimed["epoch"], "ttl_seconds": 60}
+    ).json()["data"]
+    assert renewed["expires"] == 2080.0
+    assert renewed["epoch"] == claimed["epoch"] and renewed["holder"] == "alice"
+    with connect(settings.data_dir / "work.sqlite") as db:
+        assert db.execute("SELECT count(*) FROM work_audit WHERE event='work.renewed'").fetchone()[0] == 1
+
+    # Past the original expiry but inside the renewed window the claim is still exclusive,
+    # and the renewal survives a process restart.
+    clock[0] += 40
+    assert client.post(path + "/claim", headers=auth("bob"), json={}).status_code == 409
+    restarted = TestClient(create_app("dev-agent", settings))
+    assert (
+        restarted.post(
+            path + "/renew", headers=auth(), json={"epoch": claimed["epoch"], "ttl_seconds": 30}
+        ).status_code
+        == 200
+    )
+    assert restarted.post(path + "/release", headers=auth(), json={"epoch": claimed["epoch"]}).status_code == 200
+
+    # An expired lease cannot renew; the next claim bumps the epoch and fences the old holder.
+    second = client.post(path + "/claim", headers=auth(), json={"ttl_seconds": 30}).json()["data"]
+    clock[0] += 31
+    assert client.post(path + "/renew", headers=auth(), json={"epoch": second["epoch"]}).status_code == 409
+    third = client.post(path + "/claim", headers=auth("bob"), json={}).json()["data"]
+    assert third["epoch"] == second["epoch"] + 1
+    assert client.post(path + "/release", headers=auth(), json={"epoch": second["epoch"]}).status_code == 409

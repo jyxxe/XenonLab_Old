@@ -191,3 +191,15 @@ Production uploads: release c32fd7f completed; real PKCE test uploaded 18,900,00
 
 
 WebUI session resilience: timers and API renewal no longer clear the workspace on 401 or temporary failure. Temporary provider errors retain persistent session credentials, startup restores retry, and only explicit logout clears UI state. Revocation requires explicit reauthorization and forbids cached-token fallback. Coordinator validation: 82 backend tests, 4 executable frontend session-state tests, Ruff, OpenAPI and frontend build. Keycloak offline absolute lifespan remains disabled; live Chrome fault injection follows activation.
+
+
+### Issue #32 工作租约续租（OpenCode harness，分支 `opencode/issue-32`）
+
+补齐 #32 评论中的第一项缺口（续租与失租停止约定），未发布：
+- `POST /api/v1/work/{id}/renew`（scope `dev:write`；body `epoch`、`ttl_seconds` 30–3600，默认 900）：
+  仅当前 holder、当前 epoch 且租约未过期时延长 expires；续租不改变 epoch，写 `work.renewed` 审计。
+- 过期或被 webhook 重新认领后 renew/release/complete 一律 409；持有者必须停止写入并重新 claim。
+- 新增 1 项测试覆盖：续租与进程重启持久化、错误 holder、旧 epoch、过期、TTL 越界、缺少 scope、404、
+  审计记录与重新认领后的 epoch fencing。
+- 文档：`docs/runbooks/collaboration.md` 与 `docs/agent-workflow.md` 补充续租与失租停止约定。
+- 未实现（另议）：webhook 自动更新 Forgejo assignee/评论；多副本共享具备事务锁的状态库。

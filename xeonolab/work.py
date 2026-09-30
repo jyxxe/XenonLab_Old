@@ -41,6 +41,11 @@ class Release(BaseModel):
     completed: bool = False
 
 
+class Renew(BaseModel):
+    epoch: int = Field(ge=1)
+    ttl_seconds: int = Field(default=900, ge=30, le=3600)
+
+
 def repository_allowed(settings, repository):
     allowed = os.getenv("DEV_REPOSITORIES", "xenon-admin/XeonoLab").split(",")
     if settings.mode == "production" and repository not in allowed:
@@ -267,6 +272,18 @@ def install(app):
                 (actor.sub, time.time() + body.ttl_seconds, epoch, work_id),
             )
             audit(db, actor, "work.claimed", work_id, epoch)
+            return response(request, load(db, work_id))
+
+    @app.post("/api/v1/work/{work_id}/renew")
+    def renew(work_id: str, body: Renew, request: Request, actor=Depends(scope("dev:write"))):
+        """Extend an active claim. Renewal keeps the epoch; expiry or re-claim fences it."""
+        with transaction(database) as db:
+            item = load(db, work_id)
+            if item["holder"] != actor.sub or item["epoch"] != body.epoch or item["expires"] <= time.time():
+                raise APIError(409, "STALE_CLAIM", "active holder and current epoch required")
+            expires = time.time() + body.ttl_seconds
+            db.execute("UPDATE work SET expires=? WHERE id=?", (expires, work_id))
+            audit(db, actor, "work.renewed", work_id, body.epoch)
             return response(request, load(db, work_id))
 
     @app.post("/api/v1/work/{work_id}/release")
