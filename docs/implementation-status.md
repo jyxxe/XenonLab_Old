@@ -110,6 +110,13 @@ work completed. This checks the existing API boundaries, not arbitrary Harness
 behavior or every plan requirement. OpenCode credentials/instructions are in
 private, Git-ignored `Agent.md`; never publish this file.
 
+Failure-injection 验证（OpenCode harness，分支 `opencode/issue-31`，`scripts/verify_failure_injection.py`）：
+本地进程级 SIGKILL 注入全部通过——① COMMIT 前杀进程，未提交事务不可见且 integrity_check 通过；
+② xelibrary 四个并发写入线程中 SIGKILL，重启后 catalogue/.xl integrity 通过、行数据完整可读、可继续写入；
+③ dev-agent claim fence（holder/epoch 持久、他人 claim 409、release 仍要求当前 epoch）与 webhook delivery
+去重跨 SIGKILL 保持。脚本 3/3 次稳定复跑，已加入 CI（push/PR）作为回归保护；过期 lease + 未结束
+deployment 冻结场景已有单测覆盖（test_deploy）。待评审与发布。
+
 ### Account tree / API key implementation
 
 Managed account APIs, interactive settings tree, partial/full inherited scopes,

@@ -1,0 +1,330 @@
+"""Local process-level failure injection for crash-consistency evidence.
+
+plan.md §79 requires crash recovery for .xl writes and §100 task 30 requires a
+failure-injection test. Unit tests already cover claim fencing, job
+interruption accounting and expired-lease freezing; this script adds real
+SIGKILL evidence against local uvicorn processes:
+
+1. transaction boundary: SIGKILL before COMMIT leaves no partial state;
+2. XeLibrary: concurrent row writes, SIGKILL, restart on the same data dir ->
+   SQLite integrity ok, every stored row is complete, new writes succeed;
+3. DevAgent: work claim fencing and webhook delivery dedup survive SIGKILL.
+
+Everything runs in temporary directories against 127.0.0.1 and never touches
+the LAN deployment, PVE or production.
+"""
+
+import hashlib
+import hmac
+import json
+import os
+import signal
+import socket
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import traceback
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import httpx
+
+ROOT = Path(__file__).resolve().parents[1]
+WEBHOOK_SECRET = "failure-injection-secret"
+TOKENS = {
+    "alice": {
+        "sub": "alice",
+        "scope": "dev:read dev:write xelibrary:read xelibrary:write xelibrary:query",
+        "agent_kind": "codex",
+    },
+    "bob": {
+        "sub": "bob",
+        "scope": "dev:read dev:write xelibrary:read xelibrary:write xelibrary:query",
+        "agent_kind": "opencode",
+    },
+}
+ALICE = {"Authorization": "Bearer alice"}
+BOB = {"Authorization": "Bearer bob"}
+
+
+def free_port():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+def start_service(service, data_dir):
+    port = free_port()
+    environment = {
+        **os.environ,
+        "SERVICE": service,
+        "DATA_DIR": str(data_dir),
+        "APP_MODE": "development",
+        "DEV_TOKENS_JSON": json.dumps(TOKENS),
+        "FORGEJO_WEBHOOK_SECRET": WEBHOOK_SECRET,
+    }
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "xeonolab.services:create_app",
+            "--factory",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=ROOT,
+        env=environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    for _ in range(80):
+        if process.poll() is not None:
+            raise RuntimeError(f"{service} exited during startup")
+        try:
+            health = httpx.get(f"http://127.0.0.1:{port}/health/live", timeout=1, trust_env=False)
+            if health.status_code == 200:
+                return process, port
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError(f"{service} did not become ready")
+
+
+def sigkill(process):
+    if process.poll() is None:
+        process.send_signal(signal.SIGKILL)
+    process.wait(timeout=10)
+
+
+def stop(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def integrity_ok(database):
+    connection = sqlite3.connect(database, timeout=10)
+    try:
+        return connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        connection.close()
+
+
+def scenario_transaction_boundary(root):
+    database = root / "boundary.sqlite"
+    child_code = (
+        "import sys, time\n"
+        "from xeonolab.common import transaction\n"
+        "with transaction(sys.argv[1]) as db:\n"
+        "    db.execute('CREATE TABLE marker(value INTEGER)')\n"
+        "    db.execute('INSERT INTO marker VALUES (1)')\n"
+        "with transaction(sys.argv[1]) as db:\n"
+        "    db.execute('INSERT INTO marker VALUES (2)')\n"
+        "    time.sleep(60)\n"
+    )
+    child = subprocess.Popen([sys.executable, "-c", child_code, str(database)], cwd=ROOT)
+    try:
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if database.exists():
+                try:
+                    connection = sqlite3.connect(database, timeout=1)
+                    count = connection.execute("SELECT count(*) FROM marker").fetchone()[0]
+                    connection.close()
+                    if count == 1:
+                        break
+                except sqlite3.Error:
+                    pass
+            time.sleep(0.1)
+        else:
+            raise AssertionError("first commit never became visible")
+        sigkill(child)
+        assert child.returncode == -signal.SIGKILL, child.returncode
+        assert integrity_ok(database)
+        connection = sqlite3.connect(database, timeout=10)
+        rows = connection.execute("SELECT value FROM marker").fetchall()
+        connection.close()
+        assert rows == [(1,)], rows
+        print("PASS transaction boundary: uncommitted transaction invisible after SIGKILL")
+    finally:
+        stop(child)
+
+
+def scenario_library_crash(root):
+    data = root / "xelibrary"
+    process, port = start_service("xelibrary", data)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        created = httpx.post(
+            base + "/api/v1/tables",
+            headers=ALICE,
+            timeout=10,
+            json={
+                "path": "/injection/data",
+                "name": "injection",
+                "columns": [
+                    {"name": "marker", "type": "int64", "nullable": False},
+                    {"name": "title", "type": "string", "nullable": False},
+                ],
+            },
+        )
+        created.raise_for_status()
+        table_id = created.json()["data"]["table_id"]
+        stop_writing = threading.Event()
+        sent, lock = [], threading.Lock()
+
+        def writer():
+            client = httpx.Client(timeout=5, trust_env=False)
+            while not stop_writing.is_set():
+                with lock:
+                    value = len(sent)
+                try:
+                    result = client.post(
+                        f"{base}/api/v1/tables/{table_id}/rows",
+                        headers=ALICE,
+                        json={"values": {"marker": value, "title": f"t{value}"}},
+                    )
+                    if result.status_code == 201:
+                        with lock:
+                            sent.append(value)
+                except httpx.HTTPError:
+                    pass
+            client.close()
+
+        threads = [threading.Thread(target=writer, daemon=True) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            with lock:
+                if len(sent) >= 20:
+                    break
+            time.sleep(0.05)
+        with lock:
+            committed_before_kill = len(sent)
+        assert committed_before_kill >= 20, committed_before_kill
+        sigkill(process)
+        stop_writing.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        process, port = start_service("xelibrary", data)
+        base = f"http://127.0.0.1:{port}"
+        for database in [data / "catalogue.sqlite", *sorted((data / "tables").glob("*.xl"))]:
+            assert integrity_ok(database), database
+        result = httpx.post(
+            base + "/api/v1/query",
+            headers=ALICE,
+            timeout=10,
+            json={"expression": 'FROM "/injection/**" LIMIT 1000'},
+        )
+        result.raise_for_status()
+        rows = result.json()["data"]
+        assert len(rows) >= committed_before_kill, (len(rows), committed_before_kill)
+        for row in rows:
+            assert isinstance(row["values"]["marker"], int)
+            assert row["values"]["title"] == f"t{row['values']['marker']}"
+        follow_up = httpx.post(
+            f"{base}/api/v1/tables/{table_id}/rows",
+            headers=ALICE,
+            timeout=10,
+            json={"values": {"marker": 10**6, "title": "after-crash"}},
+        )
+        assert follow_up.status_code == 201, follow_up.text
+        print(
+            f"PASS xelibrary crash: {len(rows)} rows intact after SIGKILL, "
+            "catalogue/.xl integrity ok, writes resume"
+        )
+    finally:
+        stop(process)
+
+
+def scenario_collaboration_crash(root):
+    data = root / "dev-agent"
+    process, port = start_service("dev-agent", data)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        created = httpx.post(
+            base + "/api/v1/work",
+            headers=ALICE,
+            timeout=10,
+            json={"repository": "xenon-admin/XeonoLab", "issue_id": 9001, "title": "Injection task"},
+        )
+        created.raise_for_status()
+        work_id = created.json()["data"]["id"]
+        claimed = httpx.post(
+            f"{base}/api/v1/work/{work_id}/claim", headers=ALICE, json={"ttl_seconds": 3600}
+        )
+        assert claimed.status_code == 200, claimed.text
+        assert claimed.json()["data"]["epoch"] == 1
+        raw = json.dumps(
+            {
+                "repository": {"full_name": "xenon-admin/XeonoLab"},
+                "issue": {
+                    "number": 9002,
+                    "title": "Webhook task",
+                    "state": "open",
+                    "updated_at": "2026-09-30T12:00:00Z",
+                },
+            }
+        ).encode()
+        delivery_headers = {
+            "X-Forgejo-Delivery": "injection-1",
+            "X-Forgejo-Event": "issues",
+            "X-Forgejo-Signature": hmac.new(WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest(),
+        }
+        first = httpx.post(
+            base + "/api/v1/webhooks/forgejo", content=raw, headers=delivery_headers, timeout=10
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["data"]["duplicate"] is False
+
+        sigkill(process)
+        process, port = start_service("dev-agent", data)
+        base = f"http://127.0.0.1:{port}"
+        items = httpx.get(base + "/api/v1/work?limit=100", headers=ALICE, timeout=10).json()["data"]
+        item = next(entry for entry in items if entry["id"] == work_id)
+        assert item["holder"] == "alice" and item["epoch"] == 1 and item["claim_active"] is True
+        assert httpx.post(f"{base}/api/v1/work/{work_id}/claim", headers=BOB, json={}).status_code == 409
+        released = httpx.post(
+            f"{base}/api/v1/work/{work_id}/release", headers=ALICE, json={"epoch": 1}
+        )
+        assert released.status_code == 200, released.text
+        second = httpx.post(
+            base + "/api/v1/webhooks/forgejo", content=raw, headers=delivery_headers, timeout=10
+        )
+        assert second.status_code == 200, second.text
+        assert second.json()["data"]["duplicate"] is True
+        print("PASS collaboration crash: claim fence and webhook delivery dedup survive SIGKILL")
+    finally:
+        stop(process)
+
+
+def main():
+    failures = 0
+    with tempfile.TemporaryDirectory(prefix="failure-injection-") as temporary:
+        root = Path(temporary)
+        for scenario in (scenario_transaction_boundary, scenario_library_crash, scenario_collaboration_crash):
+            try:
+                scenario(root)
+            except Exception:
+                failures += 1
+                print(f"FAIL {scenario.__name__}")
+                traceback.print_exc()
+    if failures:
+        raise SystemExit(f"{failures} failure-injection scenario(s) failed")
+    print("PASS failure injection: all scenarios")
+
+
+if __name__ == "__main__":
+    main()
