@@ -260,3 +260,26 @@ def test_acl_inspection_and_audit_are_admin_only(library):
         r["event"] == "acl.changed"
         for r in library.get("/api/v1/audit", headers=auth("admin")).json()["data"]
     )
+
+
+def test_job_queue_view_is_admin_only_and_filterable(library, settings):
+    from xeonolab.jobs import JobStore
+
+    jobs = JobStore(settings.data_dir / "catalogue.sqlite")
+    jobs.create("job-1", "alice", "table-a")
+    jobs.update("job-1", status="completed")
+    jobs.create("job-2", "bob", "table-b")
+    assert library.get("/api/v1/jobs", headers=auth()).status_code == 403
+    result = library.get("/api/v1/jobs", headers=auth("admin"))
+    assert result.status_code == 200
+    body = result.json()
+    assert [job["job_id"] for job in body["data"]] == ["job-2", "job-1"]
+    assert body["meta"]["counts"] == {"queued": 1, "running": 0, "completed": 1, "failed": 0}
+    completed = library.get("/api/v1/jobs?status=completed", headers=auth("admin")).json()
+    assert [job["job_id"] for job in completed["data"]] == ["job-1"]
+    scoped = library.get("/api/v1/jobs?table_id=table-a", headers=auth("admin")).json()
+    assert [job["job_id"] for job in scoped["data"]] == ["job-1"]
+    assert scoped["meta"]["counts"]["completed"] == 1 and scoped["meta"]["counts"]["queued"] == 0
+    assert library.get("/api/v1/jobs?limit=0", headers=auth("admin")).status_code == 422
+    assert library.get("/api/v1/jobs?limit=201", headers=auth("admin")).status_code == 422
+    assert library.get("/api/v1/jobs?status=unknown", headers=auth("admin")).status_code == 422
