@@ -70,6 +70,10 @@ def create_app(service=None, settings=None):
         from .embedding import create_app as factory
 
         return factory(settings)
+    if service == "hf-cache":
+        from .hf_cache import create_app as factory
+
+        return factory(settings)
 
     if service == "tool-gateway":
         destination = os.getenv("XELIBRARY_URL", "http://xelibrary:8000")
@@ -224,7 +228,7 @@ def create_app(service=None, settings=None):
 
             return JSONResponse(result.json())
 
-    if service in ("hf-cache", "library-agent", "network-control"):
+    if service in ("library-agent", "network-control"):
         app.state.ready_check = lambda: False
 
     return app
