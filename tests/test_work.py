@@ -143,8 +143,17 @@ def test_signed_issue_sync_is_atomic_ordered_and_fences_closed_claim(settings, m
     items = client.get("/api/v1/work", headers=auth()).json()["data"]
     assert len(items) == 1
     path = "/api/v1/work/" + items[0]["id"]
-    epoch = client.post(path + "/claim", headers=auth(), json={}).json()["data"]["epoch"]
+    claimed = client.post(path + "/claim", headers=auth(), json={}).json()["data"]
+    epoch = claimed["epoch"]
+    renewed = client.post(
+        path + "/renew", headers=auth(), json={"epoch": epoch, "ttl_seconds": 3600}
+    )
+    assert renewed.status_code == 200 and renewed.json()["data"]["expires"] > claimed["expires"]
     assert event("b", "closed", "2026-09-30T11:00:00Z").status_code == 200
+    current = client.get("/api/v1/work", headers=auth()).json()["data"][0]
+    assert current["status"] == "completed" and current["epoch"] == epoch + 1
+    assert current["holder"] is None and current["expires"] == 0
+    assert client.post(path + "/renew", headers=auth(), json={"epoch": epoch}).status_code == 409
     assert client.post(path + "/release", headers=auth(), json={"epoch": epoch}).status_code == 409
     assert event("c", "open", "2026-09-30T10:30:00Z").status_code == 200
     assert client.get("/api/v1/work", headers=auth()).json()["data"][0]["status"] == "completed"

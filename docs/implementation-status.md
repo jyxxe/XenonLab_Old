@@ -37,7 +37,7 @@
 | 4 Qwen | 尚无模型 worker、vision、quality rerank/cache；质量请求返回 unavailable |
 | 5 UI/Tools | 桌面和只读网关已实现；OIDC 浏览器 PKCE 登录已接入；OpenWebUI 原生用户 token exchange 尚未接入 |
 | 6 Library Agent | 只有 skeleton；推理、证据、proposal、Lean sandbox 未实现 |
-| 7 DevAgent | 已实现可信 webhook 接收；triage/duplicate/关联/任务队列未实现 |
+| 7 DevAgent | 已实现签名 webhook 与队列同步、规则 triage、Issue links、持久任务队列；LLM triage、自动评论/标签联动和多副本共享队列库仍待实施 |
 | 8 Deploy | 租约已验证；固定 executor、健康检查与激活失败回滚已实现；完整状态机、SSE、跨版本迁移尚未实现 |
 | 9 HF-cache | 只有 skeleton；ensure/download/pin/lease/物理水位/GC 未实现 |
 
@@ -68,9 +68,10 @@ restore 校验当前 schema 与 If-Match，保留历史；purge 删除行历史�
 已实现身份 scopes 展示、管理员 ACL 读取/编辑页面、管理员审计查询 API；19 项测试与前端构建通过。
 公网主域已确定 xenon.jyxxe.com；Cloudflare 原 no-tunnel 例外已被用户撤销。
 
-DevAgent 已实现持久化 work queue create/list/claim/release：scope dev:read/write、
-SQLite 原子领取、TTL 与 epoch fencing、完成状态和审计。并发、重启、权限、过期重领测试通过。
-该组件已线上接入，30 个真实 Issues 已入队，UI 领取/释放已发布；自动 webhook 同步、triage 仍待实施，不能视为完整 DevAgent 完成。
+DevAgent 已实现持久化 work queue create/list/claim/renew/release：scope dev:read/write、
+SQLite 原子领取与续租、TTL 与 epoch fencing、完成状态和审计。并发、重启、权限、失租拒绝和过期重领测试通过。
+续租为本次 Issue #32 的新增实现，尚待发布；既有 claim/release 与 TaskCenter 已线上接入，30 个真实 Issues 已入队。
+signed webhook 自动同步和规则 triage 已上线；LLM triage、自动评论/标签联动及多副本共享队列库仍未实现，不能视为完整 DevAgent 完成。
 
 Issue links API 已实现 related/blocked/blocks/supersedes/duplicate 关系持久化，
 重复关系拒绝自环和环路，跨仓库分离，生产固定 repository allowlist；22 项测试通过。

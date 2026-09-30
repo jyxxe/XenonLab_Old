@@ -59,7 +59,7 @@ epoch；过期或被重新认领后 renew/release/complete 一律拒绝，持有
 （epoch+1），旧 epoch 不再有效。
 Issue 关联以 repository 为命名空间；production 默认仅 xenon-admin/XeonoLab；
 自关联和 duplicate_of 环路被拒绝。元数据持久化到 work.sqlite，独立于 Forgejo facts。
-Forgejo webhook 自动同步、自动评论/标签联动仍待实现；
+Forgejo 签名 webhook 已同步 Issue 状态与 work queue；自动评论/标签联动仍待实现。
 规则化 triage 端点已由 OpenCode 交付并合并（PR #42）；LLM 语义与 Forgejo 联动仍未实现。
 
 发布 commit c1effc8d463522084dae818e1742d06890442116；deployment
