@@ -107,6 +107,242 @@
         }
       }
     },
+    "/api/v1/cache/prefetch": {
+      "post": {
+        "summary": "Prefetch",
+        "operationId": "prefetch_api_v1_cache_prefetch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Ensure"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/prefetch/jobs/{job_id}": {
+      "get": {
+        "summary": "Prefetch Job",
+        "operationId": "prefetch_job_api_v1_cache_prefetch_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cache/prefetch/jobs/{job_id}/retry": {
+      "post": {
+        "summary": "Retry Prefetch",
+        "operationId": "retry_prefetch_api_v1_cache_prefetch_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/signals/dependency": {
+      "post": {
+        "summary": "Dependency Signal",
+        "operationId": "dependency_signal_api_v1_signals_dependency_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DependencySignal"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prefetch/candidates": {
+      "get": {
+        "summary": "Candidates",
+        "operationId": "candidates_api_v1_prefetch_candidates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prefetch/candidates/{candidate_id}/accept": {
+      "post": {
+        "summary": "Accept Candidate",
+        "operationId": "accept_candidate_api_v1_prefetch_candidates__candidate_id__accept_post",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prefetch/candidates/{candidate_id}/reject": {
+      "post": {
+        "summary": "Reject Candidate",
+        "operationId": "reject_candidate_api_v1_prefetch_candidates__candidate_id__reject_post",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/cache/items": {
       "get": {
         "summary": "Items",
@@ -407,6 +643,69 @@
   },
   "components": {
     "schemas": {
+      "DependencySignal": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "pattern": "^(forgejo|deployment_manifest|requirements|config|issue|task_queue)$",
+            "title": "Source"
+          },
+          "repository": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Repository"
+          },
+          "commit": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$",
+            "title": "Commit"
+          },
+          "repo_type": {
+            "type": "string",
+            "pattern": "^(model|dataset|space)$",
+            "title": "Repo Type",
+            "default": "model"
+          },
+          "repo_id": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+            "title": "Repo Id"
+          },
+          "revision": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._/-]+$",
+            "title": "Revision",
+            "default": "main"
+          },
+          "confidence": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "repository",
+          "commit",
+          "repo_id",
+          "confidence",
+          "reason"
+        ],
+        "title": "DependencySignal"
+      },
       "Ensure": {
         "properties": {
           "repo_type": {
@@ -424,9 +723,9 @@
           },
           "revision": {
             "type": "string",
-            "maxLength": 40,
-            "minLength": 40,
-            "pattern": "^[0-9a-f]{40}$",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._/-]+$",
             "title": "Revision"
           },
           "allow_patterns": {

@@ -39,7 +39,7 @@
 | 6 Library Agent | 只有 skeleton；推理、证据、proposal、Lean sandbox 未实现 |
 | 7 DevAgent | 已实现可信 webhook 接收；triage/duplicate/关联/任务队列未实现 |
 | 8 Deploy | 租约已验证；固定 executor、健康检查与激活失败回滚已实现；完整状态机、SSE、跨版本迁移尚未实现 |
-| 9 HF-cache | 只有 skeleton；ensure/download/pin/lease/物理水位/GC 未实现 |
+| 9 HF-cache | 已实现 SHA 固定 ensure、HF Hub 下载、manifest/hash、pin/lease/GC、异步预取 job 与结构化候选审核；物理共享池遥测和自动 signal discovery 尚未接入 |
 
 ## 运行与恢复限制
 

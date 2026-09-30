@@ -7,6 +7,8 @@ import re
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,12 +19,13 @@ from .common import APIError, base_app, connect, response, scope, transaction
 
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 _ENSURE_LOCK = threading.Lock()
+_PREFETCH_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="hf-cache-prefetch")
 
 
 class Ensure(BaseModel):
     repo_type: str = Field(default="model", pattern="^(model|dataset|space)$")
     repo_id: str = Field(min_length=3, max_length=256, pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-    revision: str = Field(min_length=40, max_length=40, pattern=r"^[0-9a-f]{40}$")
+    revision: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._/-]+$")
     allow_patterns: list[str] = Field(default_factory=list, max_length=128)
     ignore_patterns: list[str] = Field(default_factory=list, max_length=128)
     priority: str = Field(default="normal", pattern="^(low|normal|production)$")
@@ -31,6 +34,17 @@ class Ensure(BaseModel):
 
 class GCRequest(BaseModel):
     target_usage_percent: float = Field(default=75, gt=0, le=100)
+
+
+class DependencySignal(BaseModel):
+    source: str = Field(pattern="^(forgejo|deployment_manifest|requirements|config|issue|task_queue)$")
+    repository: str = Field(min_length=1, max_length=256)
+    commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    repo_type: str = Field(default="model", pattern="^(model|dataset|space)$")
+    repo_id: str = Field(min_length=3, max_length=256, pattern=r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+    revision: str = Field(default="main", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._/-]+$")
+    confidence: float = Field(ge=0, le=1)
+    reason: str = Field(min_length=1, max_length=2048)
 
 
 def _canonical(body):
@@ -77,6 +91,21 @@ def _hub_download(repo_type, repo_id, revision, destination, allow_patterns, ign
     )
 
 
+def _resolve_hf_revision(repo_type, repo_id, revision):
+    from huggingface_hub import HfApi
+
+    try:
+        info = HfApi().repo_info(repo_id=repo_id, repo_type=repo_type, revision=revision)
+    except Exception as exc:
+        raise APIError(
+            502, "REVISION_RESOLUTION_FAILED", f"could not resolve Hub revision: {type(exc).__name__}"
+        ) from None
+    resolved = getattr(info, "sha", None)
+    if not isinstance(resolved, str) or not REVISION.fullmatch(resolved):
+        raise APIError(502, "INVALID_HUB_REVISION", "Hub did not return an immutable commit SHA")
+    return resolved
+
+
 def _file_manifest(root):
     result = []
     for path in sorted(root.rglob("*")):
@@ -95,7 +124,7 @@ def _file_manifest(root):
     return result
 
 
-def create_app(settings=None, *, download_backend=None):
+def create_app(settings=None, *, download_backend=None, revision_resolver=None, storage_usage_provider=None):
     app = base_app("hf-cache", settings)
     root = app.state.settings.data_dir / "snapshots"
     root.mkdir(parents=True, exist_ok=True)
@@ -110,8 +139,28 @@ def create_app(settings=None, *, download_backend=None):
         db.execute("""CREATE TABLE IF NOT EXISTS leases (
             id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
             owner TEXT NOT NULL, created REAL NOT NULL)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS prefetch_jobs (
+            id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL,
+            progress INTEGER NOT NULL, phase TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3, item_id TEXT, error TEXT,
+            created REAL NOT NULL, updated REAL NOT NULL,
+            requested_revision TEXT, resolved_revision TEXT)""")
+        db.execute("""CREATE TABLE IF NOT EXISTS dependency_candidates (
+            id TEXT PRIMARY KEY, signal TEXT NOT NULL, status TEXT NOT NULL,
+            created REAL NOT NULL, updated REAL NOT NULL, job_id TEXT)""")
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(items)")}
+        if "requested_revision" not in columns:
+            db.execute("ALTER TABLE items ADD COLUMN requested_revision TEXT")
+            db.execute("UPDATE items SET requested_revision=revision WHERE requested_revision IS NULL")
+        job_columns = {row["name"] for row in db.execute("PRAGMA table_info(prefetch_jobs)")}
+        if "requested_revision" not in job_columns:
+            db.execute("ALTER TABLE prefetch_jobs ADD COLUMN requested_revision TEXT")
+        if "resolved_revision" not in job_columns:
+            db.execute("ALTER TABLE prefetch_jobs ADD COLUMN resolved_revision TEXT")
 
     backend = download_backend or _hub_download
+    resolve_revision = revision_resolver or _resolve_hf_revision
+    usage_provider = storage_usage_provider or (lambda path: shutil.disk_usage(path))
     try:
         cache_quota = int(os.getenv("HF_CACHE_MAX_BYTES", str(2 * 1024**4)))
     except ValueError:
@@ -119,6 +168,17 @@ def create_app(settings=None, *, download_backend=None):
     if cache_quota <= 0:
         raise RuntimeError("HF_CACHE_MAX_BYTES must be a positive integer")
     app.state.ready_check = lambda: True
+
+    def storage_usage():
+        try:
+            usage = usage_provider(root)
+            if usage.total <= 0 or usage.used < 0 or usage.used > usage.total or usage.free < 0:
+                raise ValueError("invalid storage usage values")
+            return usage
+        except Exception:
+            raise APIError(
+                503, "STORAGE_TELEMETRY_UNAVAILABLE", "trusted storage telemetry unavailable"
+            ) from None
 
     def get_item(db, item_id):
         row = db.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
@@ -133,6 +193,8 @@ def create_app(settings=None, *, download_backend=None):
             "repo_type": row["repo_type"],
             "repo_id": row["repo_id"],
             "revision": row["revision"],
+            "resolved_revision": row["revision"],
+            "requested_revision": row["requested_revision"],
             "priority": row["priority"],
             "pinned": bool(row["pinned"]),
             "in_use": live_leases > 0,
@@ -156,7 +218,7 @@ def create_app(settings=None, *, download_backend=None):
             return False
 
     def collect(target_percent, *, low_only=False):
-        usage = shutil.disk_usage(root)
+        usage = storage_usage()
         removed = []
         priority_filter = "AND i.priority='low'" if low_only else ""
         with transaction(db_path) as db:
@@ -174,12 +236,17 @@ def create_app(settings=None, *, download_backend=None):
                 shutil.rmtree(item_path)
                 db.execute("DELETE FROM items WHERE id=?", (row["id"],))
                 removed.append(row["id"])
-                usage = shutil.disk_usage(root)
+                usage = storage_usage()
         return removed, usage
 
-    @app.post("/api/v1/cache/ensure")
-    def ensure(body: Ensure, request: Request, actor=Depends(scope("hf-cache:write"))):
-        key = _canonical(body)
+    def ensure_item(body, progress=lambda value, phase: None, requested_revision=None):
+        requested_revision = requested_revision or body.revision
+        progress(5, "resolving_revision")
+        resolved_revision = resolve_revision(body.repo_type, body.repo_id, body.revision)
+        if not isinstance(resolved_revision, str) or not REVISION.fullmatch(resolved_revision):
+            raise APIError(502, "INVALID_HUB_REVISION", "revision resolver did not return a commit SHA")
+        resolved_body = body.model_copy(update={"revision": resolved_revision})
+        key = _canonical(resolved_body)
         with _ENSURE_LOCK:
             with connect(db_path) as db:
                 old = db.execute("SELECT * FROM items WHERE cache_key=?", (key,)).fetchone()
@@ -190,14 +257,20 @@ def create_app(settings=None, *, download_backend=None):
                         (time.time(), body.priority, int(body.pin), old["id"]),
                     )
                     row = get_item(db, old["id"])
-                    return response(request, {"status": "cached", **public_item(db, row)})
+                    result = {
+                        "status": "cached",
+                        **public_item(db, row),
+                        "requested_revision": requested_revision,
+                    }
+                progress(100, "cached")
+                return result
             if old:
                 raise APIError(500, "CACHE_INTEGRITY_FAILURE", "cached snapshot failed manifest verification")
             item_id = str(uuid4())
             final = root / item_id
             staging = root / ("." + item_id + ".partial")
             try:
-                usage = shutil.disk_usage(root)
+                usage = storage_usage()
                 used_percent = usage.used * 100 / usage.total if usage.total else 100
                 if used_percent >= 90:
                     raise APIError(
@@ -209,7 +282,7 @@ def create_app(settings=None, *, download_backend=None):
                     )
                 if used_percent >= 85:
                     collect(80, low_only=True)
-                    usage = shutil.disk_usage(root)
+                    usage = storage_usage()
                     used_percent = usage.used * 100 / usage.total if usage.total else 100
                     if used_percent >= 90:
                         raise APIError(
@@ -220,15 +293,17 @@ def create_app(settings=None, *, download_backend=None):
                 remaining = cache_quota - current_bytes
                 if remaining <= 0:
                     raise APIError(507, "CACHE_QUOTA_EXCEEDED", "HF-cache byte quota is full")
+                progress(10, "downloading")
                 backend(
                     body.repo_type,
                     body.repo_id,
-                    body.revision,
+                    resolved_revision,
                     staging,
                     body.allow_patterns,
                     body.ignore_patterns,
                     remaining,
                 )
+                progress(90, "verifying_files")
                 manifest = _file_manifest(staging)
                 total = sum(file["size"] for file in manifest)
                 if total > remaining:
@@ -240,13 +315,13 @@ def create_app(settings=None, *, download_backend=None):
                 now = time.time()
                 with transaction(db_path) as db:
                     db.execute(
-                        "INSERT INTO items VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO items (id,cache_key,repo_type,repo_id,revision,allow_patterns,ignore_patterns,priority,path,manifest,bytes,created,accessed,pinned,requested_revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             item_id,
                             key,
                             body.repo_type,
                             body.repo_id,
-                            body.revision,
+                            resolved_revision,
                             json.dumps(body.allow_patterns),
                             json.dumps(body.ignore_patterns),
                             body.priority,
@@ -256,15 +331,252 @@ def create_app(settings=None, *, download_backend=None):
                             now,
                             now,
                             int(body.pin),
+                            requested_revision,
                         ),
                     )
                     row = get_item(db, item_id)
-                    return response(request, {"status": "ready", **public_item(db, row)})
+                    result = {
+                        "status": "ready",
+                        **public_item(db, row),
+                        "requested_revision": requested_revision,
+                    }
+                progress(100, "ready")
+                return result
             except Exception:
                 shutil.rmtree(staging, ignore_errors=True)
                 if final.exists():
                     shutil.rmtree(final, ignore_errors=True)
                 raise
+
+    @app.post("/api/v1/cache/ensure")
+    def ensure(body: Ensure, request: Request, actor=Depends(scope("hf-cache:write"))):
+        return response(request, ensure_item(body))
+
+    def job_view(row):
+        return {
+            "id": row["id"],
+            "status": row["status"],
+            "progress": row["progress"],
+            "phase": row["phase"],
+            "attempts": row["attempts"],
+            "max_attempts": row["max_attempts"],
+            "item_id": row["item_id"],
+            "error": row["error"],
+            "created_at": row["created"],
+            "updated_at": row["updated"],
+            "requested_revision": row["requested_revision"],
+            "resolved_revision": row["resolved_revision"],
+        }
+
+    def update_job(
+        job_id, *, status=None, progress=None, phase=None, attempts=None, item_id=None, error=None
+    ):
+        fields = {"updated": time.time()}
+        for name, value in (
+            ("status", status),
+            ("progress", progress),
+            ("phase", phase),
+            ("attempts", attempts),
+            ("item_id", item_id),
+            ("error", error),
+        ):
+            if value is not None:
+                fields[name] = value
+        with transaction(db_path) as db:
+            db.execute(
+                "UPDATE prefetch_jobs SET " + ",".join(f"{name}=?" for name in fields) + " WHERE id=?",
+                (*fields.values(), job_id),
+            )
+
+    def run_job(job_id):
+        with connect(db_path) as db:
+            row = db.execute("SELECT * FROM prefetch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return
+        body = Ensure.model_validate_json(row["payload"])
+        attempt = row["attempts"]
+        while attempt < row["max_attempts"]:
+            attempt += 1
+            update_job(job_id, status="running", attempts=attempt, progress=0, phase="queued", error="")
+
+            def progress(value, phase):
+                update_job(job_id, progress=value, phase=phase)
+
+            try:
+                result = ensure_item(body, progress, row["requested_revision"])
+                update_job(
+                    job_id, status="succeeded", progress=100, phase="ready", item_id=result["id"], error=""
+                )
+                return
+            except APIError as exc:
+                retryable = exc.status in (429, 502, 503)
+                message = f"{exc.code}: {exc.message}"
+            except Exception as exc:
+                retryable = True
+                message = f"{type(exc).__name__}: prefetch attempt failed"
+            if retryable and attempt < row["max_attempts"]:
+                update_job(job_id, status="retrying", phase="retry_wait", error=message)
+                time.sleep(min(0.1 * 2 ** (attempt - 1), 1.0))
+                continue
+            update_job(job_id, status="failed", phase="failed", error=message)
+            return
+
+    def enqueue(body):
+        requested_revision = body.revision
+        resolved_revision = resolve_revision(body.repo_type, body.repo_id, requested_revision)
+        if not isinstance(resolved_revision, str) or not REVISION.fullmatch(resolved_revision):
+            raise APIError(502, "INVALID_HUB_REVISION", "revision resolver did not return a commit SHA")
+        pinned_body = body.model_copy(update={"revision": resolved_revision})
+        job_id = str(uuid4())
+        now = time.time()
+        with transaction(db_path) as db:
+            db.execute(
+                "INSERT INTO prefetch_jobs(id,payload,status,progress,phase,attempts,max_attempts,item_id,error,created,updated,requested_revision,resolved_revision) "
+                "VALUES(?,?,'queued',0,'queued',0,3,NULL,'',?,?,?,?)",
+                (job_id, pinned_body.model_dump_json(), now, now, requested_revision, resolved_revision),
+            )
+        _PREFETCH_POOL.submit(run_job, job_id)
+        return job_id
+
+    def resume_prefetch_jobs():
+        with transaction(db_path) as db:
+            rows = db.execute(
+                "SELECT id FROM prefetch_jobs WHERE status IN ('queued','running','retrying')"
+            ).fetchall()
+            db.execute(
+                "UPDATE dependency_candidates SET status='pending',updated=? WHERE status='accepting'",
+                (time.time(),),
+            )
+        for row in rows:
+            update_job(row["id"], status="queued", phase="queued")
+            _PREFETCH_POOL.submit(run_job, row["id"])
+
+    existing_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(application):
+        resume_prefetch_jobs()
+        async with existing_lifespan(application):
+            yield
+
+    app.router.lifespan_context = lifespan
+
+    @app.post("/api/v1/cache/prefetch", status_code=202)
+    def prefetch(body: Ensure, request: Request, actor=Depends(scope("hf-cache:write"))):
+        job_id = enqueue(body)
+        with connect(db_path) as db:
+            row = db.execute("SELECT * FROM prefetch_jobs WHERE id=?", (job_id,)).fetchone()
+        return response(request, job_view(row))
+
+    @app.get("/api/v1/cache/prefetch/jobs/{job_id}")
+    def prefetch_job(job_id: str, request: Request, actor=Depends(scope("hf-cache:read"))):
+        with connect(db_path) as db:
+            row = db.execute("SELECT * FROM prefetch_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            raise APIError(404, "PREFETCH_JOB_NOT_FOUND", "prefetch job not found")
+        return response(request, job_view(row))
+
+    @app.post("/api/v1/cache/prefetch/jobs/{job_id}/retry")
+    def retry_prefetch(job_id: str, request: Request, actor=Depends(scope("hf-cache:write"))):
+        with transaction(db_path) as db:
+            row = db.execute("SELECT * FROM prefetch_jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise APIError(404, "PREFETCH_JOB_NOT_FOUND", "prefetch job not found")
+            if row["status"] != "failed":
+                raise APIError(409, "PREFETCH_JOB_NOT_FAILED", "only failed prefetch jobs can be retried")
+            db.execute(
+                "UPDATE prefetch_jobs SET status='queued',progress=0,phase='queued',attempts=0,error='',updated=? WHERE id=?",
+                (time.time(), job_id),
+            )
+        _PREFETCH_POOL.submit(run_job, job_id)
+        return response(request, {"id": job_id, "status": "queued"})
+
+    @app.post("/api/v1/signals/dependency")
+    def dependency_signal(body: DependencySignal, request: Request, actor=Depends(scope("hf-cache:write"))):
+        candidate_id = str(uuid4())
+        now = time.time()
+        with transaction(db_path) as db:
+            db.execute(
+                "INSERT INTO dependency_candidates VALUES(?,?, 'pending', ?, ?, NULL)",
+                (candidate_id, body.model_dump_json(), now, now),
+            )
+        return response(request, {"candidate_id": candidate_id, "status": "pending_review"})
+
+    def require_candidate_reviewer(actor):
+        if actor.kind != "human" and "hf-cache:admin" not in actor.scopes:
+            raise APIError(403, "HUMAN_REVIEW_REQUIRED", "candidate decisions require a human or cache admin")
+
+    @app.get("/api/v1/prefetch/candidates")
+    def candidates(request: Request, actor=Depends(scope("hf-cache:read"))):
+        with connect(db_path) as db:
+            rows = db.execute("SELECT * FROM dependency_candidates ORDER BY created DESC").fetchall()
+        return response(
+            request,
+            [
+                {
+                    "id": row["id"],
+                    "signal": json.loads(row["signal"]),
+                    "status": row["status"],
+                    "created_at": row["created"],
+                    "job_id": row["job_id"],
+                }
+                for row in rows
+            ],
+        )
+
+    @app.post("/api/v1/prefetch/candidates/{candidate_id}/accept")
+    def accept_candidate(candidate_id: str, request: Request, actor=Depends(scope("hf-cache:write"))):
+        require_candidate_reviewer(actor)
+        with transaction(db_path) as db:
+            row = db.execute("SELECT * FROM dependency_candidates WHERE id=?", (candidate_id,)).fetchone()
+            if not row:
+                raise APIError(404, "CANDIDATE_NOT_FOUND", "prefetch candidate not found")
+            if row["status"] != "pending":
+                raise APIError(409, "CANDIDATE_ALREADY_DECIDED", "candidate is no longer pending")
+            db.execute(
+                "UPDATE dependency_candidates SET status='accepting',updated=? WHERE id=?",
+                (time.time(), candidate_id),
+            )
+            signal = DependencySignal.model_validate_json(row["signal"])
+        try:
+            job_id = enqueue(
+                Ensure(
+                    repo_type=signal.repo_type,
+                    repo_id=signal.repo_id,
+                    revision=signal.revision,
+                    priority="production" if signal.source == "deployment_manifest" else "normal",
+                )
+            )
+        except Exception:
+            with transaction(db_path) as db:
+                db.execute(
+                    "UPDATE dependency_candidates SET status='pending',updated=? WHERE id=? AND status='accepting'",
+                    (time.time(), candidate_id),
+                )
+            raise
+        with transaction(db_path) as db:
+            db.execute(
+                "UPDATE dependency_candidates SET status='accepted',job_id=?,updated=? WHERE id=? AND status='accepting'",
+                (job_id, time.time(), candidate_id),
+            )
+        return response(request, {"candidate_id": candidate_id, "status": "accepted", "job_id": job_id})
+
+    @app.post("/api/v1/prefetch/candidates/{candidate_id}/reject")
+    def reject_candidate(candidate_id: str, request: Request, actor=Depends(scope("hf-cache:write"))):
+        require_candidate_reviewer(actor)
+        with transaction(db_path) as db:
+            row = db.execute(
+                "SELECT status FROM dependency_candidates WHERE id=?", (candidate_id,)
+            ).fetchone()
+            if not row:
+                raise APIError(404, "CANDIDATE_NOT_FOUND", "prefetch candidate not found")
+            if row["status"] != "pending":
+                raise APIError(409, "CANDIDATE_ALREADY_DECIDED", "candidate is no longer pending")
+            db.execute(
+                "UPDATE dependency_candidates SET status='rejected',updated=? WHERE id=?",
+                (time.time(), candidate_id),
+            )
+        return response(request, {"candidate_id": candidate_id, "status": "rejected"})
 
     @app.get("/api/v1/cache/items")
     def items(request: Request, actor=Depends(scope("hf-cache:read"))):
@@ -331,7 +643,7 @@ def create_app(settings=None, *, download_backend=None):
 
     @app.get("/api/v1/cache/storage")
     def storage(request: Request, actor=Depends(scope("hf-cache:read"))):
-        usage = shutil.disk_usage(root)
+        usage = storage_usage()
         percent = usage.used * 100 / usage.total if usage.total else 100
         level = (
             "normal"

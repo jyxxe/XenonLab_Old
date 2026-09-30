@@ -1,9 +1,12 @@
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from xeonolab import hf_cache
+from xeonolab.common import APIError, transaction
 
 from .conftest import auth
 
@@ -11,13 +14,22 @@ REV = "a" * 40
 
 
 def local_download(repo_type, repo_id, revision, destination, allow_patterns, ignore_patterns, max_bytes):
+    assert revision in (REV, "b" * 40), "downloader must receive an immutable resolved commit SHA"
     destination.mkdir(parents=True)
     (destination / "config.json").write_text('{"model":"fixture"}')
     (destination / "weights.bin").write_bytes(b"local-test-weights")
 
 
 def client(settings):
-    return TestClient(hf_cache.create_app(settings, download_backend=local_download))
+    return TestClient(
+        hf_cache.create_app(
+            settings,
+            download_backend=local_download,
+            revision_resolver=lambda _repo_type, _repo_id, revision: (
+                REV if revision in ("main", REV) else "b" * 40
+            ),
+        )
+    )
 
 
 def ensure_payload(**overrides):
@@ -33,19 +45,25 @@ def ensure_payload(**overrides):
 
 def test_revision_pinned_ensure_manifest_pin_and_integrity(settings):
     with client(settings) as api:
-        assert (
-            api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(revision="main")).status_code
-            == 422
-        )
-        result = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        result = api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(revision="main")
+        ).json()["data"]
         assert result["status"] == "ready"
         assert result["revision"] == REV
+        assert result["requested_revision"] == "main"
+        assert result["resolved_revision"] == REV
         assert len(result["files"]) == 2
         item_id = result["id"]
         folder = Path(settings.data_dir) / "snapshots" / item_id
         assert (folder / ".xeonolab-manifest.json").is_file()
-        again = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload()).json()["data"]
+        again = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(revision="main")).json()[
+            "data"
+        ]
         assert again["status"] == "cached" and again["id"] == item_id
+        moved_tag = api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(revision="tag-v2")
+        ).json()["data"]
+        assert moved_tag["resolved_revision"] == "b" * 40 and moved_tag["id"] != item_id
         assert api.post(f"/api/v1/cache/items/{item_id}/pin", headers=auth()).status_code == 200
         assert api.post(f"/api/v1/cache/items/{item_id}/evict", headers=auth()).status_code == 409
         assert api.delete(f"/api/v1/cache/items/{item_id}/pin", headers=auth()).status_code == 200
@@ -147,3 +165,200 @@ def test_disk_watermark_stops_speculative_and_evicts_low_priority(settings, monk
         assert low_id not in {
             entry["id"] for entry in api.get("/api/v1/cache/items", headers=auth()).json()["data"]
         }
+
+
+def wait_job(api, job_id):
+    for _ in range(200):
+        job = api.get(f"/api/v1/cache/prefetch/jobs/{job_id}", headers=auth()).json()["data"]
+        if job["status"] in ("succeeded", "failed"):
+            return job
+        time.sleep(0.01)
+    raise AssertionError(f"prefetch job did not finish: {job}")
+
+
+def test_prefetch_is_async_persistent_and_reports_completion(settings):
+    with client(settings) as api:
+        queued = api.post("/api/v1/cache/prefetch", headers=auth(), json=ensure_payload(revision="main"))
+        assert queued.status_code == 202
+        job_id = queued.json()["data"]["id"]
+        final = wait_job(api, job_id)
+        assert final["status"] == "succeeded"
+        assert final["progress"] == 100 and final["phase"] == "ready"
+        assert final["attempts"] == 1 and final["item_id"]
+        assert final["requested_revision"] == "main" and final["resolved_revision"] == REV
+        assert api.get(f"/api/v1/cache/prefetch/jobs/{job_id}", headers=auth()).json()["data"] == final
+
+
+def test_prefetch_retries_transient_backend_error(settings):
+    calls = 0
+
+    def flaky_download(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient fixture failure")
+        return local_download(*args)
+
+    api = TestClient(
+        hf_cache.create_app(settings, download_backend=flaky_download, revision_resolver=lambda *_args: REV)
+    )
+    with api:
+        job_id = api.post("/api/v1/cache/prefetch", headers=auth(), json=ensure_payload()).json()["data"][
+            "id"
+        ]
+        job = wait_job(api, job_id)
+        assert job["status"] == "succeeded" and job["attempts"] == 2
+
+
+def test_dependency_candidates_require_human_accept_and_issue_signal_does_not_autodownload(settings):
+    with client(settings) as api:
+        signal = {
+            "source": "issue",
+            "repository": "platform",
+            "commit": "d" * 40,
+            "repo_id": "org/repo",
+            "revision": "main",
+            "confidence": 0.99,
+            "reason": "mentioned in issue text",
+        }
+        created = api.post("/api/v1/signals/dependency", headers=auth("opencode"), json=signal)
+        assert created.status_code == 200
+        candidate_id = created.json()["data"]["candidate_id"]
+        listing = api.get("/api/v1/prefetch/candidates", headers=auth()).json()["data"]
+        candidate = next(row for row in listing if row["id"] == candidate_id)
+        assert candidate["status"] == "pending" and candidate["job_id"] is None
+        assert (
+            api.post(
+                f"/api/v1/prefetch/candidates/{candidate_id}/accept", headers=auth("opencode")
+            ).status_code
+            == 403
+        )
+        accepted = api.post(
+            f"/api/v1/prefetch/candidates/{candidate_id}/accept", headers=auth("admin")
+        ).json()["data"]
+        assert accepted["status"] == "accepted"
+        assert wait_job(api, accepted["job_id"])["status"] == "succeeded"
+
+
+def test_candidate_reject_does_not_enqueue_job(settings):
+    with client(settings) as api:
+        signal = {
+            "source": "requirements",
+            "repository": "platform",
+            "commit": "c" * 40,
+            "repo_id": "org/repo",
+            "revision": "v1",
+            "confidence": 0.4,
+            "reason": "optional dependency",
+        }
+        candidate_id = api.post("/api/v1/signals/dependency", headers=auth(), json=signal).json()["data"][
+            "candidate_id"
+        ]
+        rejected = api.post(f"/api/v1/prefetch/candidates/{candidate_id}/reject", headers=auth("admin"))
+        assert rejected.status_code == 200 and rejected.json()["data"]["status"] == "rejected"
+        candidate = next(
+            row
+            for row in api.get("/api/v1/prefetch/candidates", headers=auth()).json()["data"]
+            if row["id"] == candidate_id
+        )
+        assert candidate["job_id"] is None
+
+
+def test_failed_prefetch_can_be_manually_retried(settings):
+    def unavailable(*_args):
+        raise APIError(404, "REPO_NOT_FOUND", "fixture repository unavailable")
+
+    api = TestClient(
+        hf_cache.create_app(settings, download_backend=unavailable, revision_resolver=lambda *_args: REV)
+    )
+    with api:
+        job_id = api.post("/api/v1/cache/prefetch", headers=auth(), json=ensure_payload()).json()["data"][
+            "id"
+        ]
+        first = wait_job(api, job_id)
+        assert first["status"] == "failed" and first["attempts"] == 1
+        queued = api.post(f"/api/v1/cache/prefetch/jobs/{job_id}/retry", headers=auth())
+        assert queued.status_code == 200
+        retried = wait_job(api, job_id)
+        assert retried["status"] == "failed" and retried["attempts"] == 1
+
+
+def test_startup_resumes_durable_queued_prefetch(settings):
+    app = hf_cache.create_app(
+        settings,
+        download_backend=local_download,
+        revision_resolver=lambda *_args: REV,
+    )
+    job_id = "durable-test-job"
+    now = time.time()
+    with transaction(Path(settings.data_dir) / "hf-cache.sqlite") as db:
+        db.execute(
+            "INSERT INTO prefetch_jobs(id,payload,status,progress,phase,attempts,max_attempts,item_id,error,created,updated) "
+            "VALUES(?,?,'queued',0,'queued',0,3,NULL,'',?,?)",
+            (job_id, hf_cache.Ensure(**ensure_payload(revision="main")).model_dump_json(), now, now),
+        )
+    with TestClient(app) as api:
+        recovered = wait_job(api, job_id)
+        assert recovered["status"] == "succeeded" and recovered["item_id"]
+
+
+def test_official_hub_revision_resolver_uses_repo_info_sha(monkeypatch):
+    import huggingface_hub
+
+    calls = []
+
+    class FakeHfApi:
+        def repo_info(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(sha=REV)
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    assert hf_cache._resolve_hf_revision("dataset", "org/repo", "release/tag") == REV
+    assert calls == [{"repo_id": "org/repo", "repo_type": "dataset", "revision": "release/tag"}]
+
+
+def test_official_hub_downloader_checks_dry_run_quota_before_transfer(monkeypatch, tmp_path):
+    import huggingface_hub
+
+    calls = []
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("dry_run", False):
+            return [SimpleNamespace(file_size=4)]
+        destination = Path(kwargs["local_dir"])
+        destination.mkdir(parents=True)
+        (destination / "model.bin").write_bytes(b"data")
+        return str(destination)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    staging = tmp_path / "snapshot"
+    with pytest.raises(APIError, match="CACHE_QUOTA_EXCEEDED"):
+        hf_cache._hub_download("model", "org/repo", REV, staging, [], [], 3)
+    assert len(calls) == 1 and calls[0]["dry_run"] is True
+    assert not staging.exists()
+
+    hf_cache._hub_download("model", "org/repo", REV, staging, [], [], 4)
+    assert len(calls) == 3 and calls[-1].get("dry_run", False) is False
+    assert (staging / "model.bin").read_bytes() == b"data"
+
+
+def test_unavailable_physical_storage_provider_fails_closed(settings):
+    def unavailable(_path):
+        raise OSError("host telemetry unavailable")
+
+    api = TestClient(
+        hf_cache.create_app(
+            settings,
+            download_backend=local_download,
+            revision_resolver=lambda *_args: REV,
+            storage_usage_provider=unavailable,
+        )
+    )
+    with api:
+        status = api.get("/api/v1/cache/storage", headers=auth())
+        assert status.status_code == 503
+        assert status.json()["error"]["code"] == "STORAGE_TELEMETRY_UNAVAILABLE"
+        result = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload())
+        assert result.status_code == 503
+        assert list((Path(settings.data_dir) / "snapshots").iterdir()) == []
