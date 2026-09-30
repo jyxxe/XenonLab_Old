@@ -178,7 +178,10 @@ def create_app(settings=None):
     def file(tid):
         # tid is looked up before it is ever used in a filesystem path.
         table_info(tid)
-        return root / "tables" / f"{tid}.xl"
+        path = root / "tables" / f"{tid}.xl"
+        if not path.is_file():
+            raise APIError(503, "XL_TABLE_STORAGE_UNAVAILABLE", "table file is unavailable")
+        return path
 
     @contextmanager
     def table_lock(tid, *, exclusive=True):
@@ -248,7 +251,9 @@ def create_app(settings=None):
         return table
 
     def metadata(db):
-        return dict(db.execute("SELECT * FROM __xl_meta").fetchone())
+        result = dict(db.execute("SELECT * FROM __xl_meta").fetchone())
+        result.pop("deleting", None)
+        return result
 
     def columns(db):
         return [json.loads(x[0]) for x in db.execute("SELECT definition FROM __xl_schema ORDER BY position")]

@@ -60,6 +60,8 @@ def test_table_delete_requires_admin_fresh_revision_and_empty_rows(library):
     tid, rid = seed(library)
     url = f"/api/v1/tables/{tid}"
     headers = {"If-Match": table_etag(library, tid)}
+    schema = library.get(f"/api/v1/tables/{tid}/schema", headers=auth("admin"))
+    assert "deleting" not in schema.json()["data"]
 
     assert library.delete(url, headers=auth(**headers)).status_code == 403
     assert library.delete(url, headers=auth("admin")).status_code == 412
@@ -231,8 +233,13 @@ def test_table_delete_recovers_interrupted_catalogue_and_file_steps(library, set
     restore_target = settings.data_dir / "tables" / f"{restore_tid}.xl"
     restore_tombstone = settings.data_dir / "tables" / f".{restore_tid}.xl.deleting"
     restore_target.replace(restore_tombstone)
+    unavailable = library.get(f"/api/v1/tables/{restore_tid}/schema", headers=auth("admin"))
+    assert unavailable.status_code == 503
+    assert not restore_target.exists() and restore_tombstone.exists()
     recovered = TestClient(create_app("xelibrary", settings))
-    assert recovered.get(f"/api/v1/tables/{restore_tid}", headers=auth("admin")).status_code == 200
+    restored = recovered.get(f"/api/v1/tables/{restore_tid}", headers=auth("admin"))
+    assert restored.status_code == 200
+    assert "deleting" not in restored.json()["data"]
     assert restore_target.exists() and not restore_tombstone.exists()
 
     finish_tid = create_empty_table(library, "Finish interrupted delete")
