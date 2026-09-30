@@ -10,10 +10,22 @@ import httpx
 root = Path("runtime/deploy-secrets")
 credentials = json.loads((root / "credentials.json").read_text())
 path = root / "harness-clients.json"
-if not path.exists():
-    path.write_text(json.dumps({name: secrets.token_urlsafe(40) for name in ("codex-dev-01", "opencode-01")}))
+default_clients = {
+    "codex-dev-01": "codex",
+    "opencode-01": "opencode",
+    "chatgpt-web-dev-01": "agent",
+    "zcode-dev-01": "agent",
+    "general-agent-dev-01": "agent",
+}
+clients = json.loads(path.read_text()) if path.exists() else {}
+changed = False
+for name in default_clients:
+    if name not in clients:
+        clients[name] = secrets.token_urlsafe(40)
+        changed = True
+if changed or not path.exists():
+    path.write_text(json.dumps(clients, sort_keys=True) + "\n")
     path.chmod(0o600)
-clients = json.loads(path.read_text())
 context = ssl.create_default_context(cafile=root / "lan-root-ca.crt")
 with httpx.Client(verify=context, trust_env=False, timeout=60) as client:
     response = client.post(
@@ -56,7 +68,10 @@ with httpx.Client(verify=context, trust_env=False, timeout=60) as client:
                     "protocolMapper": "oidc-hardcoded-claim-mapper",
                     "config": {
                         "claim.name": "agent_kind",
-                        "claim.value": "codex" if name.startswith("codex") else "opencode",
+                        "claim.value": default_clients.get(
+                            name,
+                            "codex" if name.startswith("codex") else "opencode" if name.startswith("opencode") else "agent",
+                        ),
                         "jsonType.label": "String",
                         "access.token.claim": "true",
                     },

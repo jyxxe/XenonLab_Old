@@ -9,9 +9,10 @@ Forgejo 16.0.5 部署在 VM 110，以非 root 用户运行，独立持久化数�
 API 根路径 /api/v1；Swagger 位于 /api/swagger。仓库 Issue 接口：
 GET/POST /api/v1/repos/xenon-admin/XeonoLab/issues，单条 PATCH /issues/{index}。
 
-管理员 xenon-admin，Harness 账户 codex、opencode 使用不同密码和身份；Harness 仅仓库 write，
-不能访问站点管理员 API。首次凭据存于操作主机 runtime/deploy-secrets/forgejo-users.json，权限 600。
-此阶段 Forgejo 本地身份独立于 Keycloak；OIDC 统一登录与细分 API token 后续接入。
+管理员 xenon-admin；Harness 账户 codex、opencode、chatgpt-web、zcode、general-agent 各自使用独立
+Forgejo 密码。Harness 仅 `xenon-admin/XeonoLab` 仓库 write，不能访问站点管理员 API。凭据存于
+操作主机 `runtime/deploy-secrets/forgejo-users.json`（权限 600）。
+Forgejo 本地账户与 Keycloak OIDC subject 独立；通过各 Harness 的私有 `Agent.md` 分别配置两种身份。
 不得将管理员凭据交给 Harness；不得提交任何凭据。生产激活仍通过受限 Deploy Gateway。
 
 桌面已上线“身份与权限”：查看当前 JWT subject/kind/scopes；管理员可读取和编辑路径、表、行 ACL，
@@ -46,10 +47,12 @@ VM 111 提供 DevAgent 8106，仅 VM 101 代理与本机可访问，防火墙设
 桌面“任务队列”展示 30 个真实 Forgejo Plan Issues，可领取、释放、标记队列完成。
 队列完成不自动关闭 Forgejo Issue；Issue 关闭仍需要实际验收证据。
 
-独立 OAuth client codex-dev-01 与 opencode-01：client_credentials、audience xeonolab，
-dev:read / dev:write / desktop:read，不含任何 deploy scope。凭据只在操作主机
-runtime/deploy-secrets/harness-clients.json（600），管理员分别分发，禁止共用超级 token。
-这些 OIDC 身份与 Forgejo 本地账户尚未做统一登录关联。
+独立 OAuth client `codex-dev-01`、`opencode-01`、`chatgpt-web-dev-01`、`zcode-dev-01`、
+`general-agent-dev-01` 使用 `client_credentials` 和 audience `xeonolab`，权限为
+`dev:read dev:write desktop:read`，不含任何 deploy scope。各 client secret 存于操作主机
+`runtime/deploy-secrets/harness-clients.json`（600），不得共用或提交。ChatGPT Web、Zcode、
+General Agent 的私有说明和各自账号凭据位于 `runtime/agent-profiles/<harness>/Agent.md`，目录权限
+700、文件权限 600；只读取当前 Harness 的文件。这些 OIDC 身份与 Forgejo 本地账户没有自动绑定。
 
 经过桌面入口访问以下接口，Authorization Bearer 必须携带对应 OIDC access token：
 
