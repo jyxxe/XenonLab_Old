@@ -171,6 +171,7 @@ async function main() {
     const pageUrl = async () => cdp.evaluate('location.href');
     const clickButton = async label => cdp.evaluate(`(()=>{const e=[...document.querySelectorAll('button')].find(x=>x.innerText.trim()===${JSON.stringify(label)});if(!e)return false;e.click();return true})()`);
     const clickTab = async label => cdp.evaluate(`(()=>{const e=[...document.querySelectorAll('.settings-tabs button')].find(x=>x.innerText.trim()===${JSON.stringify(label)});if(!e)return false;e.click();return true})()`);
+    const clickVisible = async selectors => cdp.evaluate(`(()=>{for(const selector of ${JSON.stringify(selectors)}){let e;try{e=document.querySelector(selector)}catch{};if(e&&e.getClientRects().length){e.click();return true}}return false})()`);
     const measureOverflow = async label => {
       const metrics = await cdp.evaluate(`(()=>{const selectors=['html','body','.window-body','.knowledge','.knowledge-sidebar','.knowledge-content','.acl-manager','.attachment-panel'];return selectors.flatMap(s=>[...document.querySelectorAll(s)].map((e,i)=>({selector:s,index:i,clientWidth:e.clientWidth,scrollWidth:e.scrollWidth,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,overflowX:e.scrollWidth>e.clientWidth+2,overflowY:e.scrollHeight>e.clientHeight+2})))})()`);
       report.overflow.push({page: label, metrics});
@@ -243,6 +244,61 @@ async function main() {
     await measureOverflow('identity and permissions');
     await screenshot('08-settings-permissions.png');
     check('identity and permissions tab visible', true);
+
+    const featureSelectors = config.issue41 || {};
+    const systemToggleSelectors = featureSelectors.systemPanelToggle ? [featureSelectors.systemPanelToggle] : [
+      '[data-testid="system-panel-toggle"]', '[aria-label*="系统面板"]', '[title*="系统面板"]',
+      '[aria-label*="System panel" i]', '[title*="System panel" i]', '[aria-label*="Control Center" i]', '[title*="Control Center" i]',
+    ];
+    const systemPanelSelectors = featureSelectors.systemPanel ? [featureSelectors.systemPanel] : [
+      '#system-panel', '[data-testid*="system-panel"]', '[aria-label*="系统面板"]', '[aria-label*="System panel" i]', '[class*="system-panel" i]',
+    ];
+    const clickedSystemPanel = await clickVisible(systemToggleSelectors);
+    check('system panel toggle found and clicked', clickedSystemPanel, 'Set issue41.systemPanelToggle in the private config if the UI uses another accessible selector.');
+    if (clickedSystemPanel) {
+      const panelVisible = await waitFor(async () => cdp.evaluate(`(()=>{for(const selector of ${JSON.stringify(systemPanelSelectors)}){try{const e=document.querySelector(selector);if(e&&e.getClientRects().length)return true}catch{}}return false})()`), 'system panel visible').catch(() => false);
+      check('system panel opened', panelVisible);
+      await measureOverflow('system panel');
+      await screenshot('09-system-panel.png');
+      await clickVisible(systemToggleSelectors);
+    }
+    const widgetSelectors = featureSelectors.widget ? [featureSelectors.widget] : [
+      '[data-testid*="widget"]', '[data-widget]', '[class*="widget" i]', '[aria-label*="widget" i]', '[aria-label*="小组件"]',
+    ];
+    const widgetState = await cdp.evaluate(`(()=>{for(const selector of ${JSON.stringify(widgetSelectors)}){try{const e=document.querySelector(selector);if(e&&e.getClientRects().length)return {visible:true,selector}}catch{}}return {visible:false}})()`);
+    check('desktop widget visible', widgetState.visible, widgetState.selector || 'Set issue41.widget in the private config if the widget has no widget marker.');
+    await measureOverflow('desktop widgets');
+    await screenshot('10-desktop-widgets.png');
+
+    await cdp.evaluate("document.querySelector('button[title=\"LaunchPad\"]')?.click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), 'LaunchPad for search acceptance');
+    const searchSelectors = featureSelectors.launchpadSearch ? [featureSelectors.launchpadSearch] : [
+      '.launchpad input[type="search"]', '.launchpad input[aria-label*="搜索"]', '.launchpad input[placeholder*="搜索"]',
+      '.launchpad input[aria-label*="Search" i]', '.launchpad input[placeholder*="Search" i]',
+    ];
+    const searchSelector = await cdp.evaluate(`(()=>{for(const selector of ${JSON.stringify(searchSelectors)}){try{const e=document.querySelector(selector);if(e&&e.getClientRects().length)return selector}catch{}}return ''})()`);
+    check('LaunchPad search input found', Boolean(searchSelector), 'Set issue41.launchpadSearch in the private config if the search field uses another selector.');
+    if (searchSelector) {
+      await cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(searchSelector)});if(!e)return false;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'Dashboard');e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+      await measureOverflow('LaunchPad search');
+      await screenshot('11-launchpad-search-dashboard.png');
+      const dashboardHit = await cdp.evaluate("(()=>{const re=/Dashboard|仪表板|仪表盘/i;return [...document.querySelectorAll('.launchpad button,.launchpad a,[role=button]')].some(e=>e.getClientRects().length&&re.test([e.innerText,e.getAttribute('aria-label'),e.getAttribute('title')].filter(Boolean).join(' '))})()");
+      check('LaunchPad search shows Dashboard result', dashboardHit, 'Search for Dashboard must expose a visible matching result.');
+      if (dashboardHit) {
+        const clickedDashboard = await cdp.evaluate("(()=>{const re=/Dashboard|仪表板|仪表盘/i;const e=[...document.querySelectorAll('.launchpad button,.launchpad a,[role=button]')].find(x=>x.getClientRects().length&&re.test(x.innerText));if(!e)return false;e.click();return true})()");
+        check('Dashboard result opened', clickedDashboard);
+        if (clickedDashboard) {
+          const dashboardWindow = await waitFor(() => cdp.evaluate("[...document.querySelectorAll('.window')].find(e=>/Dashboard|仪表板|仪表盘/i.test(e.innerText))?.innerText||''"), 'Dashboard window opened').catch(() => '');
+          check('Dashboard window visible', Boolean(dashboardWindow));
+          await measureOverflow('Dashboard');
+          await screenshot('12-dashboard.png');
+          const dashboardDetails = await cdp.evaluate(`(()=>{const w=[...document.querySelectorAll('.window')].find(e=>/Dashboard|仪表板|仪表盘/i.test(e.innerText));if(!w)return {svg:0,roundedSvg:false,queue:false};const visible=e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';const svgs=[...w.querySelectorAll('svg')].filter(visible);const rounded=svgs.some(svg=>{const radius=parseFloat(getComputedStyle(svg).borderTopLeftRadius)||parseFloat(getComputedStyle(svg.parentElement||svg).borderTopLeftRadius)||0;return radius>0||!!svg.querySelector('rect[rx],rect[ry],image[rx],image[ry]')});const queue=w.innerText.match(/队列|Queue/i)||[...w.querySelectorAll('[aria-label],[data-testid],[class]')].some(e=>visible(e)&&/队列|Queue/i.test([e.getAttribute('aria-label'),e.getAttribute('data-testid'),e.className].join(' ')));return {svg:svgs.length,roundedSvg:rounded,queue:Boolean(queue)}})()`);
+          check('Dashboard SVG visible', dashboardDetails.svg > 0, `${dashboardDetails.svg} visible SVG element(s)`);
+          check('Dashboard rounded SVG visible', dashboardDetails.roundedSvg);
+          check('Dashboard queue visible', dashboardDetails.queue);
+        }
+      }
+    }
 
     check('browser console errors absent', report.consoleErrors.length === 0, `${report.consoleErrors.length} console error(s)`);
     check('uncaught page exceptions absent', report.pageExceptions.length === 0, `${report.pageExceptions.length} exception(s)`);

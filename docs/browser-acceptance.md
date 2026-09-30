@@ -15,7 +15,7 @@ Use only a temporary test human account with a seeded readable table/row. The AC
 ## Browser and certificate preflight
 
 - Google Chrome must be installed (`/usr/bin/google-chrome` by default).
-- Node.js 20+ is required for the built-in WebSocket API (tested with Node 24).
+- Node.js 22+ is required for the built-in WebSocket API (tested with Node 24).
 - `certutil` from NSS tools must be available, or passed with `--certutil /path/to/certutil`.
 - Before running, the coordinator imports the LAN root CA into the real current user's
   `~/.pki/nssdb` using a unique nickname and SSL CA trust. The script only reads this database to
@@ -32,9 +32,23 @@ the exact CA nickname the coordinator imported):
   "appUrl": "https://192.0.2.10:9443/",
   "username": "temporary-test-user",
   "password": "replace-with-temporary-password",
-  "caNickname": "XeonoLab local acceptance CA"
+  "caNickname": "XeonoLab local acceptance CA",
+  "issue41": {
+    "systemPanelToggle": "[data-testid='system-panel-toggle']",
+    "systemPanel": "[data-testid='system-panel']",
+    "widget": "[data-testid='desktop-widget']",
+    "launchpadSearch": "[data-testid='launchpad-search']"
+  }
 }
 ```
+
+The `issue41` selectors are optional overrides. Defaults search accessible labels and common
+`data-testid`/class markers. During the read-only run the script also captures the system panel,
+desktop widgets, LaunchPad filtered for `Dashboard`, and the opened Dashboard. Its report asserts
+that Dashboard is open, a rounded visible SVG is present, and a queue label/content is visible.
+These checks use DOM visibility and computed corner radius/`rx` attributes; they never click a
+write/action control. If the UI uses different stable selectors, pass them in the private config
+after inspecting the integrated UI source.
 
 Run after the temporary test account exists:
 
