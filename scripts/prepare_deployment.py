@@ -109,8 +109,8 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "migration_manifest": "additive uploads.sqlite session store and objects/.uploads; existing attachment API retained; pre-uploads backup and isolated restore verified",
-            "test_report": "82 tests; Ruff; OpenAPI export; TypeScript/Vite build; multipart resume/ACL shrink and backup restore",
+            "migration_manifest": "no session schema migration; durable browser sessions retained; temporary provider errors preserve refresh credentials",
+            "test_report": "82 backend tests; 4 session-state tests; Ruff; OpenAPI; TypeScript/Vite build",
         }
     )
 )

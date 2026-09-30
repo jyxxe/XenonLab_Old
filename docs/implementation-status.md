@@ -188,3 +188,6 @@ Resumable uploads integration: multipart sessions, owner/ACL/scope revalidation,
 
 
 Production uploads: release c32fd7f completed; real PKCE test uploaded 18,900,000 bytes in 3 parts, reused a repeated part, completed idempotently, verified downloaded SHA-256 and unbound the fixture. Qdrant v1.19.1 official musl binary SHA-256 verified, service VM109 TLS/API-key checked from VM104, unauthenticated access rejected with 401, vector survived restart and probe collection removed. Qdrant is not yet connected to production semantic search.
+
+
+WebUI session resilience: timers and API renewal no longer clear the workspace on 401 or temporary failure. Temporary provider errors retain persistent session credentials, startup restores retry, and only explicit logout clears UI state. Revocation requires explicit reauthorization and forbids cached-token fallback. Coordinator validation: 82 backend tests, 4 executable frontend session-state tests, Ruff, OpenAPI and frontend build. Keycloak offline absolute lifespan remains disabled; live Chrome fault injection follows activation.
