@@ -27,8 +27,8 @@ for node, entries in services.items():
     (dest / "activation.json").write_text(
         json.dumps(
             {
-                "services": list(entries),
-                "ports": list(entries.values()),
+                "services": [s for s in entries if s != "deploy-gateway"],
+                "ports": [p for s, p in entries.items() if s != "deploy-gateway"],
                 "address": "127.0.0.1" if node == "101" else "192.168.0." + node,
                 "reload_caddy": node == "101",
             }
@@ -65,7 +65,12 @@ for node, entries in services.items():
         if service == "deploy-gateway":
             lines += ["DEPLOY_EXECUTOR_PATH=/usr/local/libexec/xeonolab-executor"]
         if service == "llm-gateway":
-            lines += ["LLM_BASE_URL=https://api.jyxxe.com", "LLM_API_KEY_FILE=/etc/xeonolab/llm-provider-key"]
+            lines += [
+                "LLM_BASE_URL=https://api.jyxxe.com",
+                "LLM_API_KEY_FILE=/etc/xeonolab/llm-provider-key",
+                "LLM_PROVIDER_MODEL=~deepseek/deepseek-flash-latest",
+                "LLM_TLS_MAX_VERSION=1.2",
+            ]
         if service == "embedding":
             lines += ["D100M_MODEL_PATH=/opt/xeonolab/D100M-Embedding", "EMBEDDING_CPU_THREADS=8"]
         (dest / (service + ".env")).write_text("\n".join(lines) + "\n")
@@ -80,7 +85,7 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "targets": ["192.168.0.107", "192.168.0.104", "192.168.0.101"],
+            "targets": ["192.168.0.107", "192.168.0.104", "192.168.0.101", "192.168.0.106"],
         }
     )
 )

@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import ssl
 from pathlib import Path
 
 import httpx
@@ -188,9 +189,13 @@ def create_app(service=None, settings=None):
             if not key:
                 raise APIError(503, "PROVIDER_NOT_CONFIGURED", "LLM provider credential required")
             body = await request.json()
-            if body.get("model") != "deepseek-flash" or body.get("stream"):
+            if not isinstance(body, dict) or body.get("model") != "deepseek-flash" or body.get("stream"):
                 raise APIError(422, "UNSUPPORTED_REQUEST", "only non-streaming deepseek-flash configured")
-            async with httpx.AsyncClient(timeout=120) as client:
+            body = {**body, "model": os.getenv("LLM_PROVIDER_MODEL", "deepseek-flash")}
+            context = ssl.create_default_context()
+            if os.getenv("LLM_TLS_MAX_VERSION") == "1.2":
+                context.maximum_version = ssl.TLSVersion.TLSv1_2
+            async with httpx.AsyncClient(timeout=120, trust_env=False, verify=context) as client:
                 result = await client.post(
                     os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/") + "/v1/chat/completions",
                     headers={"Authorization": "Bearer " + key},

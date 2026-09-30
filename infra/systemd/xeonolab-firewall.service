@@ -1,0 +1,10 @@
+[Unit]
+Description=XeonoLab backend port access boundaries
+After=network-online.target
+Before=xeonolab@xelibrary.service xeonolab@embedding.service xeonolab@deploy-gateway.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/xeonolab-firewall
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

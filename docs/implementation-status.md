@@ -20,21 +20,21 @@
 - Tool Gateway 只提供 search/query/get，透传验证的 bearer token，不代换超级管理员身份。
 - LLM Gateway 固定 deepseek-flash、服务端 provider credential、非流式转发。
 - React/TypeScript 桌面、受控 app registry、个人布局、窗口管理、iframe origin/source 验证。
-- PVE 只读盘点；VM 未更改。用户指定 LAN 域 xenon.lan，不配置 Cloudflare。
+- PVE 已上线当前实现：VM 101/104/106/107/109/105；现有 VM 未删除。xenon.lan LAN DNS/TLS，不配置 Cloudflare。
 
 ## 尚未完成
 
 | 计划阶段 | 当前状态 / 后续必要工作 |
 |---|---|
-| 0 基础设施 | PVE 可达并已盘点；VM 调整、分区防火墙、LAN DNS/TLS、OIDC、Forgejo、监控安装仍待实施 |
+| 0 基础设施 | PVE 可达并已盘点；已配置部分端口边界、LAN DNS/TLS、Keycloak OIDC；VM 布局调整、完整安全域、Forgejo、监控仍待实施 |
 | 1 skeleton | 已实现独立入口与 OpenAPI；CI 工作流已提供；生产 readiness 仍需扩展依赖探针 |
 | 2 数据核心 | bootstrap 已可用；PostgreSQL catalogue、路径对象、完整 DSL、批量作业、import/restore/purge、分片待实施 |
 | 3 D100M | 实际推理与全链路已验证；Qdrant、后台自动索引队列、优先级调度和领域检索评测待实施 |
 | 4 Qwen | 尚无模型 worker、vision、quality rerank/cache；质量请求返回 unavailable |
-| 5 UI/Tools | 桌面和只读网关已实现；OIDC 浏览器登录与 OpenWebUI 原生用户 token exchange 尚未接入 |
+| 5 UI/Tools | 桌面和只读网关已实现；OIDC 浏览器 PKCE 登录已接入；OpenWebUI 原生用户 token exchange 尚未接入 |
 | 6 Library Agent | 只有 skeleton；推理、证据、proposal、Lean sandbox 未实现 |
 | 7 DevAgent | 已实现可信 webhook 接收；triage/duplicate/关联/任务队列未实现 |
-| 8 Deploy | 租约已验证；可信 executor、状态机、SSE、健康检查与实际回滚未实现；部署拒绝执行 |
+| 8 Deploy | 租约已验证；固定 executor、健康检查与激活失败回滚已实现；完整状态机、SSE、跨版本迁移尚未实现 |
 | 9 HF-cache | 只有 skeleton；ensure/download/pin/lease/物理水位/GC 未实现 |
 
 ## 运行与恢复限制
@@ -45,10 +45,10 @@ manifest/outbox 与一致性扫描。索引作业状态暂存进程内，重启�
 表导出用 SQLite backup API 生成一致性快照。独立备份位置尚未提供，mirror 不被视为备份。
 
 所有外部 secrets 只从环境读取；用户提供的 PVE/LLM/password 不写入仓库。
-没有生产上线、没有删除 VM，没有创建远端 PR。完整 V1 还不能视为验收完成。
+已有生产 LAN 上线、未删除 VM、未创建远端 PR。完整 V1 还不能视为验收完成。详见 runbooks/deployment.md。
 
 ## 验证记录
 
 13 项后端测试通过；10 个服务均以独立进程通过 HTTP live/version/OpenAPI 检查。
 D100M 实际模型端到端 smoke 通过；React/TypeScript production build 与 Ruff 检查通过。
-本机缺少 Docker Compose 插件，尚未执行容器拓扑启动和容器健康检查。
+本机缺少 Docker Compose 插件，未运行原 Compose 拓扑；线上采用 systemd，Keycloak 使用 Docker + 本地 PostgreSQL。

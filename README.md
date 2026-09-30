@@ -1,6 +1,6 @@
 # XeonoLab
 
-按 [plan.md](plan.md) 建立的初始 V1 实现。**当前是可运行开发版本，尚未完成全部阶段或上线 PVE。**
+按 [plan.md](plan.md) 建立的初始 V1 实现。**当前是已上线 PVE 的可运行开发版本，尚未完成全部阶段。**
 已实现真实 `.xl` 数据文件、行 CRUD/历史/乐观并发/创建幂等、权限继承、附件内容寻址、
 安全 DSL 子集、全文搜索、真实 D100M CPU 推理、token 分块、本地精确向量索引、
 只读 Tool Gateway、部署租约、签名 webhook、LLM 转发及 React 桌面窗口。
@@ -59,3 +59,5 @@ Deploy Gateway 已实现审批、单租约、epoch 和未结束任务冻结；�
 
 详细完成情况与剩余工作见 [实施状态](docs/implementation-status.md)，
 PVE 实测资源见 [盘点记录](docs/runbooks/pve-inventory.md)。没有配置远端 Git，尚未建立 Forgejo PR。
+
+当前入口和登录配置见 [上线记录](docs/runbooks/deployment.md)。

@@ -139,7 +139,7 @@ os.chmod(root / "xeonolab-realm.json", 0o600)
     "\n".join(
         [
             "KC_DB=postgres",
-            "KC_DB_URL=jdbc:postgresql://xeonolab-oidc-db:5432/keycloak",
+            "KC_DB_URL=jdbc:postgresql://127.0.0.1:5432/keycloak",
             "KC_DB_USERNAME=keycloak",
             "KC_DB_PASSWORD=" + credentials["postgres"],
             "KC_BOOTSTRAP_ADMIN_USERNAME=bootstrap-admin",
