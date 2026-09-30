@@ -74,7 +74,7 @@
 | 65 | OpenTelemetry | 部分机制 / 关键能力缺失 | 计划明确 V1 可先有 request ID/log/metrics；distributed tracing 未实施。 |
 | 66 | XeLibrary 内部一致性 | 部分实现 / 未做生产验收 | `.xl` 事务、FTS、附件引用、index revisions 有实现；跨 catalogue/.xl 原子性及 outbox 未实现。 |
 | 67 | 删除语义 | 部分实现 / 未做生产验收 | 行软删除立即过滤、当前 ACL 和索引重检存在；附件对象 GC 尚未实现。 |
-| 68 | 权限与向量查询 | 本地实现 / 测试通过 / 未发布 | Issue #70 已按每表每请求复用 ACL 快照，并用 `(resource_type,resource_id)` 复合索引范围读取 row ACL；回归测试向隔离 catalogue 注入 12,000 条其他表 row ACL，执行实际请求 SQL 的 `EXPLAIN QUERY PLAN`，确认命中范围索引且不扫描 ACL 表。语义保持 row/table/最近路径优先级、显式拒绝、账户树继承及下一请求可见 ACL 更新。合并提交 `193724a`；生产发布、真实查询负载和严格 topK 保证仍未验收。 |
+| 68 | 权限与向量查询 | 部分实现 / 已发布，生产 ACL 验收待做 | Issue #70 按每表每请求复用 ACL 快照，并用 `(resource_type,resource_id)` 复合索引范围读取 row ACL；回归测试向隔离 catalogue 注入 12,000 条其他表 row ACL，执行实际请求 SQL 的 `EXPLAIN QUERY PLAN`，确认命中范围索引且不扫描 ACL 表。语义保持 row/table/最近路径优先级、显式拒绝、账户树继承及下一请求可见 ACL 更新。已在 release `57798068-69cf-492f-a3a0-7b852be4c91c` 部署；生产健康/匿名拒绝和管理员只读 smoke 通过，但非管理员 row ACL 正向路径、生产负载和严格 topK 保证仍未验收。 |
 | 69 | fnOS 边界 | 部分实现 / 外部验证未覆盖 | 有 fnOS VM/数据边界记录；独立认证/平台停机时访问未在本轮实测。 |
 | 70 | 备份 | 部分实现 / 未做生产验收 | XeLibrary backup/verify/restore 有脚本与故障测试；`docs/runbooks/deployment.md` 记载 2026-09-30 实际备份及 integrity/pg_restore 检查。定期自动化、异地存储和完整模型权重副本仍缺。 |
 | 71 | XeLibrary 恢复顺序 | 部分实现 / 未做生产验收 | 恢复脚本与 runbook 有顺序；`dd6a397` / `docs/implementation-status.md` 记录发布前 quiesced backup 和 isolated restore（含空 object store 回归）通过。完整 PVE 灾难恢复与跨 catalogue/.xl 原子快照仍未验证。 |

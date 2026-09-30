@@ -1,7 +1,16 @@
 # PVE LAN 上线记录 — 2026-10-01
 
-截至 2026-10-01，当前应用代码版本为 `03adae446b1c233eb2c22dcf36f5aad196de3adf`。
+截至 2026-10-01，当前应用代码版本为 `313b8738c5d6198fc36e309285ca3f989d1f9301`。
 完整 plan.md 的所有阶段尚未完成；该版本包含 DevAgent Issues 协作、HF-cache API/预取保护、Caddy include 同步及 Issue #48 安全空表删除 API。
+
+2026-10-01 更新：Issue #70 每表每请求 ACL 快照与索引化 row ACL 查找已部署，代码 commit
+`313b8738c5d6198fc36e309285ca3f989d1f9301`，Deploy Gateway release
+`57798068-69cf-492f-a3a0-7b852be4c91c` / deployment
+`94306d9d-c6d6-4495-8ab3-92df80fa11b4` completed，租约已释放。发布前短暂停止 XeLibrary 写服务，
+复制 19 MiB 数据目录；6 个文件的快照校验通过，并完成隔离恢复演练。服务在快照完成后立即恢复。
+部署后五个 `/health/ready` 均为 200；匿名表列表为 401；部署策略主体只读获取一页表及行均为 200；
+公网桌面、Forgejo 和带正确 origin 的认证配置分别为 200。Smoke 未写生产表/行。尚未以非管理员
+主体验证生产 row ACL 正向/拒绝路径，也未做生产查询负载基准；Issue #70 保持开放。
 
 2026-10-01 更新：Issue #48 安全空表删除 API 已部署，代码 commit
 `03adae446b1c233eb2c22dcf36f5aad196de3adf`，Deploy Gateway release
