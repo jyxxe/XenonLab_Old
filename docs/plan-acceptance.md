@@ -101,7 +101,7 @@
 | 92 | API 客户端 | 未实现 | 未见共享生成 client packages；前端 helper/各服务调用分散。 |
 | 93 | 数据 ID | 部分实现 / 未做生产验收 | UUID IDs 用于多个记录；不是普遍 UUIDv7/sortable。 |
 | 94 | 时间 | 部分实现 / 未做生产验收 | 时间字段为 ISO/epoch混合（如 `at` epoch/字符串）；全 API RFC3339 UTC 未统一。 |
-| 95 | 分页 | 部分实现 / 未做完整生产验收 | 多个 listing 支持 cursor（tables/rows/work/ACL）；Work UI 已支持继续加载、游标循环保护和明确末页状态；其他 API 仍有 offset/limit。 |
+| 95 | 分页 | 部分实现 / 未做完整生产验收 | 多个 listing 支持 cursor（tables/rows/work/ACL）；Work UI 已支持继续加载、游标循环保护和明确末页状态并已发布；生产 API `limit=1` 返回游标且下一页前进。其他 API 仍有 offset/limit，登录态 Work UI 现场操作未验收。 |
 | 96 | Rate Limit | 已发布 / 生产阈值待校准 | `xeonolab/common.py` 按身份和路由组以 SQLite sliding window 限流，返回 `Retry-After` 并记录 429 审计事件；包含在最近部署的应用 release。测试见 `tests/test_rate_limit.py`；未做生产压测、429 live smoke、跨服务全局额度或告警保留验收。 |
 | 97 | 上传限制 | 部分实现 / 未做生产验收 | 上传有 16MiB size、sniff/hash/name sanitize；quarantine/scanning 与独立 preview 隔离尚无。 |
 | 98 | 不允许的架构捷径 | 部分实现 / 未做生产验收 | 代码避免任意 SQL/eval，Tool Gateway/Bearer/Deploy API boundary 有测试；宿主和 CI secrets posture 未全量审计。 |

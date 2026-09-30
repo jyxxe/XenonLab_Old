@@ -1,6 +1,6 @@
 # PVE LAN 上线记录 — 2026-10-01
 
-当前可运行版本已上线。应用代码版本 `c660a458b9691759de44de48bd22819100ea841c`。
+当前可运行版本已上线。应用代码版本 `c35b7e07fc14d1a32459f9108f8ba9285f37dd5d`。
 完整 plan.md 的所有阶段尚未完成；此版本还包含 DevAgent Issues 协作、HF-cache API/预取保护和 Caddy include 同步。
 
 ## 访问
@@ -47,12 +47,13 @@ LLM 和 Tool Gateway 使用不同系统用户，均不能读取部署私钥，To
 通过真实 OIDC Codex 身份注册 release，由明确授权的 policy 身份批准，再 acquire lease、
 调用 Deploy Gateway。网关只运行固定 executor，受限 SSH forced-command 只激活已暂存的
 指定 commit。各服务健康检查成功后租约释放。再次通过相同流程重启各应用，样例数据仍保留。
-最新上线 ID：`f61107f5-641a-42cb-b5be-74bc959049b6`；对应 release
-`05f00027-ecd9-41f7-a16c-320084626811`，commit
-`c660a458b9691759de44de48bd22819100ea841c`，状态 completed，租约已释放。
+最新上线 ID：`11d077db-f1cd-4428-8e3a-5c1695397de3`；对应 release
+`23790bcb-2c0a-4816-8055-faae05e7deed`，commit
+`c35b7e07fc14d1a32459f9108f8ba9285f37dd5d`，状态 completed，租约已释放。
 
 - 189 项后端测试、11 项桌面测试、TypeScript/Vite production build 通过；本次改动的 Ruff 检查通过。
 - Issue #69 Caddy include 已同步；Caddy active，完整 Caddyfile validate 通过。公网桌面、OIDC discovery、Forgejo 登录页及 IP 入口 smoke check 通过。
+- Issue #50 Work 分页保护随本次 release 上线。直连与公网 JS SHA-256 均与发布构建一致，包含明确末页状态和重复游标停止提示；生产 Work API 的 `limit=1` 确认返回游标，下一页记录前进。未做登录态 Chrome Work 页面现场操作。
 - HTTPS 证书链与 hostname 验证通过，LAN DNS 解析通过。
 - 真实 Keycloak 授权码 + PKCE 登录、签名 JWT、桌面管理员 role-to-scope 校验通过。
 - 未登录接口返回 401；内部 Embedding 端口拒绝操作主机直接访问。

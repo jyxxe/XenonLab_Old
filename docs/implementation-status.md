@@ -55,7 +55,7 @@ manifest/outbox 与一致性扫描。索引作业状态已在 catalogue 持久�
 ## 验证记录
 
 当前源码基线：189 项后端测试、11 项桌面测试与 1 项 Work 分页浏览器夹具通过；React/TypeScript production build、OpenAPI 导出和 diff 检查通过。
-最近完成的生产 release 仍为 `c660a458b9691759de44de48bd22819100ea841c`；Issue #50 的末页和游标循环保护已合入源码，待部署。
+Issue #50 的末页与游标循环保护已随 release `c35b7e07fc14d1a32459f9108f8ba9285f37dd5d` 上线；公网静态资源哈希匹配构建，Work API live cursor smoke 通过。登录态 Chrome Work 页面现场操作仍待验收。
 此前 10 个服务均以独立进程通过 HTTP live/version/OpenAPI 检查，D100M 实际模型端到端 smoke 通过。
 本机缺少 Docker Compose 插件，未运行原 Compose 拓扑；线上采用 systemd，Keycloak 使用 Docker + 本地 PostgreSQL。
 
