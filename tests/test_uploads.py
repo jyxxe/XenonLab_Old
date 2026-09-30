@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 
-from .conftest import auth
+from .conftest import auth, put_acl
 
 
 def seed(client):
@@ -48,6 +48,14 @@ def test_multipart_upload_is_persistent_bounded_and_idempotent(library, settings
         content=content[: session["part_size"]],
     )
     assert part.status_code == 200 and part.json()["data"]["reused"] is False
+    with TestClient(create_app("xelibrary", settings)) as restarted:
+        resumed_part = restarted.put(
+            f"/api/v1/uploads/{upload_id}/parts/1",
+            headers=auth(),
+            content=content[: session["part_size"]],
+        )
+        assert resumed_part.status_code == 200
+        assert resumed_part.json()["data"]["reused"] is True
     duplicate = library.put(
         f"/api/v1/uploads/{upload_id}/parts/1",
         headers=auth(),
@@ -167,3 +175,41 @@ def test_multipart_upload_session_acl_and_cancellation(library):
         json={"table_id": tid, "row_id": rid, "filename": "x", "size": 2 * 1024 * 1024 * 1024 + 1},
     )
     assert too_large.status_code == 422
+
+
+def test_multipart_rechecks_acl_and_scope_after_session_creation(library):
+    tid, rid = seed(library)
+    acl = put_acl(library, "table", tid, {"alice": ["attach"]})
+    assert acl.status_code == 200, acl.text
+    content = b"permission shrink"
+    started = library.post(
+        "/api/v1/uploads",
+        headers=auth(),
+        json={"table_id": tid, "row_id": rid, "filename": "acl.txt", "size": len(content)},
+    ).json()["data"]
+    upload_id = started["upload_id"]
+    assert put_acl(library, "table", tid, {"alice": ["read"]}).status_code == 200
+    denied_by_acl = library.put(f"/api/v1/uploads/{upload_id}/parts/1", headers=auth(), content=content)
+    assert denied_by_acl.status_code == 403
+    assert denied_by_acl.json()["error"]["code"] == "XL_FORBIDDEN"
+    assert library.post(f"/api/v1/uploads/{upload_id}/complete", headers=auth()).status_code == 403
+
+    # A second session verifies bearer scopes are also re-evaluated on every call.
+    assert put_acl(library, "table", tid, {"alice": ["attach"]}).status_code == 200
+    second = library.post(
+        "/api/v1/uploads",
+        headers=auth(),
+        json={"table_id": tid, "row_id": rid, "filename": "scope.txt", "size": len(content)},
+    ).json()["data"]
+    actor = library.app.state.settings.dev_tokens["alice"]
+    actor["scope"] = " ".join(scope for scope in actor["scope"].split() if scope != "xelibrary:attach")
+    denied_by_scope = library.put(
+        f"/api/v1/uploads/{second['upload_id']}/parts/1", headers=auth(), content=content
+    )
+    assert denied_by_scope.status_code == 403
+    assert denied_by_scope.json()["error"]["code"] == "FORBIDDEN"
+    assert library.post(f"/api/v1/uploads/{second['upload_id']}/complete", headers=auth()).status_code == 403
+    assert (
+        library.get(f"/api/v1/tables/{tid}/rows/{rid}/attachments", headers=auth("admin")).json()["data"]
+        == []
+    )
