@@ -11,7 +11,7 @@ credentials = json.loads((root / "credentials.json").read_text())
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 public = (root / "deploy-key.pub").read_text().strip()
 roles = {
-    "platform-admin": "dev:read dev:write desktop:read desktop:admin xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:admin deploy:read llm:use".split()
+    "platform-admin": "accounts:manage dev:read dev:write desktop:read desktop:admin xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:admin deploy:read llm:use".split()
 }
 services = {
     "101": {"desktop-web": 8101},
@@ -53,6 +53,14 @@ for node, entries in services.items():
             "OIDC_CA_FILE=/etc/xeonolab/lan-root-ca.crt",
             "OIDC_TOKEN_URL=https://192.168.0.101:9444/realms/xeonolab/protocol/openid-connect/token",
         ]
+        if service == "desktop-web":
+            lines += [
+                "ACCOUNT_ADMIN_URL=https://192.168.0.101:9444/admin/realms/xeonolab",
+                "ACCOUNT_AUTH_CLIENT_ID=desktop-account-admin",
+                "ACCOUNT_AUTH_CLIENT_SECRET_FILE=/etc/xeonolab/account-admin-secret",
+            ]
+        else:
+            lines += ["AUTHORIZATION_URL=https://192.168.0.101:9443/api/v1/auth/authorization"]
         if node == "104":
             lines += [
                 "EMBEDDING_URL=http://192.168.0.107:8104",
@@ -92,7 +100,7 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "targets": ["192.168.0.107", "192.168.0.104", "192.168.0.101", "192.168.0.111", "192.168.0.106"],
+            "targets": ["192.168.0.101", "192.168.0.107", "192.168.0.104", "192.168.0.111", "192.168.0.106"],
         }
     )
 )
@@ -102,7 +110,7 @@ artifact = {
             "commit": commit,
             "artifacts": [artifact],
             "migration_manifest": "bootstrap-v1-no-existing-data-migration",
-            "test_report": "26 tests; frontend build; D100M model smoke",
+            "test_report": "30 tests; frontend build; D100M model smoke",
         }
     )
 )

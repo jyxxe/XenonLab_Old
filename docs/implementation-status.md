@@ -109,3 +109,17 @@ OpenCode release creation/production lease denied; isolated Issue closed and
 work completed. This checks the existing API boundaries, not arbitrary Harness
 behavior or every plan requirement. OpenCode credentials/instructions are in
 private, Git-ignored `Agent.md`; never publish this file.
+
+### Account tree / API key implementation
+
+Managed account APIs, interactive settings tree, partial/full inherited scopes,
+password reset, one-time API key creation/list/revoke, and account audit now exist.
+Common API authentication consults a fixed TLS authority for live permissions;
+unavailable authority fails closed. The browser session also checks account
+state before returning a cached token and renews its secure cookie during use.
+Tests cover sibling/self-policy isolation, nested inheritance/shrink/disable,
+key attenuation and revocation, password fencing/provider failure, and a remote
+XeLibrary service losing permissions immediately. Thirty tests and frontend
+build passed. Live deployment/provider verification is required before claiming
+production acceptance. Preferences/app registry settings, knowledge attachments
+and history UI, and the broader plan remain incomplete.

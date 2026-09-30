@@ -62,21 +62,18 @@ def install(app):
                 audience=app.state.settings.audience,
                 options={"require": ["exp", "sub", "iss", "aud"]},
             )
-            if "desktop:read" not in (
-                claims.get("scope", "") + " " + claims.get("platform_scopes", "")
-            ).split() and not any(
-                "desktop:read" in scopes
-                for role, scopes in (app.state.settings.role_scopes or {}).items()
-                if role in claims.get("realm_access", {}).get("roles", [])
-            ):
-                raise APIError(403, "FORBIDDEN", "desktop permission required")
+            app.state.authorization_resolver(body["access_token"]).require("desktop:read")
             return body, claims
         except (httpx.HTTPError, OSError, ValueError, KeyError, jwt.PyJWTError):
             raise APIError(503, "AUTH_UNAVAILABLE", "identity service unavailable") from None
 
-    def output(token, expires):
+    def output(token, expires, cookie=None):
         result = JSONResponse({"token": token, "expires": max(1, int(expires - time.time()))})
         result.headers["Cache-Control"] = "no-store"
+        if cookie:
+            result.set_cookie(
+                COOKIE, cookie, max_age=630720000, secure=True, httponly=True, samesite="strict", path="/"
+            )
         return result
 
     @app.post("/api/v1/auth/session/exchange")
@@ -126,7 +123,10 @@ def install(app):
             if not row:
                 raise APIError(401, "NO_SESSION", "sign in required")
             if row["expires"] > time.time() + 60:
-                return output(row["access"], row["expires"])
+                actor = app.state.authorization_resolver(row["access"])
+                if "desktop:read" not in actor.scopes:
+                    raise APIError(401, "DESKTOP_ACCESS_REVOKED", "desktop permission revoked")
+                return output(row["access"], row["expires"], cookie)
             tokens, claims = exchange({"grant_type": "refresh_token", "refresh_token": row["refresh"]})
             if claims["sub"] != row["subject"]:
                 raise APIError(401, "INVALID_SESSION", "identity changed")
@@ -139,7 +139,7 @@ def install(app):
                     session_id,
                 ),
             )
-            return output(tokens["access_token"], claims["exp"])
+            return output(tokens["access_token"], claims["exp"], cookie)
 
     @app.post("/api/v1/auth/session/logout")
     def logout(request: Request):

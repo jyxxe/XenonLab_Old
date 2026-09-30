@@ -26,8 +26,10 @@ class Layout(BaseModel):
 
 def create_app(settings=None):
     app = base_app("desktop-web", settings)
+    from .accounts import install as install_accounts
     from .browser_sessions import install
 
+    install_accounts(app)
     install(app)
     path = app.state.settings.data_dir / "desktop.sqlite"
     with transaction(path) as db:

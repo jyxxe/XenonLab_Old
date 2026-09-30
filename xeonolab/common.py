@@ -2,12 +2,14 @@ import json
 import logging
 import os
 import sqlite3
+import ssl
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import jwt
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -25,6 +27,7 @@ class Identity:
     sub: str
     scopes: set[str]
     kind: str = "human"
+    issued_at: float = 0
 
     def require(self, scope):
         if scope not in self.scopes:
@@ -58,12 +61,7 @@ class Settings:
         )
 
 
-def identity(request: Request):
-    settings = request.app.state.settings
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        raise APIError(401, "UNAUTHENTICATED", "bearer token required")
-    token = header[7:]
+def token_identity(token, settings):
     if settings.mode == "development" and token in (settings.dev_tokens or {}):
         claims = settings.dev_tokens[token]
     else:
@@ -83,7 +81,39 @@ def identity(request: Request):
     scopes = set(claims.get("scope", "").split()) | set(claims.get("platform_scopes", "").split())
     for role in claims.get("realm_access", {}).get("roles", []):
         scopes.update((settings.role_scopes or {}).get(role, []))
-    return Identity(claims["sub"], scopes, claims.get("agent_kind", "human"))
+    return Identity(claims["sub"], scopes, claims.get("agent_kind", "human"), claims.get("iat", 0))
+
+
+def identity(request: Request):
+    settings = request.app.state.settings
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise APIError(401, "UNAUTHENTICATED", "bearer token required")
+    token = header[7:]
+    resolver = getattr(request.app.state, "authorization_resolver", None)
+    if resolver:
+        return resolver(token)
+    endpoint = os.getenv("AUTHORIZATION_URL")
+    if endpoint:
+        # JWTs retain local issuer/signature validation. Opaque keys are verified
+        # only by the fixed, TLS-authenticated account authority.
+        local = None if token.startswith("xek_") else token_identity(token, settings)
+        try:
+            context = ssl.create_default_context(cafile=os.getenv("OIDC_CA_FILE"))
+            with httpx.Client(verify=context, trust_env=False, timeout=10) as client:
+                result = client.get(endpoint, headers={"Authorization": header})
+            if result.status_code in (401, 403):
+                raise APIError(result.status_code, "AUTHORIZATION_REVOKED", "identity or permission revoked")
+            result.raise_for_status()
+            data = result.json()["data"]
+            if local and (data["subject"] != local.sub or data["kind"] != local.kind):
+                raise ValueError("identity authority mismatch")
+            return Identity(data["subject"], set(data["scopes"]), data["kind"])
+        except (httpx.HTTPError, ValueError, KeyError, OSError):
+            raise APIError(503, "AUTHORIZATION_UNAVAILABLE", "account authority unavailable") from None
+    if token.startswith("xek_"):
+        raise APIError(503, "AUTHORIZATION_NOT_CONFIGURED", "account authority required for API keys")
+    return token_identity(token, settings)
 
 
 def scope(name):
@@ -118,6 +148,8 @@ def base_app(service, settings=None):
         started = time.monotonic()
         result = await call_next(request)
         result.headers["X-Request-ID"] = request.state.request_id
+        if request.url.path.startswith("/api/v1/auth/"):
+            result.headers["Cache-Control"] = "no-store"
         app.state.requests += 1
         app.state.errors += result.status_code >= 400
         logging.getLogger("xeonolab").info(
