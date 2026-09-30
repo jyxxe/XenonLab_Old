@@ -127,11 +127,14 @@ def test_origin_selects_exact_public_or_lan_issuer(settings, monkeypatch):
     settings.issuer = lan_issuer
     settings.oidc_issuers_by_origin = {
         "https://xenon.jyxxe.com": public_issuer,
+        "https://xenon.lan": "https://auth.xenon.lan/realms/xeonolab",
         "https://192.168.0.101:9443": lan_issuer,
     }
+    lan_domain_issuer = settings.oidc_issuers_by_origin["https://xenon.lan"]
     settings.oidc_token_urls = {
         lan_issuer: lan_issuer + "/protocol/openid-connect/token",
         public_issuer: public_issuer + "/protocol/openid-connect/token",
+        lan_domain_issuer: lan_domain_issuer + "/protocol/openid-connect/token",
     }
     monkeypatch.delenv("OIDC_TOKEN_URL", raising=False)
     endpoints = {url: issuer for issuer, url in settings.oidc_token_urls.items()}
@@ -163,15 +166,18 @@ def test_origin_selects_exact_public_or_lan_issuer(settings, monkeypatch):
     public_config = client.get(
         "/api/v1/auth/config", params={"origin": "https://xenon.jyxxe.com"}
     )
+    lan_config = client.get("/api/v1/auth/config", params={"origin": "https://xenon.lan"})
     ip_config = client.get(
         "/api/v1/auth/config", params={"origin": "https://192.168.0.101:9443"}
     )
     assert public_config.json()["issuer"] == public_issuer
+    assert lan_config.json()["issuer"] == lan_domain_issuer
     assert ip_config.json()["issuer"] == lan_issuer
     assert client.get("/api/v1/auth/config", params={"origin": "https://attacker.example"}).status_code == 403
 
     for origin, issuer in (
         ("https://xenon.jyxxe.com", public_issuer),
+        ("https://xenon.lan", lan_domain_issuer),
         ("https://192.168.0.101:9443", lan_issuer),
     ):
         client.cookies.clear()
@@ -185,6 +191,7 @@ def test_origin_selects_exact_public_or_lan_issuer(settings, monkeypatch):
     with transaction(settings.data_dir / "browser-sessions.sqlite") as db:
         assert {row[0] for row in db.execute("SELECT DISTINCT issuer FROM session_issuers")} == {
             public_issuer,
+            lan_domain_issuer,
             lan_issuer,
         }
 

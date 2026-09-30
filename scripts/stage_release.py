@@ -15,6 +15,17 @@ key = str(Path.home() / ".ssh/xenon_v2_ed25519")
 command("git", "archive", "--format=tar", "HEAD", "-o", "runtime/xeonolab-release.tar")
 command("tar", "-rf", "runtime/xeonolab-release.tar", "apps/desktop-web/dist")
 command("uv", "run", "python", "scripts/prepare_deployment.py")
+oidc_payload = Path("runtime/oidc-map-payload.json")
+command(
+    "uv",
+    "run",
+    "python",
+    "infra/systemd/update_oidc_maps.py",
+    "--export-env",
+    "runtime/deploy-secrets/101/desktop-web.env",
+    "--output",
+    str(oidc_payload),
+)
 for node in (107, 104, 101, 111, 106):
     host = f"xenon@192.168.0.{node}"
     command("scp", "-i", key, "runtime/xeonolab-release.tar", host + ":/tmp/xeonolab-release.tar")
@@ -27,6 +38,17 @@ for node in (107, 104, 101, 111, 106):
         f" /usr/local/bin/uv sync --locked --no-dev --python 3.12{extra}"
     )
     command("ssh", "-i", key, host, script)
+    remote_payload = "/tmp/xeonolab-oidc-maps-" + commit + ".json"
+    command("scp", "-i", key, str(oidc_payload), host + ":" + remote_payload)
+    command(
+        "ssh",
+        "-i",
+        key,
+        host,
+        f"sudo -n /usr/bin/python3 {release}/infra/systemd/update_oidc_maps.py"
+        f" --node {node} --payload {remote_payload} && rm -f {remote_payload}",
+    )
+oidc_payload.unlink(missing_ok=True)
 command("scp", "-i", key, "runtime/deploy-secrets/executor.json", "xenon@192.168.0.106:/tmp/executor.json")
 command(
     "ssh",
