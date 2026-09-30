@@ -794,6 +794,7 @@ def create_app(
         pinned_body = body.model_copy(update={"revision": resolved_revision})
         job_id = str(uuid4())
         now = time.time()
+        require_prefetch_headroom(storage_usage())
         with transaction(db_path) as db:
             db.execute(
                 "INSERT INTO prefetch_jobs(id,payload,status,progress,phase,attempts,max_attempts,item_id,error,created,updated,requested_revision,resolved_revision) "

@@ -3093,13 +3093,13 @@ temporary quality cache
 < 80%
     normal
 
-80–85%
+80% ≤ used < 85%
     stop speculative prefetch
 
-85–90%
+85% ≤ used < 90%
     evict low-priority
 
-> 90%
+≥ 90%
     retain only pinned / in-use
 ```
 

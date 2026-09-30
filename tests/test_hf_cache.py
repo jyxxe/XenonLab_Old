@@ -219,6 +219,45 @@ def test_80_percent_watermark_blocks_speculative_prefetch_but_allows_explicit_en
         assert ensured.json()["data"]["status"] == "ready"
 
 
+def test_prefetch_rechecks_watermark_after_revision_resolution_before_persisting(
+    settings, monkeypatch
+):
+    class DeferredExecutor:
+        def __init__(self):
+            self.tasks = []
+
+        def submit(self, function, *args):
+            self.tasks.append((function, args))
+
+    state = {"pool_used": 790}
+    executor = DeferredExecutor()
+    monkeypatch.setattr(hf_cache, "_PREFETCH_POOL", executor)
+
+    def pool_usage(_path):
+        used = state["pool_used"]
+        return SimpleNamespace(pool="aux-10t", total=1_000, used=used, free=1_000 - used)
+
+    def resolve_revision(*_args):
+        state["pool_used"] = 800
+        return REV
+
+    app = hf_cache.create_app(
+        settings,
+        download_backend=local_download,
+        revision_resolver=resolve_revision,
+        storage_usage_provider=pool_usage,
+    )
+    with TestClient(app) as api:
+        prefetch = api.post(
+            "/api/v1/cache/prefetch", headers=auth(), json=ensure_payload(revision="main")
+        )
+        assert prefetch.status_code == 507
+        assert prefetch.json()["error"]["code"] == "DISK_WATERMARK"
+        with sqlite3.connect(Path(settings.data_dir) / "hf-cache.sqlite") as db:
+            assert db.execute("SELECT COUNT(*) FROM prefetch_jobs").fetchone()[0] == 0
+        assert executor.tasks == []
+
+
 def test_recovered_prefetch_rechecks_80_percent_watermark_before_download(settings, monkeypatch):
     class DeferredExecutor:
         def __init__(self):
