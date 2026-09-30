@@ -166,6 +166,55 @@ with httpx.Client(
         )
         r.raise_for_status()
         user_headers = {"Authorization": "Bearer " + r.json()["access_token"]}
+        if "--uploads" in sys.argv:
+            api = desktop_url + "/api/v1"
+            tables = client.get(api + "/tables", headers=user_headers)
+            tables.raise_for_status()
+            tid = tables.json()["data"][0]["id"]
+            rows = client.get(api + f"/tables/{tid}/rows", headers=user_headers)
+            rows.raise_for_status()
+            row_id = rows.json()["data"][0]["_row_id"]
+            payload = b"multipart acceptance\n" * 900000
+            started = client.post(
+                api + "/uploads", headers=user_headers,
+                json={"table_id": tid, "row_id": row_id, "filename": "multipart-acceptance.txt", "size": len(payload)},
+            )
+            started.raise_for_status()
+            upload = started.json()["data"]
+            upload_path = api + "/uploads/" + upload["upload_id"]
+            for number in range(1, upload["part_count"] + 1):
+                part = payload[(number - 1) * upload["part_size"] : number * upload["part_size"]]
+                result = client.put(
+                    upload_path + f"/parts/{number}", content=part,
+                    headers={**user_headers, "Content-Type": "application/octet-stream"},
+                )
+                result.raise_for_status()
+                if number == 1:
+                    repeated = client.put(
+                        upload_path + "/parts/1", content=part,
+                        headers={**user_headers, "Content-Type": "application/octet-stream"},
+                    )
+                    repeated.raise_for_status()
+                    assert repeated.json()["data"]["reused"] is True
+            completed = client.post(upload_path + "/complete", headers=user_headers)
+            completed.raise_for_status()
+            aid = completed.json()["data"]["attachment_id"]
+            repeated = client.post(upload_path + "/complete", headers=user_headers)
+            repeated.raise_for_status()
+            assert repeated.json()["data"]["attachment_id"] == aid
+            downloaded = client.get(
+                api + f"/attachments/{aid}/content", params={"table_id": tid}, headers=user_headers,
+            )
+            downloaded.raise_for_status()
+            assert hashlib.sha256(downloaded.content).digest() == hashlib.sha256(payload).digest()
+            client.delete(
+                api + f"/tables/{tid}/rows/{row_id}/attachments/{aid}", headers=user_headers,
+            ).raise_for_status()
+            proof = {"bytes": len(payload), "parts": upload["part_count"], "duplicate_part_reused": True,
+                     "completion_idempotent": True, "download_sha256_verified": True, "fixture_unbound": True}
+            Path("runtime/verification/multipart-production.json").write_text(json.dumps(proof, indent=2))
+            print("PASS: real PKCE login → multipart upload → repeated part/completion → SHA-256 download → unbind")
+            sys.exit(0)
         result = client.get(desktop_url + "/api/v1/tables", headers=user_headers)
         assert result.status_code == 200 and result.json()["data"], (
             "desktop role scopes failed",

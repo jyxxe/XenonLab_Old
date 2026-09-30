@@ -185,3 +185,6 @@ Issue #41 integration (2026-09-30): OpenCode delivery 4c413e2 reviewed and integ
 
 
 Resumable uploads integration: multipart sessions, owner/ACL/scope revalidation, stable attachment IDs and crash-retry completion are implemented. Backup validation accepts canonical upload lock files. Coordinator: 82 tests, Ruff, OpenAPI and frontend build passed; pre-uploads production backup and isolated restore verified. Production activation and real multipart verification remain pending. Qdrant systemd/TLS/firewall templates added; not yet active or connected to production search.
+
+
+Production uploads: release c32fd7f completed; real PKCE test uploaded 18,900,000 bytes in 3 parts, reused a repeated part, completed idempotently, verified downloaded SHA-256 and unbound the fixture. Qdrant v1.19.1 official musl binary SHA-256 verified, service VM109 TLS/API-key checked from VM104, unauthenticated access rejected with 401, vector survived restart and probe collection removed. Qdrant is not yet connected to production semantic search.
