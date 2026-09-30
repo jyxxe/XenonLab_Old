@@ -18,7 +18,7 @@ const firstPage = Array.from({length:100},(_,i)=>makeItem(i+1));
 firstPage[98] = {...makeItem(99),repository:'xenon-admin/../XeonoLab'};
 let refreshCount = 0;
 let resolveDelayedPage:(value:{data:FixtureItem[];meta:{next_cursor:string|null}})=>void = ()=>{};
-let delayedPageStarted = false;
+let delayedPageRequests = 0;
 
 const apiPage = async (path:string) => {
   const url = new URL(path,'http://fixture.local');
@@ -33,7 +33,7 @@ const apiPage = async (path:string) => {
     return {data:Array.from({length:100},(_,i)=>makeItem(i+95)),meta:{next_cursor:'page-2-next'}};
   }
   if(cursor==='page-2-next') {
-    delayedPageStarted=true;
+    delayedPageRequests+=1;
     return new Promise(resolve=>{resolveDelayedPage=resolve});
   }
   return {data:[],meta:{next_cursor:null}};
@@ -41,8 +41,8 @@ const apiPage = async (path:string) => {
 
 (window as any).workFixture={
   get refreshCount(){return refreshCount},
-  get delayedPageStarted(){return delayedPageStarted},
-  resolveDelayedPage(){resolveDelayedPage({data:[{...makeItem(999),id:'stale-page-row',title:'STALE PAGE RESPONSE'}],meta:{next_cursor:null}})},
+  get delayedPageRequests(){return delayedPageRequests},
+  resolveDelayedPage(data:FixtureItem[]=[{...makeItem(999),id:'stale-page-row',title:'STALE PAGE RESPONSE'}]){resolveDelayedPage({data,meta:{next_cursor:null}})},
 };
 
 const api=async()=>({subject:'fixture-user'});
