@@ -2,14 +2,16 @@
 
 import json
 import ssl
+import sys
 from pathlib import Path
 
 import httpx
 
 root = Path("runtime/deploy-secrets")
 users = json.loads((root / "forgejo-users.json").read_text())
-base = "https://xenon.jyxxe.com/dev"
+base = "https://192.168.0.101:9445" if "--local" in sys.argv else "https://xenon.jyxxe.com/dev"
 context = ssl.create_default_context()
+context.load_verify_locations(root / "lan-root-ca.crt")
 with httpx.Client(
     base_url=base + "/api/v1",
     verify=context,

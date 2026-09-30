@@ -4,7 +4,8 @@ Forgejo 16.0.5 部署在 VM 110，以非 root 用户运行，独立持久化数�
 二进制已与官方发布 SHA-256 核对。临时入口：https://192.168.0.101:9445。
 正式入口为 https://xenon.jyxxe.com/dev/，使用单域名子路径。认证入口 /auth/。
 
-仓库：/xenon-admin/XeonoLab，源码公开。Issues 页面包含评论、标签、指派、里程碑、关联与状态管理。
+仓库：/xenon-admin/XeonoLab，源码公开，默认显示 feature/platform-v1 完整实现。main 禁止直接 push，要求一次审批。
+已建立 plan.md §100 的 30 个首批任务，保持打开直到逐项验证；另有协作规范 Issue。Issues 页面包含评论、标签、指派、里程碑、关联与状态管理。
 API 根路径 /api/v1；Swagger 位于 /api/swagger。仓库 Issue 接口：
 GET/POST /api/v1/repos/xenon-admin/XeonoLab/issues，单条 PATCH /issues/{index}。
 
