@@ -1,6 +1,6 @@
 # PVE LAN 上线记录 — 2026-09-30
 
-当前可运行版本已上线。应用代码版本 `54e74a34d2d88a4d556e2eb28a21e9f382f0f1e2`。
+当前可运行版本已上线。应用代码版本 `8e048cb83e1107a71689a2e139f93526898e259d`。
 完整 plan.md 的所有阶段尚未完成；本次上线范围是已有实现的桌面、XeLibrary、D100M 和网关。
 
 ## 访问
@@ -41,15 +41,16 @@ LLM 和 Tool Gateway 使用不同系统用户，均不能读取部署私钥，To
 通过真实 OIDC Codex 身份注册 release，由明确授权的 policy 身份批准，再 acquire lease、
 调用 Deploy Gateway。网关只运行固定 executor，受限 SSH forced-command 只激活已暂存的
 指定 commit。各服务健康检查成功后租约释放。再次通过相同流程重启各应用，样例数据仍保留。
-最新上线 ID：`d759a1f1-56f6-4621-aa09-df1ebdb258fb`；对应 release
-`a5e92931-7333-4d87-94fb-27a5d0666a29`，状态 completed，租约已释放。
+最新上线 ID：`0a7fc6c0-95ce-48fc-ae48-8910026b5aef`；对应 release
+`902e126c-e916-47fd-a774-bc4133a2465f`，状态 completed，租约已释放。
 
-- 15 项代码测试通过，TypeScript/React production build 通过。
+- 16 项代码测试通过，TypeScript/React production build 通过。
 - HTTPS 证书链与 hostname 验证通过，LAN DNS 解析通过。
 - 真实 Keycloak 授权码 + PKCE 登录、签名 JWT、桌面管理员 role-to-scope 校验通过。
 - 未登录接口返回 401；内部 Embedding 端口拒绝操作主机直接访问。
 - 两条示例知识已写入 `/示例/平台/部署验收`，真实 D100M 编码、索引、搜索通过。
 - Tool Gateway 用户身份透传验证通过。
+- 真实登录后的 deepseek-flash 网关调用通过；provider 模型映射已配置。首次调用遇到上游 TLS 连接错误，复测成功，外部连接稳定性仍需观察。
 - 服务重新激活后数据保留，systemd 服务及防火墙均设置开机启动。
 
 模型目录 `/opt/xeonolab/D100M-Embedding`，权重 SHA-256：
