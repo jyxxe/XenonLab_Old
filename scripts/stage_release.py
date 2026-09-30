@@ -3,6 +3,8 @@
 import subprocess
 from pathlib import Path
 
+from xeonolab.deployment_staging import stage_qdrant_runtime_config
+
 
 def command(*args):
     return subprocess.run(args, check=True)
@@ -48,6 +50,13 @@ for node in (107, 104, 101, 111, 106):
         f"sudo -n /usr/bin/python3 {release}/infra/systemd/update_oidc_maps.py"
         f" --node {node} --payload {remote_payload} && rm -f {remote_payload}",
     )
+    if node == 104:
+        stage_qdrant_runtime_config(
+            host=host,
+            identity=key,
+            environment=Path("runtime/deploy-secrets/104/xelibrary.env"),
+            api_key=Path("runtime/deploy-secrets/104/qdrant-api-key"),
+        )
 oidc_payload.unlink(missing_ok=True)
 command("scp", "-i", key, "runtime/deploy-secrets/executor.json", "xenon@192.168.0.106:/tmp/executor.json")
 command(

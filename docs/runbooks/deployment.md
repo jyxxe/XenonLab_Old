@@ -61,7 +61,9 @@ LLM 和 Tool Gateway 使用不同系统用户，均不能读取部署私钥，To
 
 通过真实 OIDC Codex 身份注册 release，由明确授权的 policy 身份批准，再 acquire lease、
 调用 Deploy Gateway。网关只运行固定 executor，受限 SSH forced-command 只激活已暂存的
-指定 commit。各服务健康检查成功后租约释放。再次通过相同流程重启各应用，样例数据仍保留。
+指定 commit。`stage_release.py` 会在 VM104 上预先安装 XeLibrary 的 Qdrant 环境文件和受保护
+API key；代码激活仍通过 Deploy Gateway 完成。各服务健康检查成功后租约释放。再次通过相同
+流程重启各应用，样例数据仍保留。
 最新上线 ID：`8300843b-d69a-46f1-8e94-c8ac71a3905e`；对应 release
 `7779e286-5a72-424c-8b63-7e9769847865`，commit
 `67bea9f81bb450afbcb7690a00006e765a99d40f`，状态 completed，租约已释放。

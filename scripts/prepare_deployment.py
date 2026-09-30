@@ -126,8 +126,8 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "migration_manifest": "no database schema migration; request-local ACL snapshot and indexed ACL lookup only",
-            "test_report": "211 backend tests; 11 desktop tests including synthetic Work browser acceptance; Issue 70 ACL query-plan regression; OpenAPI export; TypeScript/Vite build",
+            "migration_manifest": "no catalogue schema migration; production semantic search requires Qdrant HTTPS/API key; .xl remains the source of truth and vectors are rebuildable",
+            "test_report": "234 backend tests passed; Qdrant ACL/revision/chunk/score/lifecycle/config-staging regressions; scoped Ruff clean; OpenAPI export unchanged",
         }
     )
 )

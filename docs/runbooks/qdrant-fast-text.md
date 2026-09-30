@@ -17,7 +17,11 @@ QDRANT_CA_FILE=/etc/xeonolab/lan-root-ca.crt
 ```
 
 The API key file is provisioned separately by the coordinator and is never
-copied into the release bundle. The network policy permits VM104 to reach
+copied into the release bundle. The coordinator's `scripts/stage_release.py`
+transfers the generated `xelibrary.env` and key as files into a mode-0700
+temporary directory on VM104, then installs them as `root:xeonolab` mode 0640
+before release activation. The key is never placed in command arguments,
+environment text, release artifacts, or command output. The network policy permits VM104 to reach
 VM109 TCP/6333; do not broaden the Qdrant listener or disable TLS verification.
 Production semantic search fails with a service error when Qdrant is missing or
 unavailable; it does not silently switch to the development exact-scan index.
