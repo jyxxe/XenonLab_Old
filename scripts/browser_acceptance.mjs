@@ -226,7 +226,7 @@ async function main() {
       const accountTree404 = pendingAccountTree404.get(event.requestId);
       if (accountTree404) {
         pendingAccountTree404.delete(event.requestId);
-        trackResponseBody(cdp.call('Network.getResponseBody', {requestId: event.requestId}).then(response => {
+        trackResponseBodyRead(cdp.call('Network.getResponseBody', {requestId: event.requestId}).then(response => {
           const raw = response.base64Encoded ? Buffer.from(response.body, 'base64').toString('utf8') : response.body;
           const payload = JSON.parse(raw);
           if (isExpectedUnregisteredAccountTreeResponse(accountTree404.method, accountTree404.url, accountTree404.status, payload)) {
@@ -238,7 +238,7 @@ async function main() {
       }
       if (pendingIdentityResponses.has(event.requestId)) {
         pendingIdentityResponses.delete(event.requestId);
-        trackResponseBody(cdp.call('Network.getResponseBody', {requestId: event.requestId}).then(response => {
+        trackResponseBodyRead(cdp.call('Network.getResponseBody', {requestId: event.requestId}).then(response => {
           const raw = response.base64Encoded ? Buffer.from(response.body, 'base64').toString('utf8') : response.body;
           const payload = JSON.parse(raw);
           if (payload?.data?.kind && Array.isArray(payload.data.scopes)) desktopIdentity = payload.data;
