@@ -9,6 +9,7 @@ import {Work} from './Work';
 import {Knowledge} from './Knowledge';
 import {Dashboard} from './Dashboard';
 import {MenuClock,ClockWidget,StatusWidget} from './Widgets';
+import {APIRequestError} from './api-error.js';
 type App = {id:string; title:string; origin:string; entry:string; icon:string; default_size:[number,number]; singleton:boolean;permissions?:string[];sandbox?:{allow_scripts:boolean;allow_forms:boolean;allow_downloads:boolean}};
 type Window = {id:string; app_id:string; title:string; x:number; y:number; width:number; height:number; minimized:boolean};
 type APIPage<T=any>={data:T;meta:{request_id?:string;next_cursor?:string|null;[key:string]:any}};
@@ -31,7 +32,7 @@ function Desktop(){
    const headers=new Headers(init.headers);if(!headers.has('Content-Type'))headers.set('Content-Type','application/json');headers.set('Authorization',`Bearer ${current.token}`);
    const response=await fetch(`/api/v1${path}`, {...init,headers});
    const result=await response.json();
-   if(!response.ok){if(response.status===401)transition({type:'reauthorization-required',message:'工作空间需要重新授权'});throw Error(result.error?.message || `HTTP ${response.status}`)}
+   if(!response.ok){if(response.status===401)transition({type:'reauthorization-required',message:'工作空间需要重新授权'});throw new APIRequestError(result.error?.message || `HTTP ${response.status}`,response.status,result.error?.code)}
    return {data:result.data,meta:result.meta||{}};
  }
  async function api<T=any>(path:string, init:RequestInit={}):Promise<T>{return (await apiPage<T>(path,init)).data}
@@ -45,7 +46,7 @@ function Desktop(){
    if(!response.ok){
      const result=await response.clone().json().catch(()=>null);
      if(response.status===401)transition({type:'reauthorization-required',message:'工作空间需要重新授权'});
-     throw Error(result?.error?.message||result?.detail?.[0]?.msg||`HTTP ${response.status}`);
+     throw new APIRequestError(result?.error?.message||result?.detail?.[0]?.msg||`HTTP ${response.status}`,response.status,result?.error?.code);
    }
    return response;
  }

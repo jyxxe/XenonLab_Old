@@ -77,6 +77,7 @@ body{overflow:hidden}header a{color:inherit}.window-body{overflow:auto;flex:1;ba
 .widget-options input{width:auto}
 a.job-table{text-decoration:none}
 a.job-table:hover{text-decoration:underline}
+.account-setup{max-width:720px;margin:20px 0;padding:20px;border:1px solid #ffffff25;border-radius:12px;background:#ffffff0a}.account-setup h3{margin:0 0 8px}.account-setup p{line-height:1.6}.account-setup button{margin-top:6px}
 :root[data-theme=light] .dashboard{background:#f1f4fa;color:#28364d}
 :root[data-theme=light] .mac-card{background:linear-gradient(160deg,#ffffffd9,#ffffffa6);border-color:#ffffff;box-shadow:0 14px 34px #46536b2e}
 :root[data-theme=light] .mac-badge{background:#00000010;color:#5b6b83}
