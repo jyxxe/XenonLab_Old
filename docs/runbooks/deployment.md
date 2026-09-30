@@ -1,7 +1,13 @@
 # PVE LAN 上线记录 — 2026-10-01
 
-当前可运行版本已上线。应用代码版本 `67bea9f81bb450afbcb7690a00006e765a99d40f`。
-完整 plan.md 的所有阶段尚未完成；此版本还包含 DevAgent Issues 协作、HF-cache API/预取保护和 Caddy include 同步。
+截至 2026-10-01，当前应用代码版本为 `03adae446b1c233eb2c22dcf36f5aad196de3adf`。
+完整 plan.md 的所有阶段尚未完成；该版本包含 DevAgent Issues 协作、HF-cache API/预取保护、Caddy include 同步及 Issue #48 安全空表删除 API。
+
+2026-10-01 更新：Issue #48 安全空表删除 API 已部署，代码 commit
+`03adae446b1c233eb2c22dcf36f5aad196de3adf`，Deploy Gateway release
+`98d3adb8-e3d3-4be2-8d84-1bce1e32d9a3` / deployment
+`eb761639-270b-426b-b832-328e8619ec5f` completed，租约已释放。部署后五个服务入口
+`/health/ready` 均为 200；桌面首页为 200；未认证表列表与随机 UUID 的空表删除请求均为 401，确认授权拦截生效且删除路由已加载。此次只读检查未创建或删除生产数据。已认证的正向管理员删除、浏览器 UI 操作与隔离 fixture 清理仍待验收，因此 Issue #48 继续保持打开。
 
 ## 访问
 
