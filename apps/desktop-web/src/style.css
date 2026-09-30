@@ -11,3 +11,82 @@ body{overflow:hidden}header a{color:inherit}.window-body{overflow:auto;flex:1;ba
 .query a{color:var(--accent)}.query a:hover{text-decoration-thickness:2px}
 .acl-resources{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.acl-resources button{display:flex;flex-direction:column;text-align:left;max-width:100%;overflow-wrap:anywhere}.acl-resources small{display:block;padding-top:5px;color:#a6b6cc}
 .attachment-panel{margin:18px 0;padding:16px;border:1px solid #ffffff20;border-radius:10px;background:#ffffff08}.attachment-panel>label,.attachment-panel form label{display:block;margin:10px 0}.attachment-panel input[type=file]{padding:8px}.attachment-panel ul{list-style:none;margin:12px 0;padding:0}.attachment-panel li{display:flex;align-items:center;gap:8px;padding:10px 0;border-top:1px solid #ffffff20}.attachment-panel li div{display:grid;gap:4px;min-width:0;flex:1}.attachment-panel li small{overflow-wrap:anywhere;color:#9db0cc}.attachment-panel button{flex-shrink:0}
+
+/* macOS-style dashboard charts, desktop widgets and LaunchPad search */
+.dashboard{display:flex;flex-direction:column;height:100%;min-height:520px;background:#111e33;color:#e8eef9}
+.dashboard-head{height:auto;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px 0;background:transparent;border:0}
+.dashboard-head h2{margin:0;font-size:20px;font-weight:600}
+.dashboard-head p{margin:6px 0 0;font-size:13px}
+.dashboard-actions{display:flex;align-items:center;gap:10px}
+.dashboard-actions small{color:#9db0cc;font-size:12px}
+.dashboard-actions button{margin:0}
+.dashboard-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;padding:18px 24px 28px;overflow:auto;align-items:start}
+.mac-card{display:flex;flex-direction:column;gap:12px;padding:16px 18px;border:1px solid #ffffff1f;border-radius:16px;background:linear-gradient(160deg,#ffffff14,#ffffff05);box-shadow:0 14px 36px #00000038;backdrop-filter:blur(18px)}
+.mac-card>header{height:auto;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0;background:transparent;border:0}
+.mac-card h3{margin:0;font-size:14px;font-weight:600}
+.mac-card button{align-self:flex-start;margin-top:auto}
+.mac-badge{padding:3px 9px;border-radius:999px;background:#ffffff12;color:#9db0cc;font-size:11px}
+.mac-meter{display:flex;width:100%;border-radius:999px;overflow:hidden;background:#ffffff12;box-shadow:inset 0 0 0 1px #ffffff14}
+.mac-meter i{display:block;height:100%}
+.mac-meter-empty{width:100%;background:repeating-linear-gradient(135deg,#ffffff10 0 6px,transparent 6px 12px)}
+.mac-legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:4px 14px;margin:0;padding:0;list-style:none;font-size:12px}
+.mac-legend li{display:flex;align-items:center;gap:7px;min-width:0}
+.mac-legend b{width:9px;height:9px;border-radius:3px;flex-shrink:0}
+.mac-legend span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mac-legend em{margin-left:auto;font-style:normal;color:#cdd9eb}
+.mac-ring{display:block;margin:0 auto;flex-shrink:0}
+.ring-track{stroke:#ffffff17}
+.ring-value{fill:#e8eef9;font-size:24px;font-weight:600}
+.ring-label{fill:#9db0cc;font-size:11px}
+.card-split{display:flex;align-items:center;gap:18px;justify-content:space-between}
+.mac-bars{display:flex;align-items:flex-end;gap:12px;padding:4px 2px 0}
+.mac-bar{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
+.mac-plot{width:100%;flex:1;display:flex;align-items:flex-end;justify-content:center;padding:3px;background:#ffffff0a;border-radius:10px;overflow:hidden}
+.mac-plot i{width:58%;min-height:4px;border-radius:7px 7px 3px 3px}
+.mac-bar span{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9db0cc;font-size:11px}
+.job-list{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+.job-list li{display:flex;align-items:center;gap:8px;font-size:12px}
+.job-table{margin-right:auto;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cdd9eb}
+.job-list small{color:#9db0cc;white-space:nowrap}
+.chip{padding:2px 8px;border-radius:999px;background:#ffffff14;font-size:11px;white-space:nowrap}
+.chip.completed{background:#30d15826;color:#7ee2a0}
+.chip.running,.chip.queued,.chip.claimed{background:#ff9f0a22;color:#ffcf82}
+.chip.failed,.chip.blocked{background:#ff453a26;color:#ff9c94}
+.check-list{display:flex;flex-direction:column;gap:10px}
+.status-line{display:flex;align-items:center;gap:10px;font-size:13px}
+.status-line em{margin-left:auto;font-style:normal}
+.status-dot{width:10px;height:10px;border-radius:50%;background:#30d158;box-shadow:0 0 8px #30d15888;flex-shrink:0}
+.status-dot.bad{background:#ff453a;box-shadow:0 0 8px #ff453a88}
+.widgets{position:fixed;top:50px;right:22px;z-index:4;display:flex;flex-direction:column;gap:14px;width:232px}
+.widget{display:block;width:100%;margin:0;padding:14px 16px;border:1px solid #ffffff21;border-radius:18px;background:linear-gradient(160deg,#ffffff16,#ffffff06);box-shadow:0 16px 44px #00000044;backdrop-filter:blur(22px);color:inherit;text-align:left}
+.widget:hover{background:linear-gradient(160deg,#ffffff20,#ffffff0a)}
+.widget-clock b{display:block;font-size:30px;font-weight:300;letter-spacing:.03em}
+.widget-clock>span{display:block;margin-top:4px;color:#a6b6cc;font-size:12px}
+.widget-status header{height:auto;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;padding:0;background:transparent;border:0}
+.widget-status header strong{font-size:13px}
+.widget-status dl{display:flex;flex-direction:column;gap:6px;margin:0}
+.widget-status dl div{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.widget-status dt{color:#a6b6cc}
+.widget-status dd{margin:0}
+.widget-status>small{display:block;margin-top:10px;color:#8ea2bf;font-size:11px}
+.launchpad-search{display:block;width:min(340px,60%);margin:40px auto 0}
+.launchpad-empty{text-align:center;color:#a6b6cc}
+.widget-options{border:1px solid #ffffff25;border-radius:10px;margin:10px 0;padding:10px 14px}
+.widget-options legend{padding:0 6px;color:#9db0cc;font-size:12px}
+.widget-options label{display:flex;align-items:center;gap:8px;margin:6px 0}
+.widget-options input{width:auto}
+a.job-table{text-decoration:none}
+a.job-table:hover{text-decoration:underline}
+:root[data-theme=light] .dashboard{background:#f1f4fa;color:#28364d}
+:root[data-theme=light] .mac-card{background:linear-gradient(160deg,#ffffffd9,#ffffffa6);border-color:#ffffff;box-shadow:0 14px 34px #46536b2e}
+:root[data-theme=light] .mac-badge{background:#00000010;color:#5b6b83}
+:root[data-theme=light] .ring-track{stroke:#00000012}
+:root[data-theme=light] .ring-value{fill:#28364d}
+:root[data-theme=light] .ring-label,:root[data-theme=light] .dashboard-actions small,:root[data-theme=light] .mac-bar span,:root[data-theme=light] .job-list small,:root[data-theme=light] .widget-status dt,:root[data-theme=light] .widget-status>small{color:#5b6b83;fill:#5b6b83}
+:root[data-theme=light] .job-table{color:#34435c}
+:root[data-theme=light] .mac-legend em{color:#34435c}
+:root[data-theme=light] .mac-meter{background:#0000000f;box-shadow:inset 0 0 0 1px #0000000f}
+:root[data-theme=light] .mac-plot{background:#00000008}
+:root[data-theme=light] .widget{background:linear-gradient(160deg,#ffffffe6,#ffffffb8);border-color:#ffffff;box-shadow:0 16px 40px #46536b33;color:#28364d}
+:root[data-theme=light] .widget-clock>span{color:#5b6b83}
+@media(max-width:900px){.widgets{display:none}}

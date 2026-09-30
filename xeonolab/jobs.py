@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 from .common import connect, transaction
 
+STATUSES = ("queued", "running", "completed", "failed")
+
 
 class JobStore:
     def __init__(self, database):
@@ -51,3 +53,22 @@ class JobStore:
         with connect(self.database) as db:
             row = db.execute("SELECT payload FROM index_jobs WHERE id=?", (job_id,)).fetchone()
         return json.loads(row[0]) if row else None
+
+    def list(self, table_id=None, status=None, owner=None, limit=50):
+        """Newest-first jobs, optionally filtered; bounded so a large history stays cheap."""
+        with connect(self.database) as db:
+            rows = db.execute("SELECT payload FROM index_jobs").fetchall()
+        jobs = [json.loads(row[0]) for row in rows]
+        if table_id:
+            jobs = [job for job in jobs if job.get("table_id") == table_id]
+        if status:
+            jobs = [job for job in jobs if job.get("status") == status]
+        if owner:
+            jobs = [job for job in jobs if job.get("owner") == owner]
+        jobs.sort(key=lambda job: (job.get("created_at", ""), job.get("job_id", "")), reverse=True)
+        return jobs[:limit]
+
+    def counts(self, table_id=None, owner=None):
+        """Status totals for charting; every known status is present with zero defaults."""
+        jobs = self.list(table_id=table_id, owner=owner, limit=None)
+        return {status: sum(1 for job in jobs if job.get("status") == status) for status in STATUSES}

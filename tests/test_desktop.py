@@ -37,6 +37,13 @@ def test_app_changes_are_versioned_and_audited(settings):
     settings.dev_tokens["admin"]["scope"] += " desktop:admin desktop:read"
     settings.dev_tokens["alice"]["scope"] += " desktop:read"
     client = TestClient(create_app("desktop-web", settings))
+    reserved_dashboard = client.post(
+        "/api/v1/apps",
+        headers=auth("admin"),
+        json={"id": "dashboard", "title": "Conflicting app", "origin": "https://dashboard.example"},
+    )
+    assert reserved_dashboard.status_code == 422
+    assert reserved_dashboard.json()["error"]["code"] == "RESERVED_APP_ID"
     entry = {"id": "editor", "title": "Editor", "origin": "https://EDITOR.xenon.lan:443"}
     created = client.post("/api/v1/apps", headers=auth("admin"), json=entry)
     assert created.status_code == 201
@@ -77,8 +84,17 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     )
     changed = client.patch(url, headers=auth(), json={"accent": "purple"}).json()["data"]
     assert changed["theme"] == "dark" and changed["timezone"] == "Asia/Shanghai"
+    assert changed["widgets"] == ["clock", "status"]
+    changed = client.patch(url, headers=auth(), json={"widgets": ["clock"]}).json()["data"]
+    assert changed["widgets"] == ["clock"]
     assert client.get(url, headers=auth("bob")).json()["data"]["theme"] == "system"
-    for invalid in ({"timezone": "Unknown/Zone"}, {"theme": None}, {"unexpected": True}):
+    for invalid in (
+        {"timezone": "Unknown/Zone"},
+        {"theme": None},
+        {"unexpected": True},
+        {"widgets": ["bogus"]},
+        {"widgets": "clock"},
+    ):
         assert client.patch(url, headers=auth(), json=invalid).status_code == 422
     restarted = TestClient(create_app("desktop-web", settings))
     assert restarted.get(url, headers=auth()).json()["data"] == changed

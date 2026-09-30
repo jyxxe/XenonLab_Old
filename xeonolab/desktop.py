@@ -52,6 +52,9 @@ class Preferences(BaseModel):
     accent: Literal["blue", "purple", "green", "orange"] = "blue"
     wallpaper: Literal["aurora", "ocean", "sunset", "silver"] = "aurora"
     timezone: str = Field(default="system", min_length=1, max_length=80)
+    widgets: list[Literal["clock", "status"]] = Field(
+        default_factory=lambda: ["clock", "status"], max_length=8
+    )
 
     @field_validator("timezone")
     @classmethod
@@ -70,6 +73,7 @@ class PreferencePatch(BaseModel):
     accent: str | None = None
     wallpaper: str | None = None
     timezone: str | None = None
+    widgets: list[str] | None = None
 
 
 class Layout(BaseModel):
@@ -118,7 +122,7 @@ def create_app(settings=None):
             raise APIError(422, "INVALID_ORIGIN", "invalid origin hostname or port") from None
 
     def check_origin(body):
-        if body.id in {"knowledge", "settings", "work"}:
+        if body.id in {"dashboard", "knowledge", "settings", "work"}:
             raise APIError(422, "RESERVED_APP_ID", "built-in application ID is reserved")
         desktops = {
             "https://xenon.lan",
