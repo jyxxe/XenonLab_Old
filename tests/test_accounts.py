@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from xeonolab.common import connect
 from xeonolab.desktop import create_app
 
-from .conftest import auth
+from .conftest import auth, put_acl
 
 
 @pytest.fixture
@@ -305,11 +305,9 @@ def test_resource_acl_inherits_parent_and_child_entry_overrides(accounts, monkey
         ).status_code
         == 403
     )
-    library.put("/api/v1/acl/table/" + tid, headers=auth("admin"), json={"grants": {uid: ["read"]}})
+    assert put_acl(library, "table", tid, {uid: ["read"]}).status_code == 200
     assert library.get("/api/v1/tables/" + tid, headers=auth(grand)).status_code == 200
-    library.put(
-        "/api/v1/acl/table/" + tid, headers=auth("admin"), json={"grants": {uid: ["read"], grand: []}}
-    )
+    assert put_acl(library, "table", tid, {uid: ["read"], grand: []}).status_code == 200
     assert library.get("/api/v1/tables/" + tid, headers=auth(grand)).status_code == 403
 
 
