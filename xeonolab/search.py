@@ -10,7 +10,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
-from .common import APIError, connect, response, scope, transaction
+from .common import APIError, connect, response, scope
 from .jobs import JobStore
 from .query import path_matches
 from .services import Search
@@ -60,7 +60,7 @@ def chunk_documents(tokenizer, values, path, table_name):
             yield column, chunk
 
 
-def install(app, catalogue, file, authorize, allowed, load_row):
+def install(app, catalogue, file, authorize, allowed, load_row, table_transaction, table_connect):
     lock = threading.Lock()
     jobs = JobStore(catalogue)
     endpoint = os.getenv("EMBEDDING_URL")
@@ -88,7 +88,7 @@ def install(app, catalogue, file, authorize, allowed, load_row):
         return [r["embedding"] for r in result["data"]], result["model_revision"]
 
     def initialize(tid):
-        with transaction(file(tid)) as db:
+        with table_transaction(tid) as db:
             db.execute("""CREATE TABLE IF NOT EXISTS __xl_vectors(row_id TEXT,revision INTEGER,
                        chunk_id TEXT PRIMARY KEY,column_name TEXT,body TEXT,vector TEXT,model_revision TEXT,
                        chunker_version TEXT)""")
@@ -106,12 +106,12 @@ def install(app, catalogue, file, authorize, allowed, load_row):
             table = authorize(actor, tid, "read")
             initialize(tid)
             tokenizer = Tokenizer.from_file(tokenizer_path)
-            with connect(file(tid)) as db:
+            with table_connect(tid) as db:
                 ids = [r[0] for r in db.execute("SELECT _row_id FROM data WHERE _deleted_at IS NULL")]
             for rid in ids:
                 if not allowed(actor, table, "read", rid):
                     continue
-                with connect(file(tid)) as db:
+                with table_connect(tid) as db:
                     row = load_row(db, rid)
                 encoded = []
                 for column, chunk in chunk_documents(tokenizer, row["values"], table["path"], table["name"]):
@@ -128,7 +128,7 @@ def install(app, catalogue, file, authorize, allowed, load_row):
                             CHUNKER_VERSION,
                         )
                     )
-                with transaction(file(tid)) as db:
+                with table_transaction(tid) as db:
                     current = load_row(db, rid)
                     if current["_revision"] != row["_revision"]:
                         continue
@@ -152,9 +152,10 @@ def install(app, catalogue, file, authorize, allowed, load_row):
         actor=Depends(scope("xelibrary:admin")),
     ):
         configured()
-        authorize(actor, body.table_id, "read")
         job_id = str(uuid4())
-        jobs.create(job_id, actor.sub, body.table_id)
+        with table_transaction(body.table_id):
+            authorize(actor, body.table_id, "read")
+            jobs.create(job_id, actor.sub, body.table_id)
         background.add_task(run, job_id, body.table_id, actor)
         return response(request, {"job_id": job_id})
 
@@ -198,7 +199,7 @@ def install(app, catalogue, file, authorize, allowed, load_row):
             if not path_matches(table["path"], body.path) or not allowed(actor, table, "read"):
                 continue
             initialize(table["id"])
-            with connect(file(table["id"])) as db:
+            with table_connect(table["id"]) as db:
                 for raw in db.execute("SELECT _row_id FROM data WHERE _deleted_at IS NULL"):
                     rid = raw[0]
                     if not allowed(actor, table, "read", rid):

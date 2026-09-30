@@ -32,7 +32,8 @@ class UploadStart(BaseModel):
 
 
 def register_upload_routes(
-    app, *, root, authorize, file, load_row, audit, attachment_metadata, response, now
+    app, *, root, authorize, file, load_row, audit, attachment_metadata, response, now,
+    table_transaction, table_connect,
 ):
     state_db = root / "uploads.sqlite"
     part_root = root / "objects" / ".uploads"
@@ -73,7 +74,7 @@ def register_upload_routes(
         if row["cancelled"]:
             raise APIError(410, "UPLOAD_CANCELLED", "upload session was cancelled")
         authorize(actor, row["table_id"], "attach", row["row_id"])
-        with connect(file(row["table_id"])) as db:
+        with table_connect(row["table_id"]) as db:
             load_row(db, row["row_id"])
         return row
 
@@ -110,62 +111,64 @@ def register_upload_routes(
 
     @app.post("/api/v1/uploads", status_code=201)
     def start_upload(body: UploadStart, request: Request, actor=Depends(scope("xelibrary:attach"))):
-        authorize(actor, body.table_id, "attach", body.row_id)
-        with connect(file(body.table_id)) as db:
-            load_row(db, body.row_id)
-        safe_filename = re.sub(r"[^\w. -]", "_", PurePosixPath(body.filename).name)[:128] or "attachment"
-        count = math.ceil(body.size / PART_BYTES)
-        upload_id, attachment_id = str(uuid4()), str(uuid4())
-        stamp = now()
-        with transaction(state_db) as db:
-            # Bound both abandoned sessions and per-caller resource consumption.
-            from datetime import datetime, timedelta, timezone
+        # Hold the cross-process table write lock through session creation, so a
+        # deletion cannot pass its active-session check concurrently.
+        with table_transaction(body.table_id) as table_db:
+            authorize(actor, body.table_id, "attach", body.row_id)
+            load_row(table_db, body.row_id)
+            safe_filename = re.sub(r"[^\w. -]", "_", PurePosixPath(body.filename).name)[:128] or "attachment"
+            count = math.ceil(body.size / PART_BYTES)
+            upload_id, attachment_id = str(uuid4()), str(uuid4())
+            stamp = now()
+            with transaction(state_db) as db:
+                # Bound both abandoned sessions and per-caller resource consumption.
+                from datetime import datetime, timedelta, timezone
 
-            cutoff = (
-                (datetime.now(timezone.utc) - timedelta(seconds=SESSION_TTL_SECONDS))
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
-            expired = db.execute("SELECT upload_id FROM uploads WHERE created_at<?", (cutoff,)).fetchall()
-            for stale in expired:
-                shutil.rmtree(part_root / stale["upload_id"], ignore_errors=True)
-                (lock_root / f"{stale['upload_id']}.lock").unlink(missing_ok=True)
-                db.execute("DELETE FROM uploads WHERE upload_id=?", (stale["upload_id"],))
-            actor_count = db.execute(
-                "SELECT count(*) FROM uploads WHERE actor=? AND completed=0 AND cancelled=0", (actor.sub,)
-            ).fetchone()[0]
-            total_count = db.execute(
-                "SELECT count(*) FROM uploads WHERE completed=0 AND cancelled=0"
-            ).fetchone()[0]
-            actor_bytes = db.execute(
-                "SELECT coalesce(sum(size),0) FROM uploads WHERE actor=? AND completed=0 AND cancelled=0",
-                (actor.sub,),
-            ).fetchone()[0]
-            total_bytes = db.execute(
-                "SELECT coalesce(sum(size),0) FROM uploads WHERE completed=0 AND cancelled=0"
-            ).fetchone()[0]
-            if (
-                actor_count >= MAX_ACTIVE_PER_ACTOR
-                or total_count >= MAX_ACTIVE_GLOBAL
-                or actor_bytes + body.size > MAX_RESERVED_BYTES_PER_ACTOR
-                or total_bytes + body.size > MAX_RESERVED_BYTES_GLOBAL
-            ):
-                raise APIError(429, "UPLOAD_LIMIT", "too many active upload sessions")
-            db.execute(
-                "INSERT INTO uploads(upload_id,attachment_id,actor,table_id,row_id,filename,size,part_size,part_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (
-                    upload_id,
-                    attachment_id,
-                    actor.sub,
-                    body.table_id,
-                    body.row_id,
-                    safe_filename,
-                    body.size,
-                    PART_BYTES,
-                    count,
-                    stamp,
-                ),
-            )
+                cutoff = (
+                    (datetime.now(timezone.utc) - timedelta(seconds=SESSION_TTL_SECONDS))
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+                expired = db.execute("SELECT upload_id FROM uploads WHERE created_at<?", (cutoff,)).fetchall()
+                for stale in expired:
+                    shutil.rmtree(part_root / stale["upload_id"], ignore_errors=True)
+                    (lock_root / f"{stale['upload_id']}.lock").unlink(missing_ok=True)
+                    db.execute("DELETE FROM uploads WHERE upload_id=?", (stale["upload_id"],))
+                actor_count = db.execute(
+                    "SELECT count(*) FROM uploads WHERE actor=? AND completed=0 AND cancelled=0", (actor.sub,)
+                ).fetchone()[0]
+                total_count = db.execute(
+                    "SELECT count(*) FROM uploads WHERE completed=0 AND cancelled=0"
+                ).fetchone()[0]
+                actor_bytes = db.execute(
+                    "SELECT coalesce(sum(size),0) FROM uploads WHERE actor=? AND completed=0 AND cancelled=0",
+                    (actor.sub,),
+                ).fetchone()[0]
+                total_bytes = db.execute(
+                    "SELECT coalesce(sum(size),0) FROM uploads WHERE completed=0 AND cancelled=0"
+                ).fetchone()[0]
+                if (
+                    actor_count >= MAX_ACTIVE_PER_ACTOR
+                    or total_count >= MAX_ACTIVE_GLOBAL
+                    or actor_bytes + body.size > MAX_RESERVED_BYTES_PER_ACTOR
+                    or total_bytes + body.size > MAX_RESERVED_BYTES_GLOBAL
+                ):
+                    raise APIError(429, "UPLOAD_LIMIT", "too many active upload sessions")
+                db.execute(
+                    "INSERT INTO uploads(upload_id,attachment_id,actor,table_id,row_id,filename,size,part_size,part_count,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        upload_id,
+                        attachment_id,
+                        actor.sub,
+                        body.table_id,
+                        body.row_id,
+                        safe_filename,
+                        body.size,
+                        PART_BYTES,
+                        count,
+                        stamp,
+                    ),
+                )
         (part_root / upload_id).mkdir(mode=0o700)
         audit(actor, "attachment.upload.started", f"{body.table_id}:{body.row_id}:{upload_id}")
         return response(
@@ -242,7 +245,7 @@ def register_upload_routes(
         current = session(upload_id, actor)
         directory = part_root / current["upload_id"]
         if current["completed"]:
-            with connect(file(current["table_id"])) as db:
+            with table_connect(current["table_id"]) as db:
                 attached = metadata(db, current["attachment_id"])
             if attached:
                 shutil.rmtree(directory, ignore_errors=True)
@@ -262,7 +265,7 @@ def register_upload_routes(
                 )
                 if not object_path.is_file():
                     raise APIError(500, "OBJECT_STORE_CORRUPT", "completed upload object is missing")
-                with transaction(file(current["table_id"])) as db:
+                with table_transaction(current["table_id"]) as db:
                     authorize(actor, current["table_id"], "attach", current["row_id"])
                     load_row(db, current["row_id"])
                     attached_row = db.execute(
@@ -361,7 +364,7 @@ def register_upload_routes(
                 )
             # A stable, preallocated attachment ID makes retry safe if the process dies
             # after committing the .xl fact but before marking this session complete.
-            with transaction(file(current["table_id"])) as db:
+            with table_transaction(current["table_id"]) as db:
                 authorize(actor, current["table_id"], "attach", current["row_id"])
                 load_row(db, current["row_id"])
                 existing = db.execute(

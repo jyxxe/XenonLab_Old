@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 from uuid import uuid4
@@ -171,6 +172,55 @@ def test_table_delete_fails_closed_for_active_upload(library, settings):
     assert result.status_code == 409
     assert result.json()["error"]["code"] == "TABLE_UPLOAD_ACTIVE"
     assert library.get(f"/api/v1/tables/{tid}", headers=auth("admin")).status_code == 200
+
+
+def test_table_delete_serializes_row_and_upload_start_across_rename(library, settings, monkeypatch):
+    tid = create_empty_table(library, "Delete race fixture")
+    table_path = settings.data_dir / "tables" / f"{tid}.xl"
+    entered_rename, continue_rename = threading.Event(), threading.Event()
+    original_replace = __import__("xeonolab.library", fromlist=["os"]).os.replace
+
+    def blocked_replace(source, destination):
+        if source == table_path:
+            entered_rename.set()
+            assert continue_rename.wait(timeout=5)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr("xeonolab.library.os.replace", blocked_replace)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        deletion = pool.submit(
+            library.delete,
+            f"/api/v1/tables/{tid}",
+            headers=auth("admin", **{"If-Match": table_etag(library, tid)}),
+        )
+        assert entered_rename.wait(timeout=5)
+        write = pool.submit(
+            library.post,
+            f"/api/v1/tables/{tid}/rows",
+            headers=auth(),
+            json={"values": {"body": "must not land"}},
+        )
+        upload = pool.submit(
+            library.post,
+            "/api/v1/uploads",
+            headers=auth(),
+            json={"table_id": tid, "row_id": "future-row", "filename": "x.txt", "size": 1},
+        )
+        read = pool.submit(library.get, f"/api/v1/tables/{tid}/schema", headers=auth())
+        continue_rename.set()
+        deleted = deletion.result(timeout=5)
+        write = write.result(timeout=5)
+        upload = upload.result(timeout=5)
+        read = read.result(timeout=5)
+
+    assert write.status_code == 404
+    assert upload.status_code == 404
+    assert read.status_code == 404
+    assert deleted.status_code == 200, deleted.text
+    assert not table_path.exists()
+    with sqlite3.connect(settings.data_dir / "uploads.sqlite") as db:
+        assert db.execute("SELECT 1 FROM uploads WHERE table_id=?", (tid,)).fetchone() is None
+    assert not list((settings.data_dir / "tables").glob(f".{tid}.xl"))
 
 
 def test_table_delete_recovers_interrupted_catalogue_and_file_steps(library, settings):
