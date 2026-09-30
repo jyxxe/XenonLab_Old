@@ -1,6 +1,16 @@
 # PVE LAN 上线记录 — 2026-10-01
 
-截至 2026-10-01，当前应用代码版本为 `313b8738c5d6198fc36e309285ca3f989d1f9301`。
+2026-10-01 更新：Issue #11 Qdrant `fast_text` 实现已随 commit
+`c9e095108b678e98037fc123bb15dabae54ed7e7` 部署；release
+`e6cb8491-dab2-4ec4-bed7-56795d195235` / deployment
+`bec2b250-f25d-4312-b8f4-d23cd5b8233f` completed，lease 已释放。部署前完成
+XeLibrary 停写快照校验与隔离恢复演练；234 项后端测试、Ruff、OpenAPI 检查通过，七个服务
+readiness 全部通过。VM104 的真实 Qdrant 临时 collection create/upsert/query/delete acceptance
+通过，公网桌面、Forgejo login 与 OIDC discovery 返回 200。XeLibrary 已接入生产 Qdrant 配置；
+已认证生产 API 的正向语义查询与现有数据重建尚未验收，故 Issue #11 保持打开，证据见
+`docs/acceptance/qdrant-fast-text-2026-10-01.md`。
+
+Issue #11 发布前应用代码版本为 `313b8738c5d6198fc36e309285ca3f989d1f9301`。
 完整 plan.md 的所有阶段尚未完成；该版本包含 DevAgent Issues 协作、HF-cache API/预取保护、Caddy include 同步及 Issue #48 安全空表删除 API。
 
 2026-10-01 更新：Issue #70 每表每请求 ACL 快照与索引化 row ACL 查找已部署，代码 commit

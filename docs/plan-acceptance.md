@@ -13,14 +13,14 @@
 | 4 | 逻辑网络分区 | 外部实测待证 | 有 Network Server 防火墙配置与区间部署记录；计划四区隔离仍未逐条证明。 |
 | 5 | 逻辑组件关系 | 部分实现 / 未做生产验收 | 代码有 FastAPI 服务调用边界、Tool Gateway 与 Deploy Gateway；多项计划服务仍是 skeleton。 |
 | 6 | 推荐代码仓库结构 | 部分实现 / 未做生产验收 | 当前 Python package、React app、infra、docs、tests 可见；计划 package/service 布局未全部拆分。 |
-| 7 | 初始技术栈 | 部分实现 / 未做生产验收 | FastAPI/React/SQLite/OIDC 等已使用；PostgreSQL/Qdrant/异步队列等计划栈尚缺。 |
+| 7 | 初始技术栈 | 部分实现 / 未做生产验收 | FastAPI/React/SQLite/OIDC 与生产 Qdrant 已使用；PostgreSQL 与通用异步队列等计划栈尚缺。 |
 | 8 | `.xl` 文件格式 | 部分实现 / 未做生产验收 | `xeonolab/library.py` 维护 SQLite `.xl` 文件、schema 与变更历史。 |
 | 9 | XeLibrary 附件 | 部分实现 / 未做生产验收 | 内容寻址对象、附件引用、上传/绑定/下载/备份路径在 `library.py` 与 `backup.py` 有实现。 |
 | 10 | D100M-Embedding 固定参数 | 部分实现 / 未做生产验收 | 真实 D100M 256D、token 上限、revision 与 CPU smoke 在 `embedding.py`/测试中实现。 |
 | 11 | Qwen3-VL-Embedding-2B 角色 | 部分实现 / 未做生产验收 | Qwen API 只报告 not_configured/503；没有模型 worker。 |
 | 12 | Chunk 设计 | 部分实现 / 未做生产验收 | `search.py` tokenizer-aware chunking 与 chunker 版本有测试；title 约定未落地。 |
-| 13 | 向量空间 | 部分实现 / 未做生产验收 | D100M 本地精确向量索引存在；计划中的多逻辑向量空间与 Qdrant 尚无。 |
-| 14 | 默认查询策略 | 部分实现 / 未做生产验收 | Fast semantic search 已实现且 ACL/行版本检查；quality 与 image 分支不可用。 |
+| 13 | 向量空间 | 部分实现 / 未做生产验收 | D100M `fast_text` 的 256D cosine 向量已通过 Qdrant 生产依赖验收；其他逻辑向量空间尚无，正向语义 API 验收待做。 |
+| 14 | 默认查询策略 | 部分实现 / 未做生产验收 | Fast semantic search 已实现并接入生产 Qdrant，查询端做 ACL/行版本检查；正向线上 API 查询、quality 与 image 分支未验收或不可用。 |
 | 15 | 定理区数据模型 | 部分实现 / 已发布，生产读写验收待做 | XeLibrary 定理字段、confidence/provenance、formal/review 状态分离、修订历史、依赖与 evidence refs 已随 release `7779e286` 部署。正向授权读写尚未在线验收；Lean 验证器仍未实现，详见 `xeonolab/theorems.py`。 |
 | 16 | API 总体规范 | 部分实现 / 未做生产验收 | `common.py` 提供版本化 API、认证、request ID、错误格式、ETag；缺少完整兼容策略。 |
 | 17 | 通用运维 API | 部分实现 / 未做生产验收 | 四个运维端点由 `common.py` 提供；ready 目前只用可选 callable。 |
@@ -34,9 +34,9 @@
 | 25 | XeLibrary Attachment API | 部分实现 / 未做生产验收 | 内容寻址上传、元数据、绑定解绑、ACL 保护存在；quarantine/scanning/预览隔离未有。 |
 | 26 | XeLibrary Query DSL | 部分实现 / 未做生产验收 | DSL parser/interpreter 有受限安全子集；EXISTS/SEARCH TEXT/HAS_ATTACHMENT/PATH_DEPTH 未实现。 |
 | 27 | XeLibrary Query API | 部分实现 / 未做生产验收 | 查询和 explain 可用；完整计划过滤、语义与异步 job 行为仍缺。 |
-| 28 | XeLibrary Search API | 部分实现 / 未做生产验收 | FTS/semantic endpoints 存在；Qwen/image/hybrid 仍不可用。 |
+| 28 | XeLibrary Search API | 部分实现 / 未做完整生产验收 | FTS 与基于 Qdrant 的 D100M semantic endpoint 已部署；Qwen/image/hybrid 不可用，已认证正向生产 semantic 请求待验收。 |
 | 29 | Search Result 统一返回字段 | 部分实现 / 未做生产验收 | 不同 endpoints 的响应 envelope 部分统一；search result schema 未统一完成。 |
-| 30 | XeLibrary Index API | 部分实现 / 未做生产验收 | 重建索引与持久化 job 状态实现；自动恢复/调度/Qdrant 未实现。 |
+| 30 | XeLibrary Index API | 部分实现 / 未做完整生产验收 | 索引重建 job 会写入 Qdrant 并持久化状态；自动恢复/调度未实现，真实生产表重建待验收。 |
 | 31 | XeLibrary Revision API | 部分实现 / 未做生产验收 | 行 revisions、历史读取、restore 和 If-Match 有实现与测试。 |
 | 32 | XeLibrary ACL API | 部分实现 / 未做生产验收 | path/table/row ACL、继承、ETag/If-Match、审计 API 有实现与测试。 |
 | 33 | XeLibrary Proposal API | 未实现 | 没有 proposal 存储、审批或 API。 |
@@ -86,7 +86,7 @@
 | 77 | 初始开发阶段 | 部分实现 / 未做生产验收 | 《实施状态》记载部分基础设施部署；完整 Phase 0 未达标。 |
 | 78 | Phase 1 — Repo / API Skeleton | 部分实现 / 未做生产验收 | 服务 skeleton、OpenAPI、统一 request ID 与 error 有实现；全服务 readiness/CI acceptance 未完。 |
 | 79 | Phase 2 — XeLibrary Core | 部分实现 / 未做生产验收 | 表/行/schema/附件/query ACL 已部分实现；path catalogue/import 全套缺。 |
-| 80 | Phase 3 — D100M Search | 部分实现 / 未做生产验收 | D100M 到精确向量搜索已有 smoke；Qdrant、队列、priority 尚缺。 |
+| 80 | Phase 3 — D100M Search | 部分实现 / 未做完整生产验收 | D100M fast_text/Qdrant 有临时 collection 线上 smoke；生产语义 API、自动队列与 priority 仍待验收或实施。 |
 | 81 | Phase 4 — Qwen / Multimodal | 部分实现 / 未做生产验收 | Qwen worker、image、rerank、quality cache 均无。 |
 | 82 | Phase 5 — Web / OpenWebUI | 部分实现 / 未做生产验收 | Desktop shell/app registry/tool search-query-get 存在；OpenWebUI token exchange 缺。 |
 | 83 | Phase 6 — Library Agent | 部分实现 / 未做生产验收 | Library Agent 任务/evidence/theorem/proposal/Lean 闭环不存在。 |
