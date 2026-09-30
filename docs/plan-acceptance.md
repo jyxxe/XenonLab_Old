@@ -1,6 +1,6 @@
 # 完整 Plan 逐章验收审计
 
-> 审计基线：本 worktree 从 `16aa0d3` 建立；代码/文档逐项审阅于 2026-09-30。该表区分仓库证据与生产验收；除引用已有运行记录外，本轮没有访问生产服务或声称视觉/硬件验收。`部分实现` 不代表该章节完整达标。
+> 审计更新：2026-10-01。源码以当前 `feature/platform-v1` 为基线；生产记录以 `docs/runbooks/deployment.md` 中最近完成的 release 为准。表格区分源码、测试和生产验收证据；`部分实现` 不代表该章节完整达标，也不把单元测试当作硬件或浏览器实测。
 
 状态含义：`本地实现 / 测试通过 / 未发布` 为当前工作分支内证据；`部分实现` 表示代码只覆盖所述子集；`外部实测待证` 表示实现依赖 VM/PVE/存储/身份供应商等仓库外状态；`未实现` 表示代码库内缺少该能力。详细服务现状见 [implementation-status.md](implementation-status.md)，规则基线见 [plan.md](../plan.md) 与 [ADR](adr/)。
 
@@ -43,8 +43,8 @@
 | 34 | Theorem API | 未实现 | 没有 Theorem API。 |
 | 35 | Embedding API | 部分实现 / 未做生产验收 | Embedding D100M fast endpoint 有真实模型；Qwen/image 端点不可用。 |
 | 36 | Embedding 调度优先级 | 部分机制 / 关键能力缺失 | CPU worker busy 会 429；没有请求优先级/后台 ingestion 抢占队列。 |
-| 37 | HF-cache API | Skeleton / 关键能力未实现 | HF-cache 只有通用 service skeleton。 |
-| 38 | HF-cache 预测性 API | Skeleton / 关键能力未实现 | 无预测预取候选、pin/lease 与缓存管理 API。 |
+| 37 | HF-cache API | 部分实现 / 已发布，物理池接线未验收 | `xeonolab/hf_cache.py` 提供 ensure、manifest/hash、items、pin/lease、evict/GC、storage 与异步预取 job；运行记录确认 API 已部署。生产物理池数据源仍未接线，真实模型缓存下载/回收场景待验收。 |
+| 38 | HF-cache 预测性 API | 部分实现 / 已发布，自动发现未实现 | 有 dependency signal、候选 accept/reject、预取 job/retry 和使用容量保护；生产配置引用与 Issue 扫描的自动发现/决策闭环仍缺。 |
 | 39 | Library Agent API | Skeleton / 关键能力未实现 | Library Agent 仅 skeleton；无 derive/evidence/proposal 流程。 |
 | 40 | Lean 验证接口 | 未实现 | 没有隔离的 Lean 编译/验证 sandbox。 |
 | 41 | LLM Gateway API | 部分实现 / 未做生产验收 | LLM Gateway 支持固定模型、服务端密钥与非流式转发；无计划全量能力。 |
@@ -78,7 +78,7 @@
 | 69 | fnOS 边界 | 部分实现 / 外部验证未覆盖 | 有 fnOS VM/数据边界记录；独立认证/平台停机时访问未在本轮实测。 |
 | 70 | 备份 | 部分实现 / 未做生产验收 | XeLibrary backup/verify/restore 有脚本与故障测试；`docs/runbooks/deployment.md` 记载 2026-09-30 实际备份及 integrity/pg_restore 检查。定期自动化、异地存储和完整模型权重副本仍缺。 |
 | 71 | XeLibrary 恢复顺序 | 部分实现 / 未做生产验收 | 恢复脚本与 runbook 有顺序；`dd6a397` / `docs/implementation-status.md` 记录发布前 quiesced backup 和 isolated restore（含空 object store 回归）通过。完整 PVE 灾难恢复与跨 catalogue/.xl 原子快照仍未验证。 |
-| 72 | HF-cache 水位 | 未实现 | 没有 HF-cache 物理水位计量/自动清退。 |
+| 72 | HF-cache 水位 | 本地实现 / 测试通过 / 未发布 | `infra/pve/pool_telemetry_collector.py`、`infra/hfcache/pool_metrics_receiver.py`、systemd units 与 `tests/test_pool_telemetry.py` 已合入；见 `docs/runbooks/pool-telemetry.md`。尚未选择生产 pool/address/secret、安装服务或应用防火墙规则，物理水位尚未在生产消费。 |
 | 73 | 开发权限 | 部分实现 / 未做生产验收 | 仓库贡献规则/API 边界文档存在；远端 Forgejo 权限矩阵需平台配置证据。 |
 | 74 | Codex 开发规则 | 部分实现 / 未做生产验收 | AGENTS/Agent workflow 有独立 worktree、测试与发布规则；PR required checks 需远端配置核实。 |
 | 75 | Codex 发布规则 | 部分实现 / 未做生产验收 | Deploy policy 限制 OpenCode；只有通过工作 API 可证明 API policy，不等同所有主机凭证盘点。 |
@@ -92,7 +92,7 @@
 | 83 | Phase 6 — Library Agent | 部分实现 / 未做生产验收 | Library Agent 任务/evidence/theorem/proposal/Lean 闭环不存在。 |
 | 84 | Phase 7 — DevAgent | 部分实现 / 未做生产验收 | Webhook/work queue/links/triage 有组件；端到端自动 triage/duplicate 并未完成。 |
 | 85 | Phase 8 — Deploy Gateway | 部分实现 / 未做生产验收 | leases 与受限执行器代码存在；SSE/full rollback 状态机及全量 production acceptance 缺。 |
-| 86 | Phase 9 — HF-cache | 部分实现 / 未做生产验收 | HF cache ensure/pin/lease/GC/watermark/candidate 均缺。 |
+| 86 | Phase 9 — HF-cache | 部分实现 / 未做完整生产验收 | HF-cache API、异步预取、候选审核、pin/lease/GC 和 fail-closed 水位消费者已实现；一般 API 已发布。PVE 物理遥测 collector/receiver 与自动依赖发现仍未上线。 |
 | 87 | API 测试矩阵 | 部分实现 / 未做生产验收 | 新增 429 身份/路由组回归；全 endpoint 状态码/幂等/并发矩阵并未完整。 |
 | 88 | Query 测试 | 部分实现 / 未做生产验收 | 中文/类型/嵌套布尔等 DSL tests 存在；attachment EXISTS/FTS/quality/stale/move 矩阵不完整。 |
 | 89 | D100M 评测 | 未实现 | 没有本领域独立 held-out retrieval evaluation 与 Recall@10/nDCG/MRR 基线。 |
@@ -101,11 +101,11 @@
 | 92 | API 客户端 | 未实现 | 未见共享生成 client packages；前端 helper/各服务调用分散。 |
 | 93 | 数据 ID | 部分实现 / 未做生产验收 | UUID IDs 用于多个记录；不是普遍 UUIDv7/sortable。 |
 | 94 | 时间 | 部分实现 / 未做生产验收 | 时间字段为 ISO/epoch混合（如 `at` epoch/字符串）；全 API RFC3339 UTC 未统一。 |
-| 95 | 分页 | 部分实现 / 未做生产验收 | 多个 listing 支持 cursor（tables/rows/work/ACL）；其他 API 仍有 offset/limit。 |
-| 96 | Rate Limit | 本地实现 / 测试通过 / 未发布 | 本分支新实现 API 身份+路由组 SQLite sliding window、Retry-After 与 429 审计日志，生产默认启用；见 `tests/test_rate_limit.py`。 |
+| 95 | 分页 | 部分实现 / 未做完整生产验收 | 多个 listing 支持 cursor（tables/rows/work/ACL）；Work UI 已支持继续加载、游标循环保护和明确末页状态；其他 API 仍有 offset/limit。 |
+| 96 | Rate Limit | 已发布 / 生产阈值待校准 | `xeonolab/common.py` 按身份和路由组以 SQLite sliding window 限流，返回 `Retry-After` 并记录 429 审计事件；包含在最近部署的应用 release。测试见 `tests/test_rate_limit.py`；未做生产压测、429 live smoke、跨服务全局额度或告警保留验收。 |
 | 97 | 上传限制 | 部分实现 / 未做生产验收 | 上传有 16MiB size、sniff/hash/name sanitize；quarantine/scanning 与独立 preview 隔离尚无。 |
 | 98 | 不允许的架构捷径 | 部分实现 / 未做生产验收 | 代码避免任意 SQL/eval，Tool Gateway/Bearer/Deploy API boundary 有测试；宿主和 CI secrets posture 未全量审计。 |
-| 99 | V1 最低可用接口集合 | 部分实现 / 未做生产验收 | 大部分 XeLibrary/D100M/desktop/tool/deploy/development minimum API 存在；theorem/HF cache/image/OpenWebUI 完整工具等缺。 |
+| 99 | V1 最低可用接口集合 | 部分实现 / 未做生产验收 | 大部分 XeLibrary/D100M/desktop/tool/deploy/development minimum API 存在；theorem、Library Agent、Qwen/image、OpenWebUI 完整工具与 HF-cache 物理接线仍缺。 |
 | 100 | 推荐首批 Issues | 部分实现 / 未做生产验收 | 初始 issue 目录/已建问题存在；推荐列表与当前实现状态未逐一同步。 |
 | 101 | 初始 Codex 工作方式 | 部分实现 / 未做生产验收 | 工作流程要求读计划/ADR、分支/测试/OpenAPI；本审计也是据此执行。 |
 | 102 | Definition of Done | 部分实现 / 未做生产验收 | 测试、权限、文档要求写入指导文件；大量缺功能意味着全局 Definition of Done 未满足。 |
@@ -115,7 +115,7 @@
 
 ## 本轮限流实现的边界
 
-Rate Limit 实现按每个服务 `DATA_DIR/rate-limits.sqlite3` 持久化滑动窗口；bucket key 为 SHA-256(subject) + 路由组，SQLite `BEGIN IMMEDIATE` 避免同一数据库的并发超发。已覆盖 interactive、bulk、admin、agent、embedding-fast、embedding-quality 默认策略；健康、就绪、版本、metrics 不走身份依赖。429 包含整数秒 `Retry-After` 和结构化 `rate_limit.rejected` 审计日志。生产默认启用；环境策略通过 `RATE_LIMIT_ENABLED` 与 `RATE_LIMIT_POLICIES_JSON` 控制。
+Rate Limit 实现按每个服务 `DATA_DIR/rate-limits.sqlite3` 持久化滑动窗口；bucket key 为 SHA-256(subject) + 路由组，SQLite `BEGIN IMMEDIATE` 避免同一数据库的并发超发。已覆盖 interactive、bulk、admin、agent、embedding-fast、embedding-quality 默认策略；健康、就绪、版本、metrics 不走身份依赖。429 包含整数秒 `Retry-After` 和结构化 `rate_limit.rejected` 审计日志。生产默认启用；环境策略通过 `RATE_LIMIT_ENABLED` 与 `RATE_LIMIT_POLICIES_JSON` 控制。实现已随最近部署的应用 release 发布，但未做实际 429 生产压力验收。
 
 | 路由组 | 默认上限 | 路由选择 |
 |---|---:|---|
@@ -130,10 +130,9 @@ Rate Limit 实现按每个服务 `DATA_DIR/rate-limits.sqlite3` 持久化滑动�
 
 尚未做多机/共享数据库验证；不同 service `DATA_DIR` 之间不共享 bucket，这代表身份+路由组是 service-local 限流，不是跨全平台的全局额度。受保护的 `/api/v1/*` 与兼容 `/v1/*` 参与；不经 `identity()` 的无身份 browser-session 登录端点不在此限流实现范围。限流日志由运行时日志系统接收，本轮未验证生产日志保留与告警。Quality mode 的 semantic search 与 `/v1/embeddings` model 字段按 JSON body 分流至严格 bucket；Qwen/image worker 尚未上线，因此不代表 Qwen 生产限额已验收。
 
-## 本轮验证
+## 2026-10-01 源码验证
 
-- `uv run pytest --basetemp runtime/pytest-tmp`：88 passed；Starlette/httpx 弃用提示 1 条。
-- `uv run pytest tests/test_rate_limit.py tests/test_auth.py -q`：11 passed。
-- `uv run ruff check xeonolab tests scripts`：通过。
-- `uv run python scripts/export_openapi.py`：通过；限流使用统一异常处理，不新增 endpoint/schema。
-- 还未执行生产阈值校准、跨进程外部服务压测、日志留存检查与真实 429 HTTP smoke。
+- `uv run pytest -q`：189 passed；有 Starlette/httpx 弃用提示和 pytest 临时目录清理警告。
+- 桌面 `npm test`：11 passed；`npm run test:work-browser`：1 passed，覆盖 Work 分页、游标去重/循环、旧响应丢弃、loaded-only 筛选与 Forgejo 链接。
+- 桌面 `npm run build`、`uv run python scripts/export_openapi.py`、`git diff --check`：通过。
+- 生产阈值校准、跨进程外部服务压测、限流日志保留检查与真实 429 HTTP smoke 未执行。

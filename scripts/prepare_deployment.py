@@ -120,8 +120,8 @@ artifact = {
             "commit": commit,
             "artifacts": [artifact],
             "migration_manifest": "no session schema migration; durable browser sessions retained; temporary provider errors preserve refresh credentials",
-            "test_report": "82 backend tests; 4 session-state tests; Ruff; OpenAPI; TypeScript/Vite build",
+            "test_report": "189 backend tests; 11 desktop tests; 1 Work pagination browser acceptance; OpenAPI export; TypeScript/Vite build",
         }
     )
 )
-print("Release assets generated for VMs 101,104,106,107; commit " + commit)
+print("Release assets generated for VMs 101,104,106,107,111; commit " + commit)

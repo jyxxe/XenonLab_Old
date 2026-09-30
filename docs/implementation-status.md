@@ -1,4 +1,4 @@
-# 实施状态 — 2026-09-30
+# 实施状态 — 2026-10-01
 
 ## 已验证
 
@@ -24,7 +24,7 @@
 - Tool Gateway 只提供 search/query/get，透传验证的 bearer token，不代换超级管理员身份。
 - LLM Gateway 固定 deepseek-flash、服务端 provider credential、非流式转发。
 - React/TypeScript 桌面、受控 app registry、个人布局、窗口管理、iframe origin/source 验证。
-- PVE 已上线当前实现：VM 101/104/106/107/109/105；现有 VM 未删除。xenon.lan LAN DNS/TLS，不配置 Cloudflare。
+- PVE 已上线当前实现：VM 101/104/106/107/109/105/111；早期验证 VM 未删除。xenon.lan LAN DNS/TLS 与 `xenon.jyxxe.com` Cloudflare Tunnel 均已配置，并保留直接 IP 入口。
 
 ## 尚未完成
 
@@ -54,8 +54,9 @@ manifest/outbox 与一致性扫描。索引作业状态已在 catalogue 持久�
 
 ## 验证记录
 
-13 项后端测试通过；10 个服务均以独立进程通过 HTTP live/version/OpenAPI 检查。
-D100M 实际模型端到端 smoke 通过；React/TypeScript production build 与 Ruff 检查通过。
+当前源码基线：189 项后端测试、11 项桌面测试与 1 项 Work 分页浏览器夹具通过；React/TypeScript production build、OpenAPI 导出和 diff 检查通过。
+最近完成的生产 release 仍为 `c660a458b9691759de44de48bd22819100ea841c`；Issue #50 的末页和游标循环保护已合入源码，待部署。
+此前 10 个服务均以独立进程通过 HTTP live/version/OpenAPI 检查，D100M 实际模型端到端 smoke 通过。
 本机缺少 Docker Compose 插件，未运行原 Compose 拓扑；线上采用 systemd，Keycloak 使用 Docker + 本地 PostgreSQL。
 
 ## 完整 Plan 推进

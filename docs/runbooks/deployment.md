@@ -35,6 +35,7 @@ IP 入口可直接登录，无需客户端 DNS；认证标准地址为 `https://
 | Embedding 107 | 192.168.0.107 | 真实 D100M CPU worker |
 | Auth 109 | 192.168.0.109 | Keycloak 26.7.2 + 本地 PostgreSQL 18 |
 | Network 105 | 192.168.0.105 | xenon.lan DNS |
+| DevAgent 111 | 192.168.0.111 | Forgejo webhook 同步、work queue、规则 triage 与 Issue links |
 
 API：`https://library.xenon.lan/api/v1/...`、`https://tools.xenon.lan/api/v1/tools/...`、
 `https://deploy.xenon.lan/api/v1/...`、`https://llm.xenon.lan/v1/...`。
