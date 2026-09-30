@@ -47,6 +47,10 @@ def install(app):
             with httpx.Client(verify=context, trust_env=False, timeout=20) as client:
                 result = client.post(endpoint, data={"client_id": "desktop", **data})
             if result.status_code == 400:
+                if data.get("grant_type") == "authorization_code":
+                    if "Offline tokens not allowed" in result.json().get("error_description", ""):
+                        raise APIError(403, "OFFLINE_ACCESS_DENIED", "账号尚未启用持续登录权限，请联系管理员")
+                    raise APIError(401, "LOGIN_CODE_REJECTED", "登录授权码无效，请重新开始登录")
                 raise APIError(401, "SESSION_REVOKED", "login has been revoked; sign in again")
             result.raise_for_status()
             body = result.json()

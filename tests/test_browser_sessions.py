@@ -18,6 +18,7 @@ def test_persistent_session_refresh_restart_logout_and_csrf(settings, monkeypatc
     monkeypatch.setenv("OIDC_TOKEN_URL", settings.issuer + "/token")
     calls = []
     unavailable = False
+    denied = False
 
     original_post = httpx.Client.post
 
@@ -25,6 +26,15 @@ def test_persistent_session_refresh_restart_logout_and_csrf(settings, monkeypatc
         if isinstance(client, TestClient):
             return original_post(client, url, data=data, **kwargs)
         calls.append(data)
+        if denied:
+            return httpx.Response(
+                400,
+                json={
+                    "error": "invalid_grant",
+                    "error_description": "Offline tokens not allowed for the user or client",
+                },
+                request=httpx.Request("POST", url),
+            )
         if unavailable:
             raise httpx.ConnectError("offline")
         token = jwt.encode(
@@ -73,3 +83,8 @@ def test_persistent_session_refresh_restart_logout_and_csrf(settings, monkeypatc
     assert client.post("/api/v1/auth/session/logout", headers={"Origin": "https://evil"}).status_code == 403
     assert client.post("/api/v1/auth/session/logout", headers=ORIGIN).status_code == 200
     assert client.post("/api/v1/auth/session/token", headers=ORIGIN).status_code == 401
+
+    denied = True
+    result = client.post("/api/v1/auth/session/exchange", json=payload, headers=ORIGIN)
+    assert result.status_code == 403
+    assert result.json()["error"]["code"] == "OFFLINE_ACCESS_DENIED"

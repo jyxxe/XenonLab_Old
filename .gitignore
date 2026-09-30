@@ -9,3 +9,6 @@ runtime/
 *.egg-info/
 node_modules/
 dist/
+
+# Private OpenCode instructions containing agent-only credentials
+/Agent.md

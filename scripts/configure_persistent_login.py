@@ -41,4 +41,25 @@ with httpx.Client(
     client.put(
         realm + "/clients/" + cid + "/optional-client-scopes/" + offline["id"], headers=headers
     ).raise_for_status()
-print("Desktop offline sessions enabled; existing users and passwords preserved")
+    offline_role = client.get(realm + "/roles/offline_access", headers=headers)
+    offline_role.raise_for_status()
+    changed = 0
+    first = 0
+    while True:
+        users = client.get(realm + "/users", headers=headers, params={"first": first, "max": 100})
+        users.raise_for_status()
+        if not users.json():
+            break
+        for user in users.json():
+            if user.get("serviceAccountClientId") or user["username"].startswith("service-account-"):
+                continue
+            mappings = realm + "/users/" + user["id"] + "/role-mappings/realm"
+            effective = client.get(mappings + "/composite", headers=headers)
+            effective.raise_for_status()
+            if not any(role["name"] == "offline_access" for role in effective.json()):
+                client.post(mappings, headers=headers, json=[offline_role.json()]).raise_for_status()
+                changed += 1
+        first += len(users.json())
+print(
+    f"Desktop offline sessions enabled; offline role added to {changed} existing human accounts; passwords preserved"
+)

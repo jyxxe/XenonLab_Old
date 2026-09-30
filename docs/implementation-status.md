@@ -89,3 +89,23 @@ Issue 同时间戳冲突冻结与主动 source reconcile 已实现且有测试�
 - Persistent desktop browser sessions exchange PKCE codes server-side, keep refresh credentials in a private server SQLite database, and use secure HttpOnly same-site cookies. Server restart/page reload restore the session; access tokens remain short-lived and refresh automatically. Logout deletes this browser session. Idle offline timeout is configured to Keycloak's signed-integer maximum, with no maximum offline session lifespan. Browser cookie storage limits and deliberate revocation still apply; this is continuous renewal rather than literally immortal credentials. [Keycloak offline-session semantics](https://www.keycloak.org/docs/latest/server_admin/#_offline-access).
 - Tests cover restart restoration, refresh after expiry, temporary provider failure, origin/redirect rejection, and logout. Account tree, inherited account permissions, password reset/revocation, and API key management are not yet implemented; existing resource ACL settings are not an account administration page.
 - DevAgent reconciliation source now has a fixed Forgejo endpoint and verified LAN CA in deployment configuration.
+
+### Existing-user login regression and multi-Harness verification
+
+Keycloak rejected the imported administrator's offline code exchange with
+`not_allowed: Offline tokens not allowed for the user or client`. New users had
+inherited the default offline role, so the earlier smoke check missed this.
+The persistent-login migration now adds only `offline_access` to existing human
+users who lack it, preserving passwords and all other roles. Bootstrap admin
+also declares the role. The real legacy-user regression removes default roles,
+applies this migration, then verifies code exchange, session restore and logout.
+Public desktop verification now uses the configured canonical IP issuer instead
+of assuming the `/auth/` proxy is the issuer. Public Tunnel returned 1033/530 on
+2026-09-30 during verification, independently of the resolved role issue.
+
+GPT-6 Luna added and executed `scripts/verify_multi_harness.py`: independent
+Codex/OpenCode identities; exclusive claims; non-holder and stale epoch denial;
+OpenCode release creation/production lease denied; isolated Issue closed and
+work completed. This checks the existing API boundaries, not arbitrary Harness
+behavior or every plan requirement. OpenCode credentials/instructions are in
+private, Git-ignored `Agent.md`; never publish this file.

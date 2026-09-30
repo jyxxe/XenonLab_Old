@@ -16,7 +16,7 @@ export async function callback():Promise<{token:string;expires:number}|null>{
  if(parameters.has('error'))throw Error('登录未完成');if(!saved)throw Error('登录请求已失效');
  const data=JSON.parse(saved);if(parameters.get('state')!==data.state||Date.now()-data.created>600000)throw Error('登录状态校验失败');
  const r=await fetch('/api/v1/auth/session/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:parameters.get('code'),redirect:data.redirect,verifier:data.verifier})});
- if(!r.ok)throw Error('登录令牌交换失败');return r.json();
+ const result=await r.json();if(!r.ok)throw Error(result.error?.message||'登录令牌交换失败');return result;
 }
 export async function sessionToken():Promise<{token:string;expires:number}|null>{
  const r=await fetch('/api/v1/auth/session/token',{method:'POST'});

@@ -88,7 +88,7 @@ realm = {
             "emailVerified": True,
             "firstName": "Platform",
             "lastName": "Administrator",
-            "realmRoles": ["platform-admin"],
+            "realmRoles": ["platform-admin", "offline_access"],
             "credentials": [{"type": "password", "value": credentials["admin_password"], "temporary": True}],
         }
     ],

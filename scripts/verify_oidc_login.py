@@ -6,6 +6,7 @@ import json
 import secrets
 import socket
 import ssl
+import subprocess
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -30,7 +31,7 @@ class LoginForm(HTMLParser):
 
 
 ip_only = "--ip" in sys.argv
-auth_base = "https://192.168.0.101:9444" if ip_only else "https://xenon.jyxxe.com/auth"
+auth_base = "https://192.168.0.101:9444"  # Canonical issuer is independent of the desktop origin.
 desktop_url = "https://192.168.0.101:9443" if ip_only else "https://xenon.jyxxe.com"
 
 original = socket.getaddrinfo
@@ -41,7 +42,12 @@ root = Path("runtime/deploy-secrets")
 credentials = json.loads((root / "credentials.json").read_text())
 context = ssl.create_default_context(cafile=root / "lan-root-ca.crt")
 context.load_default_certs()
-with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
+with httpx.Client(
+    verify=context,
+    trust_env=False,
+    timeout=30,
+    proxy="http://127.0.0.1:7897" if "--proxy" in sys.argv else None,
+) as client:
     if ip_only:
         config = client.get(desktop_url + "/api/v1/auth/config").json()
         assert config["issuer"] == auth_base + "/realms/xeonolab"
@@ -78,6 +84,18 @@ with httpx.Client(verify=context, trust_env=False, timeout=90) as client:
     r.raise_for_status()
     uid = r.headers["Location"].rsplit("/", 1)[1]
     try:
+        if "--legacy-user" in sys.argv:
+            mappings = base + "/users/" + uid + "/role-mappings/realm"
+            existing = client.get(mappings, headers=headers)
+            existing.raise_for_status()
+            client.request("DELETE", mappings, headers=headers, json=existing.json()).raise_for_status()
+            effective = client.get(mappings + "/composite", headers=headers)
+            effective.raise_for_status()
+            assert not any(role["name"] == "offline_access" for role in effective.json())
+            subprocess.run([sys.executable, "scripts/configure_persistent_login.py"], check=True)
+            effective = client.get(mappings + "/composite", headers=headers)
+            effective.raise_for_status()
+            assert any(role["name"] == "offline_access" for role in effective.json())
         role = client.get(base + "/roles/platform-admin", headers=headers)
         role.raise_for_status()
         client.post(
