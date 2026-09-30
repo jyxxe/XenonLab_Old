@@ -109,8 +109,8 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "migration_manifest": "bootstrap-v1-no-existing-data-migration",
-            "test_report": "37 tests; frontend build; D100M model smoke",
+            "migration_manifest": "additive-vector-chunker-version-column; reindex existing tables after activation",
+            "test_report": "55 tests; frontend build; three process failure-injection scenarios",
         }
     )
 )

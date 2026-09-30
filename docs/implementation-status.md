@@ -174,3 +174,6 @@ LOWER/UPPER/LEN/COALESCE/DATE/YEAR/MONTH。无 ORDER BY 时保持早停分页，
 新增 8 项测试（解析与拒绝、集合/文本运算符、函数、NULL 与类型语义、端点排序分页与注入拒绝）；
 全套 42 项测试与 Ruff 通过。EXISTS(...)、SEARCH TEXT、HAS_ATTACHMENT()/PATH_DEPTH() 尚未实现，
 待附件/路径/检索上下文接入执行计划。待评审与发布。
+
+
+Reviewed PR integration (2026-09-30): Query DSL extensions include explicit builtin arity validation and null AST serialization; triage only classifies duplicate_of/related_to without losing directional dependency semantics; failure-injection CI creates its temporary parent in a clean checkout; tokenizer chunks record chunker-v2 and enforce the content/context token limits. Integrated 55 tests, Ruff, OpenAPI generation and frontend build passed; three real process SIGKILL recovery scenarios passed. Existing vector rows are preserved by additive migration but excluded until reindex under the current version. Full DSL, PostgreSQL/Qdrant and full plan acceptance remain incomplete.
