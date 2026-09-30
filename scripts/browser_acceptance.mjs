@@ -24,9 +24,10 @@ function args() {
     else if (process.argv[i] === '--chrome') result.chrome = process.argv[++i];
     else if (process.argv[i] === '--certutil') result.certutil = process.argv[++i];
     else if (process.argv[i] === '--ca-nickname') result.caNickname = process.argv[++i];
+    else if (process.argv[i] === '--session-resilience') result.sessionResilience = true;
     else throw new Error(`Unknown argument ${process.argv[i]}`);
   }
-  if (!result.config || !result.out) throw new Error('Usage: node scripts/browser_acceptance.mjs --config PRIVATE.json --out DIR [--chrome /path/to/chrome]');
+  if (!result.config || !result.out) throw new Error('Usage: node scripts/browser_acceptance.mjs --config PRIVATE.json --out DIR [--chrome /path/to/chrome] [--session-resilience]');
   return result;
 }
 
@@ -124,7 +125,7 @@ async function main() {
   const options = args();
   activeOutDir = path.resolve(options.out);
   await fs.mkdir(activeOutDir, {recursive: true});
-  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], expectedPreAuth401: [], overflow: []};
+  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], injectedSessionResponses: [], expectedPreAuth401: [], overflow: []};
   const config = await privateConfig(options.config, options.caNickname);
   activeSecrets = [config.username, config.password].filter(Boolean);
   const chromePath = options.chrome || '/usr/bin/google-chrome';
@@ -151,6 +152,8 @@ async function main() {
   let cdp;
   let authenticated = false;
   const rowLoads = new Map();
+  const injectedNetworkIds = new Set();
+  let injectedStatus = 0;
   const report = activeReport;
   const redact = value => [config.username, config.password].filter(Boolean).reduce((text, secret) => text.replaceAll(secret, '[redacted]'), safeText(value));
   const check = (name, passed, detail = '') => report.checks.push({name, passed, ...(detail ? {detail: safeText(detail)} : {})});
@@ -182,9 +185,17 @@ async function main() {
         report.expectedPreAuth401.push({status: 401, url: url.pathname});
         return;
       }
-      if (event.response.status >= 400 && !event.response.url.startsWith('chrome-extension://')) {
+      if (event.response.status >= 400 && !event.response.url.startsWith('chrome-extension://') && !injectedNetworkIds.has(event.requestId)) {
         report.httpErrors.push({status: event.response.status, url: safeText(url.pathname)});
       }
+    });
+    cdp.on('Fetch.requestPaused', async event => {
+      const pathName = new URL(event.request.url).pathname;
+      if (injectedStatus && pathName === '/api/v1/auth/session/token') {
+        if (event.networkId) injectedNetworkIds.add(event.networkId);
+        report.injectedSessionResponses.push({status:injectedStatus,url:pathName});
+        await cdp.call('Fetch.fulfillRequest', {requestId:event.requestId,responseCode:injectedStatus,headers:[{name:'Content-Type',value:'application/json'}],body:Buffer.from(JSON.stringify({error:{code:injectedStatus===401?'DESKTOP_ACCESS_REVOKED':'AUTH_UNAVAILABLE',message:'acceptance injected response'}})).toString('base64')});
+      } else await cdp.call('Fetch.continueRequest', {requestId:event.requestId});
     });
     cdp.on('Network.loadingFinished', event => {
       const rowLoad = rowLoads.get(event.requestId);
@@ -239,6 +250,29 @@ async function main() {
     check('authenticated desktop and application dock', true);
     await measureOverflow('desktop');
     await screenshot('03-desktop.png');
+
+    if (options.sessionResilience) {
+      if (!await cdp.evaluate("(()=>{if(document.querySelector('.window'))return true;const b=document.querySelector('nav.dock button[title=\\\"系统面板\\\"]');if(!b)return false;b.click();return true})()")) throw new Error('Could not open a workspace window for session resilience checks.');
+      await waitFor(()=>cdp.evaluate("Boolean(document.querySelector('.window'))"),'workspace window before session resilience checks');
+      await cdp.call('Fetch.enable',{patterns:[{urlPattern:'*://*/api/v1/auth/session/token',requestStage:'Request'}]});
+      injectedStatus=503;
+      await cdp.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+      await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\\\"session-status\\\"][data-phase=\\\"retrying\\\"]')"),'temporary session recovery status');
+      const preserved503=await cdp.evaluate("Boolean(document.querySelector('nav.dock')&&document.querySelector('.window'))");
+      check('temporary 503 preserves dock and open windows',preserved503,'Injected only at /api/v1/auth/session/token.');
+      await screenshot('03a-session-503-preserved.png');
+      injectedStatus=401;
+      await cdp.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+      await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\\\"session-status\\\"][data-phase=\\\"reauthorize\\\"]')"),'reauthorization state after session 401');
+      const preserved401=await cdp.evaluate("Boolean(document.querySelector('nav.dock')&&document.querySelector('.window')&&document.querySelector('[data-testid=\\\"session-reauthorize\\\"]'))");
+      check('session 401 keeps workspace and offers explicit reauthorization',preserved401,'Injected only at /api/v1/auth/session/token.');
+      await screenshot('03b-session-401-preserved.png');
+      injectedStatus=0;
+      await cdp.call('Fetch.disable');
+      await cdp.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+      const resumed=await waitFor(()=>cdp.evaluate("document.querySelector('[data-testid=\\\"session-status\\\"][data-phase=\\\"connected\\\"]')"),'session recovery after removing injected responses').catch(()=>false);
+      check('normal session endpoint resumes after injection is removed',Boolean(resumed),'Intercept is removed and regular response handling remains enabled.');
+    }
 
     if (!await cdp.evaluate("(()=>{const e=document.querySelector('button[title=\"LaunchPad\"]');if(!e)return false;e.click();return true})()")) throw new Error('LaunchPad control not found.');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), 'LaunchPad');

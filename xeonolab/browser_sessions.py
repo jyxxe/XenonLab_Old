@@ -47,11 +47,14 @@ def install(app):
             with httpx.Client(verify=context, trust_env=False, timeout=20) as client:
                 result = client.post(endpoint, data={"client_id": "desktop", **data})
             if result.status_code == 400:
+                body = result.json()
                 if data.get("grant_type") == "authorization_code":
-                    if "Offline tokens not allowed" in result.json().get("error_description", ""):
+                    if "Offline tokens not allowed" in body.get("error_description", ""):
                         raise APIError(403, "OFFLINE_ACCESS_DENIED", "账号尚未启用持续登录权限，请联系管理员")
                     raise APIError(401, "LOGIN_CODE_REJECTED", "登录授权码无效，请重新开始登录")
-                raise APIError(401, "SESSION_REVOKED", "login has been revoked; sign in again")
+                if body.get("error") == "invalid_grant":
+                    raise APIError(401, "SESSION_REVOKED", "login has been revoked; sign in again")
+                raise APIError(503, "AUTH_UNAVAILABLE", "identity provider could not refresh the session")
             result.raise_for_status()
             body = result.json()
             claims = jwt.decode(
@@ -62,7 +65,9 @@ def install(app):
                 audience=app.state.settings.audience,
                 options={"require": ["exp", "sub", "iss", "aud"]},
             )
-            app.state.authorization_resolver(body["access_token"]).require("desktop:read")
+            actor = app.state.authorization_resolver(body["access_token"])
+            if "desktop:read" not in actor.scopes:
+                raise APIError(401, "DESKTOP_ACCESS_REVOKED", "desktop permission revoked")
             return body, claims
         except (httpx.HTTPError, OSError, ValueError, KeyError, jwt.PyJWTError):
             raise APIError(503, "AUTH_UNAVAILABLE", "identity service unavailable") from None
@@ -123,23 +128,49 @@ def install(app):
             if not row:
                 raise APIError(401, "NO_SESSION", "sign in required")
             if row["expires"] > time.time() + 60:
-                actor = app.state.authorization_resolver(row["access"])
-                if "desktop:read" not in actor.scopes:
-                    raise APIError(401, "DESKTOP_ACCESS_REVOKED", "desktop permission revoked")
-                return output(row["access"], row["expires"], cookie)
-            tokens, claims = exchange({"grant_type": "refresh_token", "refresh_token": row["refresh"]})
-            if claims["sub"] != row["subject"]:
-                raise APIError(401, "INVALID_SESSION", "identity changed")
-            db.execute(
-                "UPDATE sessions SET refresh=?,access=?,expires=? WHERE id=?",
-                (
-                    tokens.get("refresh_token", row["refresh"]),
-                    tokens["access_token"],
-                    claims["exp"],
-                    session_id,
-                ),
-            )
-            return output(tokens["access_token"], claims["exp"], cookie)
+                try:
+                    actor = app.state.authorization_resolver(row["access"])
+                except APIError as exc:
+                    if exc.status not in (401, 403):
+                        raise
+                    revoked = APIError(401, "DESKTOP_ACCESS_REVOKED", "desktop permission revoked")
+                else:
+                    revoked = (
+                        APIError(401, "DESKTOP_ACCESS_REVOKED", "desktop permission revoked")
+                        if "desktop:read" not in actor.scopes
+                        else None
+                    )
+                if revoked:
+                    db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+                else:
+                    return output(row["access"], row["expires"], cookie)
+            else:
+                try:
+                    tokens, claims = exchange({"grant_type": "refresh_token", "refresh_token": row["refresh"]})
+                except APIError as exc:
+                    if exc.code != "SESSION_REVOKED":
+                        raise
+                    revoked = exc
+                else:
+                    revoked = (
+                        APIError(401, "INVALID_SESSION", "identity changed")
+                        if claims["sub"] != row["subject"]
+                        else None
+                    )
+                    if not revoked:
+                        db.execute(
+                            "UPDATE sessions SET refresh=?,access=?,expires=? WHERE id=?",
+                            (
+                                tokens.get("refresh_token", row["refresh"]),
+                                tokens["access_token"],
+                                claims["exp"],
+                                session_id,
+                            ),
+                        )
+                        return output(tokens["access_token"], claims["exp"], cookie)
+                if revoked:
+                    db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        raise revoked
 
     @app.post("/api/v1/auth/session/logout")
     def logout(request: Request):

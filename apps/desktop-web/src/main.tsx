@@ -1,7 +1,8 @@
 import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './style.css';
-import {login,callback,sessionToken,logout} from './auth';
+import {login,callback,sessionToken,logout,SessionFailure} from './auth';
+import {initialSessionState,transitionSession,mayUseCachedToken} from './session-state.js';
 import {Settings} from './Settings';
 import {defaultPreferences,Preferences} from './DesktopPreferences';
 import {Work} from './Work';
@@ -18,22 +19,24 @@ function Desktop(){
  useEffect(()=>{if(libraryView){const handler=(event:MessageEvent)=>{if(event.source!==parent||!['https://xenon.lan','https://192.168.0.101:9443'].includes(event.origin)||event.data?.type!=='auth.session_changed'||typeof event.data.access_token!=='string')return;setToken(event.data.access_token)};addEventListener('message',handler);return()=>removeEventListener('message',handler)}},[]);
  const [apps,setApps]=useState<App[]>([]), [windows,setWindows]=useState<Window[]>([]);
  const [token,setToken]=useState(''), [error,setError]=useState(''), [notice,setNotice]=useState('');
+ const [sessionStatus,setSessionStatus]=useState(initialSessionState);
  const [preferences,setPreferences]=useState<Preferences>(defaultPreferences),[dock,setDock]=useState<string[]>([]);
  const [connected,setConnected]=useState(false),[launchpad,setLaunchpad]=useState(false),[persistent,setPersistent]=useState(false),[launchFilter,setLaunchFilter]=useState('');
- useEffect(()=>{callback().then(async result=>result||await sessionToken()).then(result=>{if(result){setPersistent(true);setToken(result.token)}}).catch(e=>setError(String(e)))},[]);
- useEffect(()=>{if(!persistent)return;const renew=()=>sessionToken().then(result=>{if(result)setToken(result.token);else{setToken('');setConnected(false);setPersistent(false);setNotice('登录已撤销，请重新登录')}}).catch(e=>setNotice(String(e)));const timer=setInterval(renew,60000);const visible=()=>{if(document.visibilityState==='visible')renew()};document.addEventListener('visibilitychange',visible);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible)}},[persistent]);
+ const transition=(event:{type:string;message?:string})=>setSessionStatus(old=>transitionSession(old,event));
+ useEffect(()=>{let active=true;callback().then(async result=>result||await sessionToken()).then(result=>{if(!active)return;if(result){setPersistent(true);setToken(result.token);transition({type:'restored'})}else transition({type:'no-session'})}).catch(e=>{if(!active)return;const failure=e instanceof SessionFailure?e:new SessionFailure('temporary',String(e));transition({type:failure.kind==='reauthorize'?'reauthorization-required':'temporary-failure',message:failure.message});setError(failure.message)});return()=>{active=false}},[]);
+ useEffect(()=>{if(!persistent&&sessionStatus.phase!=='retrying')return;let busy=false;const renew=async()=>{if(busy)return;busy=true;try{const result=await sessionToken();if(result){setPersistent(true);setToken(result.token);transition({type:'restored'})}else if(persistent){transition({type:'reauthorization-required',message:'登录凭据已失效，需要重新授权'})}else transition({type:'no-session'})}catch(e){const failure=e instanceof SessionFailure?e:new SessionFailure('temporary',String(e));transition({type:failure.kind==='reauthorize'?'reauthorization-required':'temporary-failure',message:failure.message})}finally{busy=false}};const timer=setInterval(renew,sessionStatus.phase==='retrying'?12000:60000);const visible=()=>{if(document.visibilityState==='visible')void renew()};document.addEventListener('visibilitychange',visible);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible)}},[persistent,sessionStatus.phase]);
  useEffect(()=>{if(token&&!connected)connect()},[token]);
  async function apiPage<T=any>(path:string, init:RequestInit={}):Promise<APIPage<T>>{
-   const current=persistent?await sessionToken():{token};if(!current)throw Error('登录已撤销，请重新登录');
+   const current=await accessToken();if(!current)throw Error('需要登录后访问工作空间');
    const headers=new Headers(init.headers);if(!headers.has('Content-Type'))headers.set('Content-Type','application/json');headers.set('Authorization',`Bearer ${current.token}`);
    const response=await fetch(`/api/v1${path}`, {...init,headers});
    const result=await response.json();
-   if(!response.ok) throw Error(result.error?.message || `HTTP ${response.status}`);
+   if(!response.ok){if(response.status===401)transition({type:'reauthorization-required',message:'工作空间需要重新授权'});throw Error(result.error?.message || `HTTP ${response.status}`)}
    return {data:result.data,meta:result.meta||{}};
  }
  async function api<T=any>(path:string, init:RequestInit={}):Promise<T>{return (await apiPage<T>(path,init)).data}
  async function apiRaw(path:string, init:RequestInit={}):Promise<Response>{
-   const current=persistent?await sessionToken():{token};if(!current)throw Error('登录已撤销，请重新登录');
+   const current=await accessToken();if(!current)throw Error('需要登录后访问工作空间');
    const headers=new Headers(init.headers);
    if(typeof FormData!=='undefined'&&init.body instanceof FormData)headers.delete('Content-Type');
    else if(init.body&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');
@@ -41,9 +44,15 @@ function Desktop(){
    const response=await fetch(`/api/v1${path}`,{...init,headers});
    if(!response.ok){
      const result=await response.clone().json().catch(()=>null);
+     if(response.status===401)transition({type:'reauthorization-required',message:'工作空间需要重新授权'});
      throw Error(result?.error?.message||result?.detail?.[0]?.msg||`HTTP ${response.status}`);
    }
    return response;
+ }
+ async function accessToken(){
+   if(!persistent)return token?{token}:null;
+   try{const current=await sessionToken();if(current){setToken(current.token);return current}const failure=new SessionFailure('reauthorize','登录凭据已失效，需要重新授权');transition({type:'reauthorization-required',message:failure.message});throw failure}
+   catch(e){const failure=e instanceof SessionFailure?e:new SessionFailure('temporary',String(e));transition({type:failure.kind==='reauthorize'?'reauthorization-required':'temporary-failure',message:failure.message});if(mayUseCachedToken(failure.kind,Boolean(token)))return {token};throw failure}
  }
  function open(app:App){
    setWindows(old=>{
@@ -59,7 +68,7 @@ function Desktop(){
  }
  async function connect(){
    try {const available=await refreshApps();const [layout,prefs]=await Promise.all([api('/users/me/layout'),api('/users/me/preferences')]);setWindows((layout.windows||[]).filter((w:Window)=>available.some(a=>a.id===w.app_id)));setDock(layout.dock||[]);setPreferences(prefs);setConnected(true);setError('');}
-   catch(e){setError(String(e));}
+   catch(e){setError(String(e));if(String(e).includes('401')||String(e).includes('授权'))transition({type:'reauthorization-required',message:String(e)});else transition({type:'temporary-failure',message:String(e)});}
  }
  useEffect(()=>{
    const media=matchMedia('(prefers-color-scheme: dark)');
@@ -96,7 +105,7 @@ function Desktop(){
  return <main>
    <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><MenuClock timezone={preferences.timezone}/>{connected&&<button onClick={async()=>{try{if(persistent)await logout();setPersistent(false);setToken('');setConnected(false);setWindows([])}catch(e){setError(String(e))}}}>退出登录</button>}</header>
    {!connected&&<section className="intro"><small>YOUR KNOWLEDGE WORKSPACE</small><h1>让知识，有处可循。</h1><p>统一桌面 · 可追溯数据 · 受控工具</p></section>}
-   {!connected?<section className="login"><h2>连接工作空间</h2><p>通过统一身份服务登录。</p><button onClick={()=>login().catch(e=>setError(String(e)))}>登录 XeonoLab</button><details><summary>API 访问令牌</summary><input type="password" aria-label="访问令牌" value={token} onChange={e=>setToken(e.target.value)} placeholder="OIDC access token"/><button onClick={connect}>连接</button></details><p className="error">{error}</p></section>:
+   {!connected?<section className="login"><h2>连接工作空间</h2><p>通过统一身份服务登录。</p>{sessionStatus.phase==='restoring'?<p data-testid="session-status" data-phase="restoring" role="status">正在恢复工作空间…</p>:sessionStatus.phase==='retrying'?<><p data-testid="session-status" data-phase="retrying" role="status">{sessionStatus.message}，工作区将保留。</p><button data-testid="session-retry" onClick={()=>{transition({type:'restore-started'});sessionToken().then(result=>{if(result){setPersistent(true);setToken(result.token);transition({type:'restored'})}else transition({type:'no-session'})}).catch(e=>transition({type:e instanceof SessionFailure&&e.kind==='reauthorize'?'reauthorization-required':'temporary-failure',message:String(e)}))}}>重试恢复</button><button data-testid="session-reauthorize" onClick={()=>login().catch(e=>setError(String(e)))}>重新授权登录</button><button data-testid="session-logout" onClick={async()=>{try{await logout()}catch{}setPersistent(false);setToken('');setWindows([]);setConnected(false);transition({type:'user-logout'})}}>退出登录</button></>:sessionStatus.phase==='reauthorize'?<><p data-testid="session-status" data-phase="reauthorize" role="alert">{sessionStatus.message}；当前工作区已保留。</p><button data-testid="session-reauthorize" onClick={()=>login().catch(e=>setError(String(e)))}>重新授权登录</button><button data-testid="session-logout" onClick={async()=>{try{await logout()}catch{}setPersistent(false);setToken('');setWindows([]);setConnected(false);transition({type:'user-logout'})}}>退出登录</button></>:<><button onClick={()=>login().catch(e=>setError(String(e)))}>登录 XeonoLab</button><details><summary>API 访问令牌</summary><input type="password" aria-label="访问令牌" value={token} onChange={e=>setToken(e.target.value)} placeholder="OIDC access token"/><button onClick={connect}>连接</button></details></>}<p className="error">{error}</p></section>:
    <>{launchpad&&<section className="launchpad" aria-label="LaunchPad"><button className="launchpad-close" onClick={()=>setLaunchpad(false)}>关闭 LaunchPad</button><h2>LaunchPad</h2><input className="launchpad-search" aria-label="搜索应用" placeholder="搜索应用" value={launchFilter} onChange={e=>setLaunchFilter(e.target.value)}/><div>{apps.filter(app=>(app.title+' '+app.id).toLowerCase().includes(launchFilter.toLowerCase())).map(app=><button key={app.id} onClick={()=>{open(app);setLaunchpad(false)}}><b>{app.icon}</b><span>{app.title}</span></button>)}</div>{!apps.some(app=>(app.title+' '+app.id).toLowerCase().includes(launchFilter.toLowerCase()))&&<p className="launchpad-empty">没有匹配的应用</p>}</section>}
    {windows.filter(w=>!w.minimized).map(w=>{
      const app=apps.find(a=>a.id===w.app_id);if(!app)return null;
@@ -110,6 +119,8 @@ function Desktop(){
    })}
    {(preferences.widgets||[]).length>0&&<div className="widgets">{(preferences.widgets||[]).includes('clock')&&<ClockWidget timezone={preferences.timezone}/>}{(preferences.widgets||[]).includes('status')&&<StatusWidget apiPage={apiPage} onOpen={()=>{const app=apps.find(a=>a.id==='dashboard');if(app)open(app)}}/>}</div>}
    {!libraryView&&<nav className="dock" aria-label="应用程序"><button onClick={()=>setLaunchpad(!launchpad)} title="LaunchPad"><b>▦</b><span>LaunchPad</span></button>{[...apps].sort((a,b)=>{const ai=dock.indexOf(a.id),bi=dock.indexOf(b.id);return (ai<0?999:ai)-(bi<0?999:bi)}).map(app=><button key={app.id} onClick={()=>open(app)} title={app.title}><b>{app.icon}</b><span>{app.title}</span></button>)}{windows.filter(w=>w.minimized).map(w=><button key={w.id} onClick={()=>update(w.id,{minimized:false})}>{w.title} ↗</button>)}</nav>}</>}
+   <output hidden data-testid="session-status" data-phase={sessionStatus.phase}/>
+   {connected&&(sessionStatus.phase==='retrying'||sessionStatus.phase==='reauthorize')&&<aside data-testid="session-status-banner" data-phase={sessionStatus.phase} role={sessionStatus.phase==='reauthorize'?'alert':'status'}>{sessionStatus.message}；当前工作区已保留。{sessionStatus.phase==='retrying'?<button data-testid="session-retry" onClick={()=>sessionToken().then(result=>{if(result){setToken(result.token);transition({type:'restored'})}}).catch(e=>transition({type:e instanceof SessionFailure&&e.kind==='reauthorize'?'reauthorization-required':'temporary-failure',message:String(e)}))}>重试</button>:<button data-testid="session-reauthorize" onClick={()=>login().catch(e=>setError(String(e)))}>重新授权登录</button>}</aside>}
    {notice&&<aside onClick={()=>setNotice('')}>{notice}</aside>}
  </main>
 }
