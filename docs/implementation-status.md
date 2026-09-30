@@ -140,3 +140,6 @@ profile fields and triggered UPDATE_PROFILE. The provider now preserves the full
 existing profile when changing credential version; a regression asserts names,
 email, existing attributes, password reset and logout ordering. Thirty-two tests
 passed; the disposable real-account verification will be rerun after activation.
+
+
+Desktop settings expansion (2026-09-30): app registry now exposes revision-checked update/delete, administrator audit records, canonical origins and per-app sandbox controls. Per-account theme, accent, wallpaper and IANA timezone preferences persist across process restarts. The settings window contains app management and desktop preferences; restored windows reattach resize observation. Validation: 34 tests passed, TypeScript/Vite production build passed, OpenAPI regenerated. Browser visual acceptance and the full plan remain incomplete.

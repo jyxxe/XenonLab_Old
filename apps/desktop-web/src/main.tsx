@@ -3,18 +3,19 @@ import {createRoot} from 'react-dom/client';
 import './style.css';
 import {login,callback,sessionToken,logout} from './auth';
 import {Settings} from './Settings';
+import {defaultPreferences,Preferences} from './DesktopPreferences';
 import {Work} from './Work';
 import {Knowledge} from './Knowledge';
-type App = {id:string; title:string; origin:string; entry:string; icon:string; default_size:[number,number]; singleton:boolean};
+type App = {id:string; title:string; origin:string; entry:string; icon:string; default_size:[number,number]; singleton:boolean;permissions?:string[];sandbox?:{allow_scripts:boolean;allow_forms:boolean;allow_downloads:boolean}};
 type Window = {id:string; app_id:string; title:string; x:number; y:number; width:number; height:number; minimized:boolean};
-const builtins:App[]=[{id:'knowledge',title:'知识库',icon:'▤',origin:location.origin,entry:'/',default_size:[1100,740],singleton:true},{id:'settings',title:'系统设置',icon:'⚙',origin:location.origin,entry:'/',default_size:[850,680],singleton:true},{id:'work',title:'任务中心',icon:'✓',origin:location.origin,entry:'/',default_size:[1000,700],singleton:true}];
+const builtins:App[]=[{id:'knowledge',title:'知识库',permissions:['xelibrary:read'],icon:'▤',origin:location.origin,entry:'/',default_size:[1100,740],singleton:true},{id:'settings',title:'系统设置',icon:'⚙',origin:location.origin,entry:'/',default_size:[850,680],singleton:true},{id:'work',title:'任务中心',permissions:['dev:read'],icon:'✓',origin:location.origin,entry:'/',default_size:[1000,700],singleton:true}];
 const libraryView=location.hostname==='library.xenon.lan';
 const allowedMessages = new Set(['app.ready','app.request_resize','app.set_title','app.open_app','app.notify']);
 function Desktop(){
  useEffect(()=>{if(libraryView){const handler=(event:MessageEvent)=>{if(event.source!==parent||!['https://xenon.lan','https://192.168.0.101:9443'].includes(event.origin)||event.data?.type!=='auth.session_changed'||typeof event.data.access_token!=='string')return;setToken(event.data.access_token)};addEventListener('message',handler);return()=>removeEventListener('message',handler)}},[]);
  const [apps,setApps]=useState<App[]>([]), [windows,setWindows]=useState<Window[]>([]);
  const [token,setToken]=useState(''), [error,setError]=useState(''), [notice,setNotice]=useState('');
- const [query,setQuery]=useState('FROM "/**" LIMIT 20'), [results,setResults]=useState<unknown[]>([]);
+ const [preferences,setPreferences]=useState<Preferences>(defaultPreferences),[dock,setDock]=useState<string[]>([]);
  const [connected,setConnected]=useState(false),[launchpad,setLaunchpad]=useState(false),[persistent,setPersistent]=useState(false);
  useEffect(()=>{callback().then(async result=>result||await sessionToken()).then(result=>{if(result){setPersistent(true);setToken(result.token)}}).catch(e=>setError(String(e)))},[]);
  useEffect(()=>{if(!persistent)return;const renew=()=>sessionToken().then(result=>{if(result)setToken(result.token);else{setToken('');setConnected(false);setPersistent(false);setNotice('登录已撤销，请重新登录')}}).catch(e=>setNotice(String(e)));const timer=setInterval(renew,60000);const visible=()=>{if(document.visibilityState==='visible')renew()};document.addEventListener('visibilitychange',visible);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible)}},[persistent]);
@@ -33,21 +34,37 @@ function Desktop(){
      return [...old,{id:crypto.randomUUID(),app_id:app.id,title:app.title,x:60+old.length*24,y:70+old.length*24,width:Math.min(app.default_size[0],innerWidth-80),height:Math.min(app.default_size[1],innerHeight-200),minimized:false}];
    });
  }
+ async function refreshApps(){
+   const [data,me]=await Promise.all([api('/apps'),api('/users/me')]);
+   const available=[...builtins.filter(a=>(a.permissions||[]).every(scope=>me.scopes.includes(scope))),...data.filter((a:App)=>!builtins.some(b=>b.id===a.id))];
+   setApps(available);setWindows(old=>old.filter(w=>available.some(a=>a.id===w.app_id)));return available;
+ }
  async function connect(){
-   try {const data=await api('/apps'); setApps([...builtins,...data.filter((a:App)=>!builtins.some(b=>b.id===a.id))]);const layout=await api('/users/me/layout');setWindows(layout.windows || []);setConnected(true);setError('');}
+   try {const available=await refreshApps();const [layout,prefs]=await Promise.all([api('/users/me/layout'),api('/users/me/preferences')]);setWindows((layout.windows||[]).filter((w:Window)=>available.some(a=>a.id===w.app_id)));setDock(layout.dock||[]);setPreferences(prefs);setConnected(true);setError('');}
    catch(e){setError(String(e));}
  }
+ useEffect(()=>{
+   const media=matchMedia('(prefers-color-scheme: dark)');
+   const apply=()=>{document.documentElement.dataset.theme=preferences.theme==='system'?(media.matches?'dark':'light'):preferences.theme;document.documentElement.dataset.accent=preferences.accent;document.documentElement.dataset.wallpaper=preferences.wallpaper};
+   apply();media.addEventListener('change',apply);return()=>media.removeEventListener('change',apply);
+ },[preferences]);
+ useEffect(()=>{
+   const observer=new ResizeObserver(entries=>{setWindows(old=>old.map(win=>{const entry=entries.find(e=>(e.target as HTMLElement).dataset.windowId===win.id);if(!entry)return win;const rect=entry.target.getBoundingClientRect();return Math.abs(rect.width-win.width)>1||Math.abs(rect.height-win.height)>1?{...win,width:Math.round(rect.width),height:Math.round(rect.height)}:win}))});
+   document.querySelectorAll('.window').forEach(element=>observer.observe(element));return()=>observer.disconnect();
+ },[windows.map(w=>`${w.id}:${w.minimized}`).join(',')]);
+ useEffect(()=>{windows.forEach(w=>{const app=apps.find(a=>a.id===w.app_id);const frame=document.getElementById('frame-'+w.id) as HTMLIFrameElement|null;if(!app||!frame)return;frame.contentWindow?.postMessage({type:'theme.changed',theme:preferences.theme,accent:preferences.accent},app.origin);if(app.id==='xelibrary'&&app.origin==='https://library.xenon.lan')frame.contentWindow?.postMessage({type:'auth.session_changed',access_token:token},app.origin)})},[token,preferences]);
  useEffect(()=>{
    const handler=(event:MessageEvent)=>{
      const win=windows.find(w=>{const app=apps.find(a=>a.id===w.app_id);const frame=document.getElementById(`frame-${w.id}`) as HTMLIFrameElement|null;return app?.origin===event.origin && frame?.contentWindow===event.source});
      if(!win || !event.data || typeof event.data!=='object' || !allowedMessages.has(event.data.type)) return;
+     if(event.data.type==='app.ready'){const app=apps.find(a=>a.id===win.app_id);if(app)(event.source as globalThis.Window)?.postMessage({type:'desktop.ready',theme:preferences.theme,accent:preferences.accent},app.origin)};
      if(event.data.type==='app.set_title' && typeof event.data.title==='string') setWindows(ws=>ws.map(w=>w.id===win.id?{...w,title:event.data.title.slice(0,80)}:w));
      if(event.data.type==='app.request_resize') setWindows(ws=>ws.map(w=>w.id===win.id?{...w,width:Math.max(320,Math.min(Number(event.data.width)||w.width,innerWidth-40)),height:Math.max(200,Math.min(Number(event.data.height)||w.height,innerHeight-140))}:w));
      if(event.data.type==='app.notify' && typeof event.data.message==='string')setNotice(event.data.message.slice(0,200));
      if(event.data.type==='app.open_app'){const app=apps.find(a=>a.id===event.data.app_id);if(app)open(app);}
    };
    addEventListener('message',handler);return()=>removeEventListener('message',handler);
- },[windows,apps]);
+ },[windows,apps,preferences]);
  const update=(id:string,patch:Partial<Window>)=>setWindows(ws=>ws.map(w=>w.id===id?{...w,...patch}:w));
  function drag(e:React.PointerEvent,id:string){
    if((e.target as HTMLElement).closest('button'))return;
@@ -57,15 +74,14 @@ function Desktop(){
    const end=()=>{removeEventListener('pointermove',move);removeEventListener('pointerup',end)};
    addEventListener('pointermove',move);addEventListener('pointerup',end);
  }
- async function search(){try{const data=await api('/query',{method:'POST',body:JSON.stringify({expression:query})});setResults(data);setError('')}catch(e){setError(String(e))}}
  if(libraryView&&connected)return <Knowledge api={api}/>;
  return <main>
-   <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><time>{new Date().toLocaleDateString('zh-CN')}</time>{connected&&<button onClick={async()=>{try{if(persistent)await logout();setPersistent(false);setToken('');setConnected(false);setWindows([])}catch(e){setError(String(e))}}}>退出登录</button>}</header>
+   <header><strong>✦ XeonoLab</strong><span>知识 · 模型 · 工作空间</span><a href="https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues" target="_blank" rel="noopener noreferrer">Issues / 协作</a><time>{new Date().toLocaleDateString('zh-CN',{timeZone:preferences.timezone==='system'?undefined:preferences.timezone})}</time>{connected&&<button onClick={async()=>{try{if(persistent)await logout();setPersistent(false);setToken('');setConnected(false);setWindows([])}catch(e){setError(String(e))}}}>退出登录</button>}</header>
    {!connected&&<section className="intro"><small>YOUR KNOWLEDGE WORKSPACE</small><h1>让知识，有处可循。</h1><p>统一桌面 · 可追溯数据 · 受控工具</p></section>}
    {!connected?<section className="login"><h2>连接工作空间</h2><p>通过统一身份服务登录。</p><button onClick={()=>login().catch(e=>setError(String(e)))}>登录 XeonoLab</button><details><summary>API 访问令牌</summary><input type="password" aria-label="访问令牌" value={token} onChange={e=>setToken(e.target.value)} placeholder="OIDC access token"/><button onClick={connect}>连接</button></details><p className="error">{error}</p></section>:
    <>{launchpad&&<section className="launchpad" aria-label="LaunchPad"><button className="launchpad-close" onClick={()=>setLaunchpad(false)}>关闭 LaunchPad</button><h2>LaunchPad</h2><div>{apps.map(app=><button key={app.id} onClick={()=>{open(app);setLaunchpad(false)}}><b>{app.icon}</b><span>{app.title}</span></button>)}</div></section>}
-   {windows.filter(w=>!w.minimized).map(w=>{const app=apps.find(a=>a.id===w.app_id);if(!app)return null;return <section className="window" key={w.id} style={{left:w.x,top:w.y,width:w.width,height:w.height}}><div className="bar" onPointerDown={e=>drag(e,w.id)}><button className="close" aria-label="关闭" onClick={()=>setWindows(ws=>ws.filter(x=>x.id!==w.id))}/><button className="min" aria-label="最小化" onClick={()=>update(w.id,{minimized:true})}/><button className="max" aria-label="最大化" onClick={()=>update(w.id,{x:20,y:45,width:innerWidth-40,height:innerHeight-140})}/><span>{w.title}</span></div>{builtins.some(b=>b.id===app.id)?<div className="window-body">{app.id==='knowledge'?<Knowledge api={api}/>:app.id==='work'?<Work api={api}/>:<Settings api={api} saveLayout={async()=>{await api('/users/me/layout',{method:'PUT',body:JSON.stringify({dock:apps.map(a=>a.id),windows})})}}/>}</div>:<iframe onLoad={event=>{if(app.id==='xelibrary')(event.currentTarget as HTMLIFrameElement).contentWindow?.postMessage({type:'auth.session_changed',access_token:token},app.origin)}} id={`frame-${w.id}`} title={w.title} src={new URL(app.entry,app.origin).href} sandbox="allow-scripts allow-forms allow-same-origin" referrerPolicy="no-referrer"/>}</section>})}
-   {!libraryView&&<nav className="dock" aria-label="应用程序"><button onClick={()=>setLaunchpad(!launchpad)} title="LaunchPad"><b>▦</b><span>LaunchPad</span></button>{apps.map(app=><button key={app.id} onClick={()=>open(app)} title={app.title}><b>{app.icon}</b><span>{app.title}</span></button>)}{windows.filter(w=>w.minimized).map(w=><button key={w.id} onClick={()=>update(w.id,{minimized:false})}>{w.title} ↗</button>)}</nav>}</>}
+   {windows.filter(w=>!w.minimized).map(w=>{const app=apps.find(a=>a.id===w.app_id);if(!app)return null;return <section className="window" key={w.id} data-window-id={w.id} onPointerDown={()=>setWindows(old=>[...old.filter(item=>item.id!==w.id),old.find(item=>item.id===w.id)!])} style={{left:w.x,top:w.y,width:w.width,height:w.height,zIndex:10+windows.findIndex(item=>item.id===w.id)}}><div className="bar" onPointerDown={e=>drag(e,w.id)}><button className="close" aria-label="关闭" onClick={()=>setWindows(ws=>ws.filter(x=>x.id!==w.id))}/><button className="min" aria-label="最小化" onClick={()=>update(w.id,{minimized:true})}/><button className="max" aria-label="最大化" onClick={()=>update(w.id,{x:20,y:45,width:innerWidth-40,height:innerHeight-140})}/><span>{w.title}</span></div>{builtins.some(b=>b.id===app.id)?<div className="window-body">{app.id==='knowledge'?<Knowledge api={api}/>:app.id==='work'?<Work api={api}/>:<Settings api={api} preferences={preferences} applyPreferences={setPreferences} refreshApps={async()=>{await refreshApps()}} saveLayout={async()=>{await api('/users/me/layout',{method:'PUT',body:JSON.stringify({dock:dock.length?dock.filter(id=>apps.some(a=>a.id===id)):apps.map(a=>a.id),windows})})}}/>}</div>:<iframe onLoad={event=>{if(app.id==='xelibrary'&&app.origin==='https://library.xenon.lan')(event.currentTarget as HTMLIFrameElement).contentWindow?.postMessage({type:'auth.session_changed',access_token:token},app.origin)}} id={`frame-${w.id}`} title={w.title} src={new URL(app.entry,app.origin).href} sandbox={['allow-same-origin',...(app.sandbox?.allow_scripts===false?[]:['allow-scripts']),...(app.sandbox?.allow_forms===false?[]:['allow-forms']),...(app.sandbox?.allow_downloads?['allow-downloads']:[])].join(' ')} referrerPolicy="no-referrer"/>}</section>})}
+   {!libraryView&&<nav className="dock" aria-label="应用程序"><button onClick={()=>setLaunchpad(!launchpad)} title="LaunchPad"><b>▦</b><span>LaunchPad</span></button>{[...apps].sort((a,b)=>{const ai=dock.indexOf(a.id),bi=dock.indexOf(b.id);return (ai<0?999:ai)-(bi<0?999:bi)}).map(app=><button key={app.id} onClick={()=>open(app)} title={app.title}><b>{app.icon}</b><span>{app.title}</span></button>)}{windows.filter(w=>w.minimized).map(w=><button key={w.id} onClick={()=>update(w.id,{minimized:false})}>{w.title} ↗</button>)}</nav>}</>}
    {notice&&<aside onClick={()=>setNotice('')}>{notice}</aside>}
  </main>
 }
