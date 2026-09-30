@@ -23,6 +23,27 @@ async function waitFor(fn,label){
   while(Date.now()<until){try{const result=await fn();if(result)return result}catch{}await sleep(100)}
   throw new Error(`Timed out waiting for ${label}`);
 }
+function waitForExit(child,timeoutMs){
+  if(child.exitCode!==null||child.signalCode!==null)return Promise.resolve(true);
+  return new Promise(resolve=>{
+    const onExit=()=>{clearTimeout(timer);resolve(true)};
+    const timer=setTimeout(()=>{child.off('exit',onExit);resolve(false)},timeoutMs);
+    child.once('exit',onExit);
+  });
+}
+async function stopProcess(child){
+  if(child.exitCode!==null||child.signalCode!==null)return;
+  child.kill('SIGTERM');
+  if(await waitForExit(child,3000))return;
+  child.kill('SIGKILL');
+  if(!await waitForExit(child,3000))throw new Error('Chrome did not exit after SIGKILL');
+}
+async function removeTree(directory){
+  for(let attempt=0;;attempt++){
+    try{await fs.rm(directory,{recursive:true,force:true});return}
+    catch(error){if(!['ENOTEMPTY','EBUSY'].includes(error.code)||attempt>=5)throw error;await sleep(100*(attempt+1))}
+  }
+}
 
 class CDP{
   constructor(socket){this.socket=socket;this.id=0;this.pending=new Map();socket.addEventListener('message',event=>{
@@ -102,8 +123,17 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
     await waitFor(()=>cdp.evaluate("document.body.innerText.includes('已到任务列表末尾')"),'explicit cursor end');
     const ended=await cdp.evaluate("({more:[...document.querySelectorAll('button')].some(button=>button.textContent.includes('加载更多')),end:document.body.innerText.includes('已到任务列表末尾')})");
     assert.equal(ended.more,false);assert.equal(ended.end,true);
+    await cdp.evaluate("(() => {const input=document.querySelector('input[aria-label=\"筛选已加载任务\"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'');input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));window.workFixture.cursorMode='loop';[...document.querySelectorAll('button')].find(button=>button.textContent==='刷新队列')?.click()})()");
+    await waitFor(()=>cdp.evaluate('window.workFixture.refreshCount===3 && document.querySelectorAll("tbody tr").length===100 && [...document.querySelectorAll("button")].some(button=>button.textContent.includes("加载更多任务"))'),'loop fixture refresh');
+    await cdp.evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent.includes('加载更多'))?.click()");
+    await waitFor(()=>cdp.evaluate("document.body.innerText.includes('游标重复')"),'repeated cursor guard');
+    const loop=await cdp.evaluate("({more:[...document.querySelectorAll('button')].some(button=>button.textContent.includes('加载更多')),message:document.body.innerText.includes('游标重复')})");
+    assert.equal(loop.more,false);assert.equal(loop.message,true);
     assert.ok(version.Browser,'connected to a local Chrome DevTools browser');
   }finally{
-    cdp?.socket.close();chrome.kill();await server.close();await fs.rm(tempDir,{recursive:true,force:true});
+    cdp?.socket.close();
+    try{await stopProcess(chrome)}finally{
+      try{await server.close()}finally{await removeTree(tempDir)}
+    }
   }
 });

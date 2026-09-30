@@ -17,6 +17,7 @@ const makeItem = (n:number):FixtureItem => ({
 const firstPage = Array.from({length:100},(_,i)=>makeItem(i+1));
 firstPage[98] = {...makeItem(99),repository:'xenon-admin/../XeonoLab'};
 let refreshCount = 0;
+let cursorMode:'normal'|'loop' = 'normal';
 let resolveDelayedPage:(value:{data:FixtureItem[];meta:{next_cursor:string|null}})=>void = ()=>{};
 let delayedPageRequests = 0;
 
@@ -27,8 +28,9 @@ const apiPage = async (path:string) => {
     refreshCount += 1;
     const data = firstPage.map(item=>({...item}));
     if(refreshCount>1)data[0].title='Synthetic Work item 1 refreshed';
-    return {data,meta:{next_cursor:`page-${refreshCount}-next`}};
+    return {data,meta:{next_cursor:cursorMode==='loop'?'loop-cursor':`page-${refreshCount}-next`}};
   }
+  if(cursor==='loop-cursor')return {data:[makeItem(1000)],meta:{next_cursor:'loop-cursor'}};
   if(cursor==='page-1-next') {
     return {data:Array.from({length:100},(_,i)=>makeItem(i+95)),meta:{next_cursor:'page-2-next'}};
   }
@@ -42,6 +44,7 @@ const apiPage = async (path:string) => {
 (window as any).workFixture={
   get refreshCount(){return refreshCount},
   get delayedPageRequests(){return delayedPageRequests},
+  set cursorMode(value:'normal'|'loop'){cursorMode=value},
   resolveDelayedPage(data:FixtureItem[]=[{...makeItem(999),id:'stale-page-row',title:'STALE PAGE RESPONSE'}]){resolveDelayedPage({data,meta:{next_cursor:null}})},
 };
 
