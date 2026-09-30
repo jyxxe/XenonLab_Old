@@ -29,3 +29,6 @@ Cloudflare connector 位于 VM 105，已建立连接。Token 仅存 /etc/cloudfl
 已改用 HTTP/2，但 TCP 7844 TLS 握手仍超时。VM 105 UFW inactive，API 443 可达；
 公网可靠性尚未验收，需继续排查外部出口对 Tunnel 7844 的可达性。
 不要把曾成功的测试视为持续在线证据。canonical issuer 现为公网 /auth，登录也依赖该连接。
+
+为恢复内网登录，已回退 canonical issuer 到 IP 9444；公网 /auth 配置保留，
+待 Tunnel 连通稳定后同步切换，不将当前公网登录视为可用。Forgejo IP 9445 仍可管理。

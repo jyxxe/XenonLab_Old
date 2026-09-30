@@ -22,7 +22,7 @@
    首次登录需要修改密码。密码不写入源代码或此文档。
 
 旧版入口 `https://192.168.0.101` 保留；新版备用地址 `https://192.168.0.101:9443`。
-IP 入口可直接登录，无需客户端 DNS；认证标准地址为 `https://xenon.jyxxe.com/auth`。
+IP 入口可直接登录，无需客户端 DNS；认证标准地址为 `https://192.168.0.101:9444`（公网 Tunnel 故障后回退）。
 更换 issuer 后，已有会话需重新登录。域名入口继续保留。Cloudflare Tunnel 已配置，公网桌面 https://xenon.jyxxe.com；Issues 位于 /dev/。
 
 ## 服务位置

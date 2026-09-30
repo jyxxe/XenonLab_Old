@@ -1,8 +1,8 @@
 """Push tracked source to Forgejo; credentials stay in private files and askpass."""
 
 import os
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 root = Path("runtime/deploy-secrets").resolve()
