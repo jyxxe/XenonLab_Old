@@ -168,3 +168,28 @@ def test_parent_acl_prevents_creation(library):
         json={"path": "/数学/分析", "name": "private", "columns": [{"name": "title", "type": "string"}]},
     )
     assert result.status_code == 403, result.text
+
+
+def test_restore_revision_and_admin_purge(library):
+    tid, rid = seed(library)
+    path = f"/api/v1/tables/{tid}/rows/{rid}"
+    assert library.get(path + "/revisions/1", headers=auth("bob")).status_code == 403
+    assert library.get(path + "/revisions/99", headers=auth()).status_code == 404
+    assert library.delete(path, headers=auth(**{"If-Match": '"revision:1"'})).status_code == 200
+    assert library.post(path + "/restore", headers=auth(), json={"revision": 1}).status_code == 412
+    result = library.post(
+        path + "/restore", headers=auth(**{"If-Match": '"revision:2"'}), json={"revision": 1}
+    )
+    assert result.status_code == 200
+    assert result.json()["data"]["_revision"] == 3
+    assert result.json()["data"]["_deleted_at"] is None
+    assert len(library.get(path + "/revisions", headers=auth()).json()["data"]) == 3
+    assert library.delete(path + "?purge=true", headers=auth()).status_code == 403
+    assert library.delete(path + "?purge=true", headers=auth("admin")).status_code == 412
+    assert (
+        library.delete(
+            path + "?purge=true", headers=auth("admin", **{"If-Match": '"revision:3"'})
+        ).status_code
+        == 200
+    )
+    assert library.get(path + "/revisions/1", headers=auth("admin")).status_code == 404

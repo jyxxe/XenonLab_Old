@@ -62,6 +62,10 @@ class Move(BaseModel):
     path: str
 
 
+class Restore(BaseModel):
+    revision: int = Field(ge=1)
+
+
 class ACLWrite(BaseModel):
     grants: dict[str, list[str]]
 
@@ -423,8 +427,34 @@ def create_app(settings=None):
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
     @app.delete("/api/v1/tables/{tid}/rows/{rid}")
-    def delete_row(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:write"))):
+    def delete_row(
+        tid: str,
+        rid: str,
+        request: Request,
+        purge: bool = False,
+        actor=Depends(scope("xelibrary:write")),
+    ):
         authorize(actor, tid, "write", rid)
+        if purge:
+            actor.require("xelibrary:admin")
+            with transaction(file(tid)) as db:
+                row = load_row(db, rid, True)
+                precondition(request, row["_revision"])
+                for name, column in [
+                    ("data", "_row_id"),
+                    ("__xl_changes", "row_id"),
+                    ("__xl_attachments", "row_id"),
+                    ("__xl_idempotency", "row_id"),
+                    ("__xl_fts", "row_id"),
+                ]:
+                    db.execute(f"DELETE FROM {name} WHERE {column}=?", (rid,))
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='__xl_vectors'").fetchone():
+                    db.execute("DELETE FROM __xl_vectors WHERE row_id=?", (rid,))
+                db.execute("UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?", (now(),))
+            with transaction(catalogue) as db:
+                db.execute("DELETE FROM acl WHERE resource_type='row' AND resource_id=?", (f"{tid}:{rid}",))
+            audit(actor, "row.purged", f"{tid}:{rid}")
+            return response(request, {"deleted": True, "purged": True})
         with transaction(file(tid)) as db:
             row = load_row(db, rid)
             precondition(request, row["_revision"])
@@ -446,6 +476,42 @@ def create_app(settings=None):
                 )
             ]
         return response(request, rows)
+
+    @app.get("/api/v1/tables/{tid}/rows/{rid}/revisions/{revision}")
+    def revision(tid: str, rid: str, revision: int, request: Request, actor=Depends(scope("xelibrary:read"))):
+        authorize(actor, tid, "read", rid)
+        with connect(file(tid)) as db:
+            load_row(db, rid, True)
+            old = db.execute(
+                "SELECT snapshot FROM __xl_changes WHERE row_id=? AND revision=?", (rid, revision)
+            ).fetchone()
+        if old is None:
+            raise APIError(404, "REVISION_NOT_FOUND", "revision not found")
+        return response(request, json.loads(old[0]))
+
+    @app.post("/api/v1/tables/{tid}/rows/{rid}/restore")
+    def restore(tid: str, rid: str, body: Restore, request: Request, actor=Depends(scope("xelibrary:write"))):
+        authorize(actor, tid, "write", rid)
+        with transaction(file(tid)) as db:
+            current = load_row(db, rid, True)
+            precondition(request, current["_revision"])
+            old = db.execute(
+                "SELECT snapshot FROM __xl_changes WHERE row_id=? AND revision=?", (rid, body.revision)
+            ).fetchone()
+            if old is None:
+                raise APIError(404, "REVISION_NOT_FOUND", "revision not found")
+            values = validate_values(columns(db), json.loads(old[0])["values"])
+            db.execute(
+                "UPDATE data SET values_json=?,_revision=_revision+1,_updated_at=?,"
+                "_deleted_at=NULL WHERE _row_id=?",
+                (json.dumps(values), now(), rid),
+            )
+            row = load_row(db, rid)
+            change(db, row, "restore")
+            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
+            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(v) for v in values.values())))
+        audit(actor, "row.restored", f"{tid}:{rid}")
+        return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
     @app.post("/api/v1/query")
     def query(body: QueryBody, request: Request, actor=Depends(scope("xelibrary:query"))):

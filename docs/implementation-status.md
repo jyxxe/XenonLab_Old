@@ -52,3 +52,9 @@ manifest/outbox 与一致性扫描。索引作业状态已在 catalogue 持久�
 13 项后端测试通过；10 个服务均以独立进程通过 HTTP live/version/OpenAPI 检查。
 D100M 实际模型端到端 smoke 通过；React/TypeScript production build 与 Ruff 检查通过。
 本机缺少 Docker Compose 插件，未运行原 Compose 拓扑；线上采用 systemd，Keycloak 使用 Docker + 本地 PostgreSQL。
+
+## 完整 Plan 推进
+
+已补齐单行历史 revision 读取、restore 创建新 revision 与管理员 purge。
+restore 校验当前 schema 与 If-Match，保留历史；purge 删除行历史、索引和附件引用，
+保留独立审计，内容寻址对象的实际垃圾回收仍待实现。18 项测试通过。
