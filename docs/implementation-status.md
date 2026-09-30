@@ -8,7 +8,9 @@
   bootstrap 行用户字段存储为 values_json，尚未采用每用户列一个 SQLite 物理列。
 - 表创建/列表/读取/移动；行创建/更新/读取/分页/删除/历史；schema 迁移；创建行幂等键。
 - ACL 以 row → table → 最近祖先 path 为优先级；不存在 ACL 时仅 owner 访问；admin scope 可管理。
-- 结构化 DSL：FROM、WHERE、LIMIT、嵌套布尔、比较、IN、CONTAINS、NULL、多语言字段。
+- 结构化 DSL：FROM、WHERE、ORDER BY、LIMIT、OFFSET、嵌套布尔、比较、IN/NOT IN、
+  CONTAINS/CONTAINS ANY/ALL、STARTS_WITH/ENDS_WITH/MATCHES（LIKE 通配，非 regex）、NULL、
+  值函数 LOWER/UPPER/LEN/COALESCE/DATE/YEAR/MONTH、多语言字段。
   unsupported 操作拒绝，不执行原始 SQL、eval、脚本或命令。
 - SHA-256 附件存储、大小限制、文件名清理、基础 PDF/PNG sniff、下载权限与删除行检查。
 - D100M 真实权重 CPU 加载；256D/L2、128 token 上限、模型+tokenizer revision hash。
@@ -150,3 +152,9 @@ Verified after origin allowlist update: public desktop, health, auth configurati
 
 
 Luna implementation integration (2026-09-30): reviewed and integrated knowledge manager and work pagination through PR #51/#52. Knowledge supports configurable schema creation/editing, move, record history/restoration and opt-in deleted rows with ACL filtering. Public apiPage retains response cursors; knowledge/work lists load subsequent pages and discard stale responses. Work rows link to their Forgejo issue. Own row writes refresh table metadata before later management operations. Coordinator integration verification: 37 pytest tests passed, Ruff passed, TypeScript/Vite build passed, OpenAPI regenerated. Browser visual acceptance remains unverified; full plan remains incomplete.
+Query DSL 扩展（OpenCode harness，分支 `opencode/issue-8`）：补齐 NOT IN、CONTAINS ANY/ALL、
+STARTS_WITH/ENDS_WITH/MATCHES（LIKE 通配，非 regex）、ORDER BY/ASC/DESC、OFFSET 与值函数
+LOWER/UPPER/LEN/COALESCE/DATE/YEAR/MONTH。无 ORDER BY 时保持早停分页，ORDER BY 需全量匹配后排序。
+新增 8 项测试（解析与拒绝、集合/文本运算符、函数、NULL 与类型语义、端点排序分页与注入拒绝）；
+全套 42 项测试与 Ruff 通过。EXISTS(...)、SEARCH TEXT、HAS_ATTACHMENT()/PATH_DEPTH() 尚未实现，
+待附件/路径/检索上下文接入执行计划。待评审与发布。
