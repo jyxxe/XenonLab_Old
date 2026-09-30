@@ -38,31 +38,6 @@ for node in (107, 104, 101, 111, 106):
         f" /usr/local/bin/uv sync --locked --no-dev --python 3.12{extra}"
     )
     command("ssh", "-i", key, host, script)
-    if node == 101:
-        # Update only the fixed Web 101 forced-command implementation and its
-        # root-managed activation policy; activation still goes through the
-        # inventory-pinned Deploy Gateway executor.
-        remote_activation = "/tmp/xeonolab-activation-" + commit + ".json"
-        command(
-            "scp",
-            "-i",
-            key,
-            "runtime/deploy-secrets/101/activation.json",
-            host + ":" + remote_activation,
-        )
-        command(
-            "ssh",
-            "-i",
-            key,
-            host,
-            f"sudo -n install -m 755 {release}/infra/systemd/activate.py"
-            f" /usr/local/libexec/xeonolab-activate"
-            f" && sudo -n install -m 644 {release}/infra/systemd/caddy_sync.py"
-            f" /usr/local/libexec/caddy_sync.py"
-            f" && sudo -n install -m 640 -o root -g xeonolab {remote_activation}"
-            f" /etc/xeonolab/activation.json"
-            f" && rm -f {remote_activation}",
-        )
     remote_payload = "/tmp/xeonolab-oidc-maps-" + commit + ".json"
     command("scp", "-i", key, str(oidc_payload), host + ":" + remote_payload)
     command(

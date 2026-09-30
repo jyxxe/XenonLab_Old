@@ -1,6 +1,7 @@
 """Safely validate and install the fixed Web 101 Cloudflare Caddy include."""
 
 import base64
+import json
 import os
 import re
 import stat
@@ -12,10 +13,31 @@ from pathlib import Path
 CADDYFILE = Path("/etc/caddy/Caddyfile")
 INCLUDE_TARGET = Path("/etc/caddy/cloudflare-origin.caddy")
 IMPORT_LINE = re.compile(
-    r"^(?P<prefix>\s*import\s+)/etc/caddy/cloudflare-origin\.caddy(?P<suffix>\s*(?:#.*)?)$",
+    r"^(?P<prefix>[ \t]*import[ \t]+)/etc/caddy/cloudflare-origin\.caddy"
+    r"(?P<suffix>[ \t]*(?:\#[^\r\n]*)?)(?P<newline>\r?\n|$)",
     re.MULTILINE,
 )
 CADDY = "/usr/bin/caddy"
+
+
+def atomic_write_json(path, value):
+    """Persist root-managed activation state before any service mutation."""
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -57,7 +79,11 @@ def capture(target=INCLUDE_TARGET):
 def _candidate_caddyfile(candidate, caddyfile=CADDYFILE):
     text = caddyfile.read_text()
     replaced, count = IMPORT_LINE.subn(
-        lambda match: match.group("prefix") + str(candidate) + match.group("suffix"), text
+        lambda match: match.group("prefix")
+        + str(candidate)
+        + match.group("suffix")
+        + match.group("newline"),
+        text,
     )
     if count != 1:
         raise ValueError("Caddyfile must contain exactly one fixed Cloudflare include import")
@@ -81,7 +107,7 @@ def validate(candidate, caddyfile=CADDYFILE, runner=subprocess.run):
         Path(temporary).unlink(missing_ok=True)
 
 
-def _atomic_write(target, content, uid, gid, mode):
+def _atomic_write(target, content, uid, gid, mode, on_replace=None):
     fd, temporary = tempfile.mkstemp(prefix=".xeonolab-caddy-", dir=target.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
@@ -91,6 +117,8 @@ def _atomic_write(target, content, uid, gid, mode):
         os.chown(temporary, uid, gid)
         os.chmod(temporary, mode)
         os.replace(temporary, target)
+        if on_replace is not None:
+            on_replace()
         directory_fd = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(directory_fd)
@@ -100,19 +128,38 @@ def _atomic_write(target, content, uid, gid, mode):
         Path(temporary).unlink(missing_ok=True)
 
 
-def install(candidate, target=INCLUDE_TARGET, caddyfile=CADDYFILE, runner=subprocess.run):
+def install(
+    candidate,
+    target=INCLUDE_TARGET,
+    caddyfile=CADDYFILE,
+    runner=subprocess.run,
+    on_replace=None,
+):
     """Validate first, then atomically replace the fixed include preserving metadata."""
     candidate = Path(candidate)
     info = _target_metadata(target)
     validate(candidate, caddyfile, runner)
     content = candidate.read_bytes()
     if target.read_bytes() != content:
-        _atomic_write(target, content, info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode))
+        _atomic_write(
+            target,
+            content,
+            info.st_uid,
+            info.st_gid,
+            stat.S_IMODE(info.st_mode),
+            on_replace=on_replace,
+        )
         return True
     return False
 
 
-def restore(snapshot, target=INCLUDE_TARGET, caddyfile=CADDYFILE, runner=subprocess.run):
+def restore(
+    snapshot,
+    target=INCLUDE_TARGET,
+    caddyfile=CADDYFILE,
+    runner=subprocess.run,
+    on_replace=None,
+):
     """Validate a saved include and atomically restore it with its original metadata."""
     snapshot = snapshot if isinstance(snapshot, Snapshot) else Snapshot.from_json(snapshot)
     fd, temporary = tempfile.mkstemp(prefix=".xeonolab-caddy-rollback-", dir=target.parent)
@@ -128,7 +175,14 @@ def restore(snapshot, target=INCLUDE_TARGET, caddyfile=CADDYFILE, runner=subproc
             and stat.S_IMODE(info.st_mode) == snapshot.mode
         ):
             return False
-        _atomic_write(target, snapshot.content, snapshot.uid, snapshot.gid, snapshot.mode)
+        _atomic_write(
+            target,
+            snapshot.content,
+            snapshot.uid,
+            snapshot.gid,
+            snapshot.mode,
+            on_replace=on_replace,
+        )
         return True
     finally:
         Path(temporary).unlink(missing_ok=True)

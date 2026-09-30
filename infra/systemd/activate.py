@@ -21,7 +21,7 @@ root = Path("/opt/xeonolab")
 current = root / "current"
 state_dir = root / "activations"
 state_dir.mkdir(exist_ok=True)
-sync_cloudflare_caddy = config.get("sync_cloudflare_caddy") is True
+sync_cloudflare_caddy = config.get("reload_caddy") is True
 cloudflare_changed = False
 
 if parts[0] == "activate":
@@ -39,10 +39,7 @@ if parts[0] == "activate":
     include_snapshot = caddy_sync.capture().as_json() if sync_cloudflare_caddy else None
     state = {"old": old, "new": str(target), "old_cloudflare_include": include_snapshot}
     state_path = state_dir / f"{deployment_id}.json"
-    temporary_state = state_path.with_suffix(".json.tmp")
-    temporary_state.write_text(json.dumps(state))
-    os.chmod(temporary_state, 0o600)
-    os.replace(temporary_state, state_path)
+    caddy_sync.atomic_write_json(state_path, state)
 else:
     if len(parts) != 2 or not re.fullmatch("[a-f0-9-]{36}", parts[1]):
         raise SystemExit(2)
@@ -57,17 +54,22 @@ def restart(destination, cloudflare_release=None, cloudflare_snapshot=None):
 
     def update_cloudflare():
         global cloudflare_changed
+
+        def note_cloudflare_change():
+            global cloudflare_changed
+            cloudflare_changed = True
+
         if not sync_cloudflare_caddy:
             return
         if cloudflare_release is not None:
             candidate = cloudflare_release / "infra/network/cloudflare-origin.caddy"
-            changed = caddy_sync.install(candidate)
+            changed = caddy_sync.install(candidate, on_replace=note_cloudflare_change)
         elif cloudflare_snapshot is not None:
-            changed = caddy_sync.restore(cloudflare_snapshot)
+            changed = caddy_sync.restore(cloudflare_snapshot, on_replace=note_cloudflare_change)
         else:
             return
         if changed:
-            cloudflare_changed = True
+            note_cloudflare_change()
             subprocess.run(["systemctl", "reload", "caddy"], check=True)
 
     if destination is None:

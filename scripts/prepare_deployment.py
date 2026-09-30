@@ -40,7 +40,6 @@ for node, entries in services.items():
                 "ports": [p for s, p in entries.items() if s != "deploy-gateway"],
                 "address": "127.0.0.1" if node == "101" else "192.168.0." + node,
                 "reload_caddy": node == "101",
-                "sync_cloudflare_caddy": node == "101",
             }
         )
     )
