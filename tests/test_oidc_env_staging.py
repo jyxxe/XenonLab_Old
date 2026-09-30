@@ -74,3 +74,17 @@ def test_staging_refuses_unknown_nodes_and_inconsistent_maps(tmp_path):
     invalid[MAP_KEYS[1]] = "{}"
     with pytest.raises(ValueError, match="does not match"):
         stage_node("101", invalid, tmp_path)
+
+
+def test_staging_rejects_attacker_issuer_even_with_matching_token_url():
+    invalid = dict(PAYLOAD)
+    issuers = dict(ISSUERS)
+    issuers["https://xenon.lan"] = "https://attacker.example/realms/xeonolab"
+    invalid[MAP_KEYS[0]] = json.dumps(issuers, separators=(",", ":"))
+    invalid[MAP_KEYS[1]] = json.dumps(
+        {issuer: issuer + "/protocol/openid-connect/token" for issuer in issuers.values()},
+        separators=(",", ":"),
+    )
+
+    with pytest.raises(ValueError, match="exact expected issuers"):
+        stage_node("101", invalid)

@@ -75,9 +75,12 @@ configuration files. Do not print secret-bearing files into a terminal log.
    desktop-web env file, sends that map-only payload to the fixed service nodes,
    and atomically updates those two variables in `desktop-web`, `xelibrary`,
    `tool-gateway`, `llm-gateway`, `embedding`, and `dev-agent`. All other env
-   entries and file ownership/mode are preserved. Staging does not restart
-   services; activation restarts them on the new release. Verify each health
-   check and confirm that JWTs from the existing IP issuer still pass while an
+   entries and file ownership/mode are preserved. Each file replacement is
+   atomic, but the six files and multiple nodes are not one transaction. If any
+   staging step fails, do not activate: rerun staging to completion or restore
+   the saved configuration snapshots first. Staging does not restart services;
+   activation restarts them on the new release. Verify each health check and
+   confirm that JWTs from the existing IP issuer still pass while an
    unconfigured issuer is rejected.
 2. On the separate Auth 109 deployment, apply the dynamic-host Keycloak
    configuration and exact realm callback URIs through the authorized operator

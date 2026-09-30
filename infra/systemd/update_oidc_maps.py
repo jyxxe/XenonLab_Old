@@ -17,10 +17,10 @@ NODE_SERVICES = {
     "107": ("embedding",),
     "111": ("dev-agent",),
 }
-EXPECTED_ORIGINS = {
-    "https://xenon.jyxxe.com",
-    "https://xenon.lan",
-    "https://192.168.0.101:9443",
+EXPECTED_ISSUERS = {
+    "https://xenon.jyxxe.com": "https://xenon.jyxxe.com/auth/realms/xeonolab",
+    "https://xenon.lan": "https://auth.xenon.lan/realms/xeonolab",
+    "https://192.168.0.101:9443": "https://192.168.0.101:9444/realms/xeonolab",
 }
 
 
@@ -53,11 +53,11 @@ def validate_payload(payload):
         token_urls = json.loads(token_raw)
     except json.JSONDecodeError as exc:
         raise ValueError("OIDC map payload contains invalid JSON") from exc
-    if not isinstance(issuers, dict) or set(issuers) != EXPECTED_ORIGINS:
-        raise ValueError("OIDC origin map does not contain the expected origins")
-    if any(not isinstance(issuer, str) or not issuer.startswith("https://") for issuer in issuers.values()):
-        raise ValueError("OIDC issuer map contains an invalid issuer")
-    expected_urls = {issuer: issuer.rstrip("/") + "/protocol/openid-connect/token" for issuer in issuers.values()}
+    if issuers != EXPECTED_ISSUERS:
+        raise ValueError("OIDC origin map does not match the exact expected issuers")
+    expected_urls = {
+        issuer: issuer + "/protocol/openid-connect/token" for issuer in EXPECTED_ISSUERS.values()
+    }
     if token_urls != expected_urls:
         raise ValueError("OIDC token URL map does not match the issuer map")
     return payload

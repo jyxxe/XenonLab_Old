@@ -138,11 +138,14 @@ def test_origin_selects_exact_public_or_lan_issuer(settings, monkeypatch):
     }
     monkeypatch.delenv("OIDC_TOKEN_URL", raising=False)
     endpoints = {url: issuer for issuer, url in settings.oidc_token_urls.items()}
+    refresh_calls = []
     original_post = httpx.Client.post
 
     def post(client, url, data=None, **kwargs):
         if isinstance(client, TestClient):
             return original_post(client, url, data=data, **kwargs)
+        if data.get("grant_type") == "refresh_token":
+            refresh_calls.append((url, data))
         issuer = endpoints[url].removesuffix("/protocol/openid-connect/token")
         token = jwt.encode(
             {
@@ -187,6 +190,22 @@ def test_origin_selects_exact_public_or_lan_issuer(settings, monkeypatch):
             json={"code": "one-time-code", "verifier": "v" * 43, "redirect": origin + "/"},
         )
         assert result.status_code == 200, result.text
+        if origin == "https://xenon.lan":
+            session_id = hashlib.sha256(client.cookies.get(COOKIE).encode()).hexdigest()
+            with transaction(settings.data_dir / "browser-sessions.sqlite") as db:
+                db.execute("UPDATE sessions SET expires=0 WHERE id=?", (session_id,))
+            refreshed = client.post("/api/v1/auth/session/token", headers={"Origin": origin})
+            assert refreshed.status_code == 200, refreshed.text
+            assert refresh_calls == [
+                (
+                    settings.oidc_token_urls[lan_domain_issuer],
+                    {
+                        "client_id": "desktop",
+                        "grant_type": "refresh_token",
+                        "refresh_token": "refresh-value",
+                    },
+                )
+            ]
 
     with transaction(settings.data_dir / "browser-sessions.sqlite") as db:
         assert {row[0] for row in db.execute("SELECT DISTINCT issuer FROM session_issuers")} == {
