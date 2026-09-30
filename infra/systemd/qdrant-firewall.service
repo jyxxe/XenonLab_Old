@@ -1,0 +1,13 @@
+[Unit]
+Description=Restrict Qdrant to XeLibrary backend
+Before=qdrant.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStartPre=-/usr/sbin/nft delete table inet xeonolab_qdrant
+ExecStart=/usr/sbin/nft -f /etc/xeonolab/qdrant.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

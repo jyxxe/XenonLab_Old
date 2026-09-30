@@ -109,8 +109,8 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "migration_manifest": "additive ACL revision/explicit columns; pre-release quiesced backup and isolated restore verified; catalogue downgrade via rollback_acl_schema.py",
-            "test_report": "78 tests; Ruff; OpenAPI export; TypeScript/Vite build; quiesced backup and isolated restore",
+            "migration_manifest": "additive uploads.sqlite session store and objects/.uploads; existing attachment API retained; pre-uploads backup and isolated restore verified",
+            "test_report": "82 tests; Ruff; OpenAPI export; TypeScript/Vite build; multipart resume/ACL shrink and backup restore",
         }
     )
 )

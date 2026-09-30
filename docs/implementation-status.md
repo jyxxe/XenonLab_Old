@@ -182,3 +182,6 @@ WebUI usability increment (2026-09-30, issue #41, branch opencode/issue-41): a b
 
 
 Issue #41 integration (2026-09-30): OpenCode delivery 4c413e2 reviewed and integrated with owner-scoped embedding jobs, explicit truncated-list statistics, recoverable error state and reserved dashboard app ID. Preserves attachment/ACL management. Coordinator verification: 78 tests, Ruff, regenerated OpenAPI and frontend build. Production pre-release quiesced backup and isolated restore verified, including empty object-store restore regression. Browser and release verification follow activation; full plan remains incomplete.
+
+
+Resumable uploads integration: multipart sessions, owner/ACL/scope revalidation, stable attachment IDs and crash-retry completion are implemented. Backup validation accepts canonical upload lock files. Coordinator: 82 tests, Ruff, OpenAPI and frontend build passed; pre-uploads production backup and isolated restore verified. Production activation and real multipart verification remain pending. Qdrant systemd/TLS/firewall templates added; not yet active or connected to production search.

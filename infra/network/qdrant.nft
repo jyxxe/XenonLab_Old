@@ -1,0 +1,8 @@
+table inet xeonolab_qdrant {
+  chain input {
+    type filter hook input priority -6; policy accept;
+    iifname "lo" accept
+    ip saddr { 192.168.0.104, 192.168.0.109 } tcp dport 6333 accept
+    tcp dport { 6333, 6334, 6335 } reject
+  }
+}

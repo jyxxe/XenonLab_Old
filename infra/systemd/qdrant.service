@@ -1,0 +1,30 @@
+[Unit]
+Description=XeonoLab Qdrant derived vector index
+After=network-online.target qdrant-firewall.service
+Wants=network-online.target
+Requires=qdrant-firewall.service
+
+[Service]
+User=qdrant
+Group=qdrant
+WorkingDirectory=/var/lib/xeonolab/qdrant
+ExecStart=/opt/xeonolab/qdrant/v1.19.1/qdrant --config-path /etc/xeonolab/qdrant/production.yaml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xeonolab/qdrant
+MemoryMax=2G
+MemoryHigh=1536M
+CPUQuota=200%
+TasksMax=128
+LimitNOFILE=65536
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
