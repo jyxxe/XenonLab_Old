@@ -1,14 +1,17 @@
 import hashlib
 import json
+import logging
 import math
+import os
 import re
+import shutil
 import sqlite3
 import stat
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Depends, Header, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -105,6 +108,46 @@ def create_app(settings=None):
             db.execute("ALTER TABLE acl ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
         if "explicit" not in acl_columns:
             db.execute("ALTER TABLE acl ADD COLUMN explicit INTEGER NOT NULL DEFAULT 1")
+
+    table_directory = root / "tables"
+
+    def cleanup_table_uploads(tid):
+        upload_database = root / "uploads.sqlite"
+        if not upload_database.exists():
+            return
+        with connect(upload_database) as db:
+            upload_ids = [row[0] for row in db.execute("SELECT upload_id FROM uploads WHERE table_id=?", (tid,))]
+        with transaction(upload_database) as db:
+            db.execute("DELETE FROM uploads WHERE table_id=?", (tid,))
+        upload_root = root / "objects" / ".uploads"
+        for upload_id in upload_ids:
+            try:
+                normalized_upload_id = str(UUID(upload_id))
+            except ValueError:
+                continue
+            shutil.rmtree(upload_root / normalized_upload_id, ignore_errors=True)
+            (upload_root / ".locks" / f"{normalized_upload_id}.lock").unlink(missing_ok=True)
+
+    def recover_table_deletions():
+        """Finish or undo an interrupted table deletion before serving requests."""
+        with connect(catalogue) as db:
+            table_ids = {row[0] for row in db.execute("SELECT id FROM tables")}
+        for tombstone in table_directory.glob(".*.xl.deleting"):
+            table_id = tombstone.name[1 : -len(".xl.deleting")]
+            try:
+                if str(UUID(table_id)) != table_id:
+                    continue
+            except ValueError:
+                continue
+            target = table_directory / f"{table_id}.xl"
+            if table_id in table_ids:
+                if not target.exists():
+                    os.replace(tombstone, target)
+                else:
+                    tombstone.unlink(missing_ok=True)
+            else:
+                cleanup_table_uploads(table_id)
+                tombstone.unlink(missing_ok=True)
 
     def audit(actor, event, resource):
         with transaction(catalogue) as db:
@@ -299,6 +342,84 @@ def create_app(settings=None):
         with connect(file(tid)) as db:
             data = {**table, **metadata(db), "columns": columns(db)}
         return JSONResponse(response(request, data), headers={"ETag": etag(data["table_revision"])})
+
+    @app.delete("/api/v1/tables/{tid}")
+    def delete_table(tid: str, request: Request, actor=Depends(scope("xelibrary:admin"))):
+        authorize(actor, tid, "write")
+        target = file(tid)
+        if not target.is_file():
+            raise APIError(503, "XL_TABLE_STORAGE_UNAVAILABLE", "table file is unavailable")
+
+        # Deletion is deliberately limited to empty tables. Row history and vector facts
+        # are removed through the existing row purge flow before the containing table.
+        with connect(target) as db:
+            meta = metadata(db)
+            precondition(request, meta["table_revision"])
+            rows = db.execute("SELECT count(*) FROM data").fetchone()[0]
+            attachments = db.execute("SELECT count(*) FROM __xl_attachments").fetchone()[0]
+            vectors_table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='__xl_vectors'"
+            ).fetchone()
+            vectors = db.execute("SELECT count(*) FROM __xl_vectors").fetchone()[0] if vectors_table else 0
+            checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint and checkpoint[0]:
+                raise APIError(409, "TABLE_BUSY", "table has active readers or writers")
+        if attachments:
+            raise APIError(
+                409,
+                "TABLE_HAS_ATTACHMENTS",
+                "unbind or purge every attachment reference before deleting the table",
+            )
+        if rows:
+            raise APIError(409, "TABLE_NOT_EMPTY", "purge every row before deleting the table")
+        if vectors:
+            raise APIError(409, "TABLE_HAS_VECTORS", "remove derived vector references before deleting the table")
+
+        with connect(catalogue) as db:
+            jobs_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_jobs'"
+            ).fetchone()
+            jobs = [json.loads(row[0]) for row in db.execute("SELECT payload FROM index_jobs")] if jobs_exists else []
+        if any(job.get("table_id") == tid and job.get("status") in ("queued", "running") for job in jobs):
+            raise APIError(409, "TABLE_INDEX_ACTIVE", "wait for the table's index job to finish")
+
+        upload_database = root / "uploads.sqlite"
+        if upload_database.exists():
+            with connect(upload_database) as db:
+                active = db.execute(
+                    "SELECT 1 FROM uploads WHERE table_id=? AND completed=0 AND cancelled=0 LIMIT 1", (tid,)
+                ).fetchone()
+            if active:
+                raise APIError(409, "TABLE_UPLOAD_ACTIVE", "finish or cancel uploads before deleting the table")
+
+        tombstone = table_directory / f".{tid}.xl.deleting"
+        os.replace(target, tombstone)
+        try:
+            with transaction(catalogue) as db:
+                current = db.execute("SELECT 1 FROM tables WHERE id=?", (tid,)).fetchone()
+                if current is None:
+                    raise APIError(404, "XL_TABLE_NOT_FOUND", "table not found")
+                db.execute("DELETE FROM acl WHERE resource_type='table' AND resource_id=?", (tid,))
+                db.execute(
+                    "DELETE FROM acl WHERE resource_type='row' AND resource_id LIKE ?",
+                    (tid + ":%",),
+                )
+                db.execute("DELETE FROM tables WHERE id=?", (tid,))
+                db.execute(
+                    "INSERT INTO audit VALUES(?,?,?,?,?)",
+                    (str(uuid4()), actor.sub, "table.deleted", tid, now()),
+                )
+        except BaseException:
+            if tombstone.exists() and not target.exists():
+                os.replace(tombstone, target)
+            raise
+
+        cleanup_table_uploads(tid)
+        try:
+            tombstone.unlink(missing_ok=True)
+        except OSError:
+            logging.getLogger(__name__).exception("unable to remove deleted table tombstone")
+        return response(request, {"table_id": tid, "deleted": True})
 
     @app.patch("/api/v1/tables/{tid}/schema")
     def update_schema(tid: str, body: SchemaWrite, request: Request, actor=Depends(scope("xelibrary:admin"))):
@@ -798,6 +919,7 @@ def create_app(settings=None):
         response=response,
         now=now,
     )
+    recover_table_deletions()
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
     def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):

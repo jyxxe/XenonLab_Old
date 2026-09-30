@@ -1168,6 +1168,16 @@ GET /api/v1/tables/{table_id}/stats
 - deleted rows
 - storage bytes
 - attachment bytes
+
+## 21.6 删除表
+
+`DELETE /api/v1/tables/{table_id}` 仅接受带 `xelibrary:admin` scope 的请求，并要求
+`If-Match` 等于当前表 revision。表必须没有行（含软删除行）、附件引用、向量引用、运行中的
+索引任务或进行中的上传；否则返回 `409` 并保留表。需要清空内容时，先按既有行 API purge
+每一行，再解除附件引用，确认索引工作结束后重试。删除会移除表文件、catalogue 项及表/行 ACL，
+并写入独立审计记录。内容寻址对象不会因删表而直接 unlink，以免破坏其他表引用；未引用对象的
+垃圾回收仍需单独实现。跨文件删除使用可恢复 tombstone，XeLibrary 启动时恢复未提交删除或完成
+已提交删除的清理。
 - chunk count
 - embedding coverage
 - index status

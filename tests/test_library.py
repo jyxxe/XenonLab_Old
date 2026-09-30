@@ -1,5 +1,11 @@
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+
+from xeonolab.services import create_app
 
 from .conftest import auth, put_acl
 
@@ -26,6 +32,165 @@ def seed(client):
     )
     assert result.status_code == 201, result.text
     return tid, result.json()["data"]["_row_id"]
+
+
+def create_empty_table(client, name="Temporary fixture"):
+    result = client.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/验收临时数据",
+            "name": name,
+            "columns": [{"name": "body", "type": "text", "nullable": True}],
+        },
+    )
+    assert result.status_code == 201, result.text
+    return result.json()["data"]["table_id"]
+
+
+def table_etag(client, tid):
+    result = client.get(f"/api/v1/tables/{tid}/schema", headers=auth("admin"))
+    assert result.status_code == 200, result.text
+    return result.headers["ETag"]
+
+
+def test_table_delete_requires_admin_fresh_revision_and_empty_rows(library):
+    tid, rid = seed(library)
+    url = f"/api/v1/tables/{tid}"
+    headers = {"If-Match": table_etag(library, tid)}
+
+    assert library.delete(url, headers=auth(**headers)).status_code == 403
+    assert library.delete(url, headers=auth("admin")).status_code == 412
+    blocked = library.delete(url, headers=auth("admin", **headers))
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "TABLE_NOT_EMPTY"
+    assert library.get(f"/api/v1/tables/{tid}", headers=auth()).status_code == 200
+
+    row_url = f"/api/v1/tables/{tid}/rows/{rid}"
+    row = library.get(row_url, headers=auth("admin"))
+    purged = library.delete(
+        row_url + "?purge=true", headers=auth("admin", **{"If-Match": row.headers["ETag"]})
+    )
+    assert purged.status_code == 200, purged.text
+
+    deleted = library.delete(url, headers=auth("admin", **{"If-Match": table_etag(library, tid)}))
+    assert deleted.status_code == 200, deleted.text
+    assert library.get(f"/api/v1/tables/{tid}", headers=auth("admin")).status_code == 404
+
+
+def test_table_delete_removes_catalogue_acls_upload_sessions_and_file(library, settings):
+    tid = create_empty_table(library)
+    put_acl(library, "table", tid, {"bob": ["read"]})
+    put_acl(library, "row", f"{tid}:temporary-row", {"bob": ["read"]})
+
+    upload_id = str(uuid4())
+    attachment_id = str(uuid4())
+    upload_root = settings.data_dir / "objects" / ".uploads"
+    upload_dir = upload_root / upload_id
+    upload_dir.mkdir(parents=True)
+    part_file = upload_dir / "fixture.part"
+    part_file.write_bytes(b"temporary upload data")
+    lock_file = upload_root / ".locks" / f"{upload_id}.lock"
+    lock_file.touch()
+    with sqlite3.connect(settings.data_dir / "uploads.sqlite") as db:
+        db.execute(
+            "INSERT INTO uploads(upload_id,attachment_id,actor,table_id,row_id,filename,size,part_size,part_count,created_at,cancelled) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,1)",
+            (upload_id, attachment_id, "alice", tid, "temporary-row", "fixture.bin", 1, 1, 1, "now"),
+        )
+
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    result = library.delete(f"/api/v1/tables/{tid}", headers=auth("admin", **{"If-Match": table_etag(library, tid)}))
+    assert result.status_code == 200, result.text
+    assert not table_file.exists()
+    assert not list((settings.data_dir / "tables").glob(f".{tid}.xl.deleting"))
+    assert not upload_dir.exists() and not lock_file.exists()
+    with sqlite3.connect(settings.data_dir / "catalogue.sqlite") as db:
+        assert db.execute("SELECT 1 FROM tables WHERE id=?", (tid,)).fetchone() is None
+        assert db.execute("SELECT 1 FROM acl WHERE resource_id=?", (tid,)).fetchone() is None
+        assert db.execute("SELECT 1 FROM acl WHERE resource_id LIKE ?", (tid + ":%",)).fetchone() is None
+        assert db.execute(
+            "SELECT 1 FROM audit WHERE resource=? AND event='table.deleted'", (tid,)
+        ).fetchone() == (1,)
+    with sqlite3.connect(settings.data_dir / "uploads.sqlite") as db:
+        assert db.execute("SELECT 1 FROM uploads WHERE table_id=?", (tid,)).fetchone() is None
+
+
+def test_table_delete_fails_closed_for_attachment_vectors_and_active_work(library, settings):
+    tid, rid = seed(library)
+    database = settings.data_dir / "tables" / f"{tid}.xl"
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO __xl_attachments VALUES(?,?,?,?,?,?,?,?)",
+            (str(uuid4()), rid, "a" * 64, "fixture.bin", "application/octet-stream", 1, "now", "{}"),
+        )
+    result = library.delete(
+        f"/api/v1/tables/{tid}", headers=auth("admin", **{"If-Match": table_etag(library, tid)})
+    )
+    assert result.status_code == 409
+    assert result.json()["error"]["code"] == "TABLE_HAS_ATTACHMENTS"
+
+    empty_tid = create_empty_table(library)
+    empty_file = settings.data_dir / "tables" / f"{empty_tid}.xl"
+    with sqlite3.connect(empty_file) as db:
+        db.execute(
+            "CREATE TABLE __xl_vectors(row_id TEXT,revision INTEGER,chunk_id TEXT PRIMARY KEY,column_name TEXT,body TEXT,vector TEXT,model_revision TEXT,chunker_version TEXT)"
+        )
+        db.execute("INSERT INTO __xl_vectors VALUES(?,?,?,?,?,?,?,?)", ("orphan", 1, "chunk", "body", "x", "[]", "r1", "v1"))
+    vector_block = library.delete(
+        f"/api/v1/tables/{empty_tid}", headers=auth("admin", **{"If-Match": table_etag(library, empty_tid)})
+    )
+    assert vector_block.status_code == 409
+    assert vector_block.json()["error"]["code"] == "TABLE_HAS_VECTORS"
+
+    with sqlite3.connect(empty_file) as db:
+        db.execute("DELETE FROM __xl_vectors")
+    from xeonolab.jobs import JobStore
+
+    jobs = JobStore(settings.data_dir / "catalogue.sqlite")
+    jobs.create("queued-table-delete", "admin", empty_tid)
+    job_block = library.delete(
+        f"/api/v1/tables/{empty_tid}", headers=auth("admin", **{"If-Match": table_etag(library, empty_tid)})
+    )
+    assert job_block.status_code == 409
+    assert job_block.json()["error"]["code"] == "TABLE_INDEX_ACTIVE"
+
+
+def test_table_delete_fails_closed_for_active_upload(library, settings):
+    tid = create_empty_table(library)
+    upload_id = str(uuid4())
+    with sqlite3.connect(settings.data_dir / "uploads.sqlite") as db:
+        db.execute(
+            "INSERT INTO uploads(upload_id,attachment_id,actor,table_id,row_id,filename,size,part_size,part_count,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (upload_id, str(uuid4()), "alice", tid, "missing-row", "fixture.bin", 1, 1, 1, "now"),
+        )
+    result = library.delete(
+        f"/api/v1/tables/{tid}", headers=auth("admin", **{"If-Match": table_etag(library, tid)})
+    )
+    assert result.status_code == 409
+    assert result.json()["error"]["code"] == "TABLE_UPLOAD_ACTIVE"
+    assert library.get(f"/api/v1/tables/{tid}", headers=auth("admin")).status_code == 200
+
+
+def test_table_delete_recovers_interrupted_catalogue_and_file_steps(library, settings):
+    restore_tid = create_empty_table(library, "Restore after interrupted delete")
+    restore_target = settings.data_dir / "tables" / f"{restore_tid}.xl"
+    restore_tombstone = settings.data_dir / "tables" / f".{restore_tid}.xl.deleting"
+    restore_target.replace(restore_tombstone)
+    recovered = TestClient(create_app("xelibrary", settings))
+    assert recovered.get(f"/api/v1/tables/{restore_tid}", headers=auth("admin")).status_code == 200
+    assert restore_target.exists() and not restore_tombstone.exists()
+
+    finish_tid = create_empty_table(library, "Finish interrupted delete")
+    finish_target = settings.data_dir / "tables" / f"{finish_tid}.xl"
+    finish_tombstone = settings.data_dir / "tables" / f".{finish_tid}.xl.deleting"
+    finish_target.replace(finish_tombstone)
+    with sqlite3.connect(settings.data_dir / "catalogue.sqlite") as db:
+        db.execute("DELETE FROM tables WHERE id=?", (finish_tid,))
+    recovered = TestClient(create_app("xelibrary", settings))
+    assert recovered.get(f"/api/v1/tables/{finish_tid}", headers=auth("admin")).status_code == 404
+    assert not finish_target.exists() and not finish_tombstone.exists()
 
 
 def test_crud_revision_and_query(library, settings):
