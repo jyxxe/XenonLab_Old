@@ -197,6 +197,81 @@ def test_prefetch_is_async_persistent_and_reports_completion(settings):
         assert api.get(f"/api/v1/cache/prefetch/jobs/{job_id}", headers=auth()).json()["data"] == final
 
 
+def test_80_percent_watermark_blocks_speculative_prefetch_but_allows_explicit_ensure(
+    settings, monkeypatch
+):
+    monkeypatch.setattr(
+        hf_cache.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=1_000_000, used=800_000, free=200_000),
+    )
+    with client(settings) as api:
+        prefetch = api.post("/api/v1/cache/prefetch", headers=auth(), json=ensure_payload())
+        assert prefetch.status_code == 507
+        assert prefetch.json()["error"]["code"] == "DISK_WATERMARK"
+        with sqlite3.connect(Path(settings.data_dir) / "hf-cache.sqlite") as db:
+            assert db.execute("SELECT COUNT(*) FROM prefetch_jobs").fetchone()[0] == 0
+
+        ensured = api.post(
+            "/api/v1/cache/ensure", headers=auth(), json=ensure_payload(repo_id="org/explicit")
+        )
+        assert ensured.status_code == 200, ensured.text
+        assert ensured.json()["data"]["status"] == "ready"
+
+
+def test_recovered_prefetch_rechecks_80_percent_watermark_before_download(settings, monkeypatch):
+    class DeferredExecutor:
+        def __init__(self):
+            self.tasks = []
+
+        def submit(self, function, *args):
+            self.tasks.append((function, args))
+
+        def run_all(self):
+            while self.tasks:
+                function, args = self.tasks.pop(0)
+                function(*args)
+
+    state = {"pool_used": 790}
+    downloads = []
+
+    def pool_usage(_path):
+        used = state["pool_used"]
+        return SimpleNamespace(pool="aux-10t", total=1_000, used=used, free=1_000 - used)
+
+    executor = DeferredExecutor()
+    monkeypatch.setattr(hf_cache, "_PREFETCH_POOL", executor)
+    app = hf_cache.create_app(
+        settings,
+        download_backend=lambda *args: downloads.append(args),
+        revision_resolver=lambda *_args: REV,
+        storage_usage_provider=pool_usage,
+    )
+    job_id = "recovered-prefetch-at-watermark"
+    now = time.time()
+    with transaction(Path(settings.data_dir) / "hf-cache.sqlite") as db:
+        db.execute(
+            "INSERT INTO prefetch_jobs(id,payload,status,progress,phase,attempts,max_attempts,item_id,error,created,updated) "
+            "VALUES(?,?,'queued',0,'queued',0,3,NULL,'',?,?)",
+            (job_id, hf_cache.Ensure(**ensure_payload()).model_dump_json(), now, now),
+        )
+
+    with TestClient(app) as api:
+        assert len(executor.tasks) == 1
+        state["pool_used"] = 800
+        executor.run_all()
+
+        recovered = api.get(f"/api/v1/cache/prefetch/jobs/{job_id}", headers=auth()).json()["data"]
+        assert recovered["status"] == "failed"
+        assert recovered["attempts"] == 1
+        assert recovered["error"].startswith("DISK_WATERMARK:")
+        assert downloads == []
+
+        retry = api.post(f"/api/v1/cache/prefetch/jobs/{job_id}/retry", headers=auth())
+        assert retry.status_code == 507
+        assert retry.json()["error"]["code"] == "DISK_WATERMARK"
+
+
 def test_prefetch_retries_transient_backend_error(settings):
     calls = 0
 
