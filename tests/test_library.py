@@ -74,7 +74,14 @@ def test_acl_move_and_attachment(library):
         library.put(
             f"/api/v1/acl/table/{tid}",
             headers=auth("admin"),
-            json={"grants": {"alice": ["read", "write", "attach"], "bob": ["read"]}},
+            json={
+                "grants": {
+                    "alice": ["read", "write", "attach"],
+                    "bob": ["read"],
+                    "attach-only": ["attach"],
+                    "read-attach": ["read", "attach"],
+                }
+            },
         ).status_code
         == 200
     )
@@ -116,6 +123,31 @@ def test_acl_move_and_attachment(library):
         json={"values": {"title": "第二条记录", "confidence": 0.5}},
     )
     rid2 = second.json()["data"]["_row_id"]
+    library.app.state.settings.dev_tokens["attach-only"] = {
+        "sub": "attach-only", "scope": "xelibrary:attach", "agent_kind": "human"
+    }
+    attach_only = library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth("attach-only"),
+        json={"attachment_id": aid},
+    )
+    assert attach_only.status_code == 403
+    assert attach_only.json()["error"]["code"] == "FORBIDDEN"
+    library.app.state.settings.dev_tokens["read-attach"] = {
+        "sub": "read-attach", "scope": "xelibrary:read xelibrary:attach", "agent_kind": "human"
+    }
+    assert library.put(
+        f"/api/v1/acl/row/{tid}:{rid}",
+        headers=auth("admin"),
+        json={"grants": {"alice": ["read", "attach"], "bob": ["read"], "read-attach": ["attach"]}},
+    ).status_code == 200
+    source_acl_denied = library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth("read-attach"),
+        json={"attachment_id": aid},
+    )
+    assert source_acl_denied.status_code == 403
+    assert source_acl_denied.json()["error"]["code"] == "XL_FORBIDDEN"
     assert library.post(
         f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
         headers=auth("bob"),

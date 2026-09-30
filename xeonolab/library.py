@@ -699,6 +699,7 @@ def create_app(settings=None):
             ).fetchone()
             if source is None:
                 raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found in this table")
+            actor.require("xelibrary:read")
             authorize(actor, tid, "read", source["row_id"])
             load_row(db, source["row_id"])
             if source["row_id"] == rid:
