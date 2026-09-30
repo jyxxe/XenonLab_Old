@@ -1,5 +1,6 @@
 """Durable, fenced collaboration claims. Issue text never becomes executable input."""
 
+import os
 import time
 from uuid import uuid4
 
@@ -13,6 +14,12 @@ class WorkCreate(BaseModel):
     issue_id: int = Field(ge=1)
     repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
     title: str = Field(min_length=1, max_length=200)
+
+
+class IssueLink(BaseModel):
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    target_issue_id: int = Field(ge=1)
+    type: str = Field(pattern=r"^(duplicate_of|related_to|blocked_by|blocks|supersedes)$")
 
 
 class Claim(BaseModel):
@@ -31,9 +38,16 @@ def install(app):
         CREATE TABLE IF NOT EXISTS work(id TEXT PRIMARY KEY,repository TEXT,issue_id INTEGER,
           title TEXT,status TEXT,holder TEXT,expires REAL,epoch INTEGER,
           UNIQUE(repository,issue_id));
+        CREATE TABLE IF NOT EXISTS issue_links(repository TEXT,source INTEGER,target INTEGER,kind TEXT,
+          actor TEXT,created REAL,PRIMARY KEY(repository,source,target,kind));
         CREATE TABLE IF NOT EXISTS work_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,
           work_id TEXT,epoch INTEGER,at REAL);
         """)
+
+    def repository_allowed(repository):
+        allowed = os.getenv("DEV_REPOSITORIES", "xenon-admin/XeonoLab").split(",")
+        if app.state.settings.mode == "production" and repository not in allowed:
+            raise APIError(403, "REPOSITORY_FORBIDDEN", "repository outside service scope")
 
     def load(db, work_id):
         row = db.execute("SELECT * FROM work WHERE id=?", (work_id,)).fetchone()
@@ -49,6 +63,7 @@ def install(app):
 
     @app.post("/api/v1/work", status_code=201)
     def create(body: WorkCreate, request: Request, actor=Depends(scope("dev:write"))):
+        repository_allowed(body.repository)
         with transaction(database) as db:
             old = db.execute(
                 "SELECT * FROM work WHERE repository=? AND issue_id=?", (body.repository, body.issue_id)
@@ -106,3 +121,55 @@ def install(app):
             )
             audit(db, actor, "work.completed" if body.completed else "work.released", work_id, body.epoch)
             return response(request, load(db, work_id))
+
+    @app.post("/api/v1/issues/{issue_id}/links", status_code=201)
+    def link(issue_id: int, body: IssueLink, request: Request, actor=Depends(scope("dev:write"))):
+        repository_allowed(body.repository)
+        if issue_id == body.target_issue_id:
+            raise APIError(422, "SELF_LINK", "cannot link an issue to itself")
+        with transaction(database) as db:
+            for number in (issue_id, body.target_issue_id):
+                if not db.execute(
+                    "SELECT 1 FROM work WHERE repository=? AND issue_id=?", (body.repository, number)
+                ).fetchone():
+                    raise APIError(404, "ISSUE_NOT_REGISTERED", "register both issues before linking")
+            if body.type == "duplicate_of":
+                cycle = db.execute(
+                    """WITH RECURSIVE targets(id) AS (
+                    SELECT ? UNION SELECT l.target FROM issue_links l JOIN targets t ON l.source=t.id
+                    WHERE l.repository=? AND l.kind='duplicate_of')
+                    SELECT 1 FROM targets WHERE id=?""",
+                    (body.target_issue_id, body.repository, issue_id),
+                ).fetchone()
+                if cycle:
+                    raise APIError(409, "DUPLICATE_CYCLE", "duplicate relation would create a cycle")
+            db.execute(
+                "INSERT OR IGNORE INTO issue_links VALUES(?,?,?,?,?,?)",
+                (body.repository, issue_id, body.target_issue_id, body.type, actor.sub, time.time()),
+            )
+            item = db.execute(
+                "SELECT id,epoch FROM work WHERE repository=? AND issue_id=?", (body.repository, issue_id)
+            ).fetchone()
+            audit(db, actor, "issue.linked:" + body.type, item["id"], item["epoch"])
+        return response(
+            request,
+            {
+                "repository": body.repository,
+                "issue_id": issue_id,
+                "target_issue_id": body.target_issue_id,
+                "type": body.type,
+            },
+        )
+
+    @app.get("/api/v1/issues/{issue_id}/links")
+    def links(issue_id: int, repository: str, request: Request, actor=Depends(scope("dev:read"))):
+        repository_allowed(repository)
+        with connect(database) as db:
+            rows = [
+                dict(row)
+                for row in db.execute(
+                    "SELECT * FROM issue_links WHERE repository=? AND (source=? OR target=?) ORDER BY created",
+                    (repository, issue_id, issue_id),
+                )
+            ]
+        return response(request, rows)

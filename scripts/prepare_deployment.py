@@ -11,13 +11,14 @@ credentials = json.loads((root / "credentials.json").read_text())
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 public = (root / "deploy-key.pub").read_text().strip()
 roles = {
-    "platform-admin": "desktop:read desktop:admin xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:admin deploy:read llm:use".split()
+    "platform-admin": "dev:read dev:write desktop:read desktop:admin xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:admin deploy:read llm:use".split()
 }
 services = {
     "101": {"desktop-web": 8101},
     "104": {"xelibrary": 8100},
     "106": {"deploy-gateway": 8103, "tool-gateway": 8102, "llm-gateway": 8105},
     "107": {"embedding": 8104},
+    "111": {"dev-agent": 8106},
 }
 for node, entries in services.items():
     dest = root / node
@@ -85,7 +86,7 @@ artifact = {
         {
             "commit": commit,
             "artifacts": [artifact],
-            "targets": ["192.168.0.107", "192.168.0.104", "192.168.0.101", "192.168.0.106"],
+            "targets": ["192.168.0.107", "192.168.0.104", "192.168.0.101", "192.168.0.111", "192.168.0.106"],
         }
     )
 )
@@ -95,7 +96,7 @@ artifact = {
             "commit": commit,
             "artifacts": [artifact],
             "migration_manifest": "bootstrap-v1-no-existing-data-migration",
-            "test_report": "19 tests; frontend build; D100M model smoke",
+            "test_report": "22 tests; frontend build; D100M model smoke",
         }
     )
 )

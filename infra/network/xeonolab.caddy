@@ -7,6 +7,10 @@
   handle @desktop_api {
     reverse_proxy 127.0.0.1:8101
   }
+  @work_api path /api/v1/work* /api/v1/issues/*
+  handle @work_api {
+    reverse_proxy 192.168.0.111:8106
+  }
   handle /api/v1/* {
     reverse_proxy 192.168.0.104:8100
   }

@@ -15,7 +15,7 @@ key = str(Path.home() / ".ssh/xenon_v2_ed25519")
 command("git", "archive", "--format=tar", "HEAD", "-o", "runtime/xeonolab-release.tar")
 command("tar", "-rf", "runtime/xeonolab-release.tar", "apps/desktop-web/dist")
 command("uv", "run", "python", "scripts/prepare_deployment.py")
-for node in (107, 104, 101, 106):
+for node in (107, 104, 101, 111, 106):
     host = f"xenon@192.168.0.{node}"
     command("scp", "-i", key, "runtime/xeonolab-release.tar", host + ":/tmp/xeonolab-release.tar")
     release = "/opt/xeonolab/releases/" + commit

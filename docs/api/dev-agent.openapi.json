@@ -247,6 +247,97 @@
         }
       }
     },
+    "/api/v1/issues/{issue_id}/links": {
+      "post": {
+        "summary": "Link",
+        "operationId": "link_api_v1_issues__issue_id__links_post",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueLink"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Links",
+        "operationId": "links_api_v1_issues__issue_id__links_get",
+        "parameters": [
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Issue Id"
+            }
+          },
+          {
+            "name": "repository",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Repository"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/webhooks/forgejo": {
       "post": {
         "summary": "Webhook",
@@ -291,6 +382,32 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IssueLink": {
+        "properties": {
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+            "title": "Repository"
+          },
+          "target_issue_id": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Target Issue Id"
+          },
+          "type": {
+            "type": "string",
+            "pattern": "^(duplicate_of|related_to|blocked_by|blocks|supersedes)$",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repository",
+          "target_issue_id",
+          "type"
+        ],
+        "title": "IssueLink"
       },
       "Release": {
         "properties": {

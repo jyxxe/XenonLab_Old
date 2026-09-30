@@ -69,3 +69,44 @@ def test_expired_claim_cannot_complete_reassigned_task(settings, monkeypatch):
         == 200
     )
     assert client.post(path + "/claim", headers=auth(), json={}).status_code == 409
+
+
+def test_issue_links_are_scoped_persistent_and_cycle_safe(settings):
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+    for number in (1, 2):
+        client.post(
+            "/api/v1/work",
+            headers=auth(),
+            json={"repository": "owner/repo", "issue_id": number, "title": "Task"},
+        )
+    body = {"repository": "owner/repo", "target_issue_id": 2, "type": "duplicate_of"}
+    assert client.post("/api/v1/issues/1/links", headers=auth("bob"), json=body).status_code == 403
+    assert client.post("/api/v1/issues/1/links", headers=auth(), json=body).status_code == 201
+    assert (
+        client.post("/api/v1/issues/2/links", headers=auth(), json={**body, "target_issue_id": 1}).status_code
+        == 409
+    )
+    assert (
+        client.post("/api/v1/issues/1/links", headers=auth(), json={**body, "target_issue_id": 1}).status_code
+        == 422
+    )
+    assert (
+        client.post("/api/v1/issues/1/links", headers=auth(), json={**body, "target_issue_id": 3}).status_code
+        == 404
+    )
+    restarted = TestClient(create_app("dev-agent", settings))
+    assert (
+        len(
+            restarted.get(
+                "/api/v1/issues/2/links", headers=auth(), params={"repository": "owner/repo"}
+            ).json()["data"]
+        )
+        == 1
+    )
+    assert (
+        restarted.get("/api/v1/issues/2/links", headers=auth(), params={"repository": "other/repo"}).json()[
+            "data"
+        ]
+        == []
+    )

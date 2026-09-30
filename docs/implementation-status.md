@@ -66,3 +66,7 @@ restore 校验当前 schema 与 If-Match，保留历史；purge 删除行历史�
 DevAgent 已实现持久化 work queue create/list/claim/release：scope dev:read/write、
 SQLite 原子领取、TTL 与 epoch fencing、完成状态和审计。并发、重启、权限、过期重领测试通过。
 该组件尚未线上接入；Forgejo Issue 同步与 UI 领取按钮仍待实施，不能视为完整 DevAgent 完成。
+
+Issue links API 已实现 related/blocked/blocks/supersedes/duplicate 关系持久化，
+重复关系拒绝自环和环路，跨仓库分离，生产固定 repository allowlist；22 项测试通过。
+工作队列页面已构建，独立 OAuth 开发身份已创建（无 production deploy scope）。
