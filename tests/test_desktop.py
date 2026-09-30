@@ -37,6 +37,13 @@ def test_app_changes_are_versioned_and_audited(settings):
     settings.dev_tokens["admin"]["scope"] += " desktop:admin desktop:read"
     settings.dev_tokens["alice"]["scope"] += " desktop:read"
     client = TestClient(create_app("desktop-web", settings))
+    reserved_dashboard = client.post(
+        "/api/v1/apps",
+        headers=auth("admin"),
+        json={"id": "dashboard", "title": "Conflicting app", "origin": "https://dashboard.example"},
+    )
+    assert reserved_dashboard.status_code == 422
+    assert reserved_dashboard.json()["error"]["code"] == "RESERVED_APP_ID"
     entry = {"id": "editor", "title": "Editor", "origin": "https://EDITOR.xenon.lan:443"}
     created = client.post("/api/v1/apps", headers=auth("admin"), json=entry)
     assert created.status_code == 201

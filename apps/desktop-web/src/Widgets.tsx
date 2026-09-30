@@ -1,5 +1,4 @@
 import React,{useEffect,useRef,useState} from 'react';
-type API=(path:string,init?:RequestInit)=>Promise<any>;
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
 type WorkItem={id:string;status:string};
 type Job={job_id:string;status:string};

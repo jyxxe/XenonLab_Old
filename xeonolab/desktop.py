@@ -122,7 +122,7 @@ def create_app(settings=None):
             raise APIError(422, "INVALID_ORIGIN", "invalid origin hostname or port") from None
 
     def check_origin(body):
-        if body.id in {"knowledge", "settings", "work"}:
+        if body.id in {"dashboard", "knowledge", "settings", "work"}:
             raise APIError(422, "RESERVED_APP_ID", "built-in application ID is reserved")
         desktops = {
             "https://xenon.lan",
