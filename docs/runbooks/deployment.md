@@ -58,9 +58,9 @@ LLM 和 Tool Gateway 使用不同系统用户，均不能读取部署私钥，To
 定理授权读写已完成生产验收。Lean 验证和 Library Agent 仍未部署，`verify`/`candidates`
 继续按设计返回 503。
 
-本次源码提交位于本地 `feature/platform-v1`；当前 checkout 没有配置 Git remote，故源码尚未
-同步至 Forgejo。生产部署已由 Deploy Gateway 完成，但应在 Forgejo remote/PR 工作流配置后
-补齐源码同步，以保持可复现发布记录。
+部署源码 commit `67bea9f81bb450afbcb7690a00006e765a99d40f` 及验收文档已由受限发布脚本
+`scripts/publish_source.py --local` 同步至 Forgejo 的 `feature/platform-v1`；远端分支从
+`0efab2d` 快进到 `2587cae`，未改写历史。`2587cae` 只增加本次部署/验收记录，不改变已部署代码。
 
 - 189 项后端测试、11 项桌面测试、TypeScript/Vite production build 通过；本次改动的 Ruff 检查通过。
 - Issue #69 Caddy include 已同步；Caddy active，完整 Caddyfile validate 通过。公网桌面、OIDC discovery、Forgejo 登录页及 IP 入口 smoke check 通过。
