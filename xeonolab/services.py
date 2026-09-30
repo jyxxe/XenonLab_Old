@@ -137,6 +137,9 @@ def create_app(service=None, settings=None):
             return await forward(request, "POST", "/api/v1/search/semantic", body.model_dump())
 
     elif service == "dev-agent":
+        from .work import install
+
+        install(app)
         database = app.state.settings.data_dir / "events.sqlite"
         with transaction(database) as db:
             db.execute("CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, digest TEXT, payload TEXT)")

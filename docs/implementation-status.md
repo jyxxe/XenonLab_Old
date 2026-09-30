@@ -62,3 +62,7 @@ restore 校验当前 schema 与 If-Match，保留历史；purge 删除行历史�
 优先级更新：Issues/Forgejo、权限页面和 Harness 协作优先。
 已实现身份 scopes 展示、管理员 ACL 读取/编辑页面、管理员审计查询 API；19 项测试与前端构建通过。
 公网主域已确定 xenon.jyxxe.com；Cloudflare 原 no-tunnel 例外已被用户撤销。
+
+DevAgent 已实现持久化 work queue create/list/claim/release：scope dev:read/write、
+SQLite 原子领取、TTL 与 epoch fencing、完成状态和审计。并发、重启、权限、过期重领测试通过。
+该组件尚未线上接入；Forgejo Issue 同步与 UI 领取按钮仍待实施，不能视为完整 DevAgent 完成。
