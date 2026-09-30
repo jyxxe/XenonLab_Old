@@ -21,7 +21,7 @@
 | 12 | Chunk 设计 | 部分实现 / 未做生产验收 | `search.py` tokenizer-aware chunking 与 chunker 版本有测试；title 约定未落地。 |
 | 13 | 向量空间 | 部分实现 / 未做生产验收 | D100M 本地精确向量索引存在；计划中的多逻辑向量空间与 Qdrant 尚无。 |
 | 14 | 默认查询策略 | 部分实现 / 未做生产验收 | Fast semantic search 已实现且 ACL/行版本检查；quality 与 image 分支不可用。 |
-| 15 | 定理区数据模型 | 本地实现 / 测试通过 / 未发布 | XeLibrary 新增定理字段、confidence/provenance、formal/review 状态分离、修订历史、依赖与 evidence refs；状态由专用审核/验证路径管理。Lean 验证器仍未实现，详见 `xeonolab/theorems.py`。 |
+| 15 | 定理区数据模型 | 部分实现 / 已发布，生产读写验收待做 | XeLibrary 定理字段、confidence/provenance、formal/review 状态分离、修订历史、依赖与 evidence refs 已随 release `7779e286` 部署。正向授权读写尚未在线验收；Lean 验证器仍未实现，详见 `xeonolab/theorems.py`。 |
 | 16 | API 总体规范 | 部分实现 / 未做生产验收 | `common.py` 提供版本化 API、认证、request ID、错误格式、ETag；缺少完整兼容策略。 |
 | 17 | 通用运维 API | 部分实现 / 未做生产验收 | 四个运维端点由 `common.py` 提供；ready 目前只用可选 callable。 |
 | 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；协调器报告 `runtime/browser-private/issue41-results/report.json` 有 34+ 项真实 Chrome UI 检查。此证据覆盖 Issue #41 桌面路径，仍不等于本节所有 registry/API/security 条款都已验收。 |
@@ -40,7 +40,7 @@
 | 31 | XeLibrary Revision API | 部分实现 / 未做生产验收 | 行 revisions、历史读取、restore 和 If-Match 有实现与测试。 |
 | 32 | XeLibrary ACL API | 部分实现 / 未做生产验收 | path/table/row ACL、继承、ETag/If-Match、审计 API 有实现与测试。 |
 | 33 | XeLibrary Proposal API | 未实现 | 没有 proposal 存储、审批或 API。 |
-| 34 | Theorem API | 部分实现 / 本地测试通过 / 未发布 | XeLibrary 已有 CRUD、search、dependencies/dependents、evidence、promote/reject、路径 ACL、If-Match/ETag 与审计；`verify` 和 `candidates` 在 Lean/Library Agent 未配置时明确返回 503。 |
+| 34 | Theorem API | 部分实现 / 已发布，生产授权读写验收待做 | XeLibrary 的 CRUD、search、dependencies/dependents、evidence、promote/reject、路径 ACL、If-Match/ETag 与审计已随 release `7779e286` 部署；本次仅验收了服务健康和未认证请求拒绝，尚未做已授权主体的线上 CRUD/审核验收。`verify` 和 `candidates` 在 Lean/Library Agent 未配置时明确返回 503。 |
 | 35 | Embedding API | 部分实现 / 未做生产验收 | Embedding D100M fast endpoint 有真实模型；Qwen/image 端点不可用。 |
 | 36 | Embedding 调度优先级 | 部分机制 / 关键能力缺失 | CPU worker busy 会 429；没有请求优先级/后台 ingestion 抢占队列。 |
 | 37 | HF-cache API | 部分实现 / 已发布，物理池接线未验收 | `xeonolab/hf_cache.py` 提供 ensure、manifest/hash、items、pin/lease、evict/GC、storage 与异步预取 job；运行记录确认 API 已部署。生产物理池数据源仍未接线，真实模型缓存下载/回收场景待验收。 |

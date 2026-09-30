@@ -1,6 +1,6 @@
 # PVE LAN 上线记录 — 2026-10-01
 
-当前可运行版本已上线。应用代码版本 `c35b7e07fc14d1a32459f9108f8ba9285f37dd5d`。
+当前可运行版本已上线。应用代码版本 `67bea9f81bb450afbcb7690a00006e765a99d40f`。
 完整 plan.md 的所有阶段尚未完成；此版本还包含 DevAgent Issues 协作、HF-cache API/预取保护和 Caddy include 同步。
 
 ## 访问
@@ -47,9 +47,20 @@ LLM 和 Tool Gateway 使用不同系统用户，均不能读取部署私钥，To
 通过真实 OIDC Codex 身份注册 release，由明确授权的 policy 身份批准，再 acquire lease、
 调用 Deploy Gateway。网关只运行固定 executor，受限 SSH forced-command 只激活已暂存的
 指定 commit。各服务健康检查成功后租约释放。再次通过相同流程重启各应用，样例数据仍保留。
-最新上线 ID：`11d077db-f1cd-4428-8e3a-5c1695397de3`；对应 release
-`23790bcb-2c0a-4816-8055-faae05e7deed`，commit
-`c35b7e07fc14d1a32459f9108f8ba9285f37dd5d`，状态 completed，租约已释放。
+最新上线 ID：`8300843b-d69a-46f1-8e94-c8ac71a3905e`；对应 release
+`7779e286-5a72-424c-8b63-7e9769847865`，commit
+`67bea9f81bb450afbcb7690a00006e765a99d40f`，状态 completed，租约已释放。
+
+本次包含 Issue #26 定理数据模型与 API。上线后的只读验证中，所有五个入口
+（桌面、XeLibrary、Tool Gateway、Deploy Gateway、LLM Gateway）的 `/health/ready`
+均返回 200；未认证的定理列表请求返回预期的 401 `UNAUTHENTICATED`。公网桌面首页和认证配置
+均返回 200。尚未使用具备正向定理权限的登录主体执行线上 CRUD/审核验收，因此不能据此认定
+定理授权读写已完成生产验收。Lean 验证和 Library Agent 仍未部署，`verify`/`candidates`
+继续按设计返回 503。
+
+本次源码提交位于本地 `feature/platform-v1`；当前 checkout 没有配置 Git remote，故源码尚未
+同步至 Forgejo。生产部署已由 Deploy Gateway 完成，但应在 Forgejo remote/PR 工作流配置后
+补齐源码同步，以保持可复现发布记录。
 
 - 189 项后端测试、11 项桌面测试、TypeScript/Vite production build 通过；本次改动的 Ruff 检查通过。
 - Issue #69 Caddy include 已同步；Caddy active，完整 Caddyfile validate 通过。公网桌面、OIDC discovery、Forgejo 登录页及 IP 入口 smoke check 通过。
