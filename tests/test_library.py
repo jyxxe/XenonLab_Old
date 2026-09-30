@@ -386,6 +386,31 @@ def test_acl_revision_etag_concurrency_and_inheritance_clear(library):
     assert library.delete(path, headers=auth("admin", **{"If-Match": current.headers["ETag"]})).status_code == 412
 
 
+def test_acl_put_and_clear_compete_on_one_revision(library):
+    tid, _ = seed(library)
+    path = f"/api/v1/acl/table/{tid}"
+    initial = library.get(path, headers=auth("admin"))
+    assert initial.status_code == 200
+    headers = {"If-Match": initial.headers["ETag"]}
+
+    def set_explicit(_):
+        return library.put(path, headers=auth("admin", **headers), json={"grants": {"bob": ["read"]}})
+
+    def restore_inheritance(_):
+        return library.delete(path, headers=auth("admin", **headers))
+
+    with ThreadPoolExecutor(2) as pool:
+        writes = list(pool.map(lambda action: action(0), [set_explicit, restore_inheritance]))
+
+    assert sorted(result.status_code for result in writes) == [200, 412]
+    current = library.get(path, headers=auth("admin"))
+    assert current.headers["ETag"] == '"revision:1"'
+    if current.json()["data"]["explicit"]:
+        assert current.json()["data"]["grants"] == {"bob": ["read"]}
+    else:
+        assert current.json()["data"]["grants"] == {}
+
+
 def test_acl_listing_is_cursor_paginated_and_admin_only(library):
     tid, rid = seed(library)
     assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
