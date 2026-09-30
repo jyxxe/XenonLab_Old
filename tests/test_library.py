@@ -744,6 +744,78 @@ def test_row_acl_catalogue_connections_are_bounded_per_request(library, settings
     assert len(opened) == 3 * len(responses)
 
 
+def test_row_acl_snapshot_uses_composite_index_with_large_unrelated_catalogue(
+    library, settings, monkeypatch
+):
+    tid, rid = seed(library)
+    catalogue = settings.data_dir / "catalogue.sqlite"
+    external_table = str(uuid4())
+    unrelated = [
+        (
+            "row",
+            f"{external_table}:{uuid4()}",
+            "{}",
+            1,
+            1,
+        )
+        for _ in range(12_000)
+    ]
+    with sqlite3.connect(catalogue) as db:
+        db.executemany(
+            "INSERT INTO acl(resource_type,resource_id,grants,revision,explicit) VALUES(?,?,?,?,?)",
+            unrelated,
+        )
+        db.executemany(
+            "INSERT INTO acl(resource_type,resource_id,grants,revision,explicit) VALUES(?,?,?,?,?)",
+            [
+                ("table", tid, json.dumps({"bob": ["read"]}), 1, 1),
+                ("row", f"{tid}:{rid}", json.dumps({"bob": []}), 1, 1),
+            ],
+        )
+    import xeonolab.library as library_module
+
+    original_connect = library_module.connect
+    plans = []
+
+    class ExplainConnection:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __enter__(self):
+            self.connection.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.connection.__exit__(*args)
+
+        def execute(self, sql, parameters=()):
+            if sql.startswith("SELECT resource_type,resource_id,grants,explicit FROM acl WHERE"):
+                plans.append(
+                    [
+                        row[3]
+                        for row in self.connection.execute("EXPLAIN QUERY PLAN " + sql, parameters)
+                    ]
+                )
+            return self.connection.execute(sql, parameters)
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+    def explain_connect(path):
+        connection = original_connect(path)
+        return ExplainConnection(connection) if str(path) == str(catalogue) else connection
+
+    monkeypatch.setattr(library_module, "connect", explain_connect)
+    rows = library.get(f"/api/v1/tables/{tid}/rows", headers=auth("bob"))
+    assert rows.status_code == 200, rows.text
+    assert rows.json()["data"] == []
+    assert len(plans) == 1
+    plan = plans[0]
+    row_branch = next(line for line in plan if "resource_type=? AND resource_id>? AND resource_id<?" in line)
+    assert "sqlite_autoindex_acl_1" in row_branch
+    assert not any(line.startswith("SCAN acl") for line in plan)
+
+
 def test_acl_revision_etag_concurrency_and_inheritance_clear(library):
     tid, _ = seed(library)
     path = f"/api/v1/acl/table/{tid}"

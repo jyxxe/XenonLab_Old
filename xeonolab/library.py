@@ -258,13 +258,20 @@ def create_app(settings=None):
             path = str(PurePosixPath(path).parent)
 
         path_marks = ",".join("?" for _ in paths)
+        # Row ACL identifiers are encoded as ``<table UUID>:<row UUID>``.
+        # A BINARY range keeps this prefix lookup on the composite
+        # (resource_type, resource_id) primary-key index; LIKE would scan every
+        # row ACL in the catalogue because SQLite cannot derive a useful range
+        # from the bound pattern on this compound key.
+        row_prefix = table["id"] + ":"
+        row_prefix_end = table["id"] + ";"
         with connect(catalogue) as db:
             policies = db.execute(
                 "SELECT resource_type,resource_id,grants,explicit FROM acl WHERE "
                 "(resource_type='table' AND resource_id=?) OR "
-                "(resource_type='row' AND resource_id LIKE ?) OR "
+                "(resource_type='row' AND resource_id>=? AND resource_id<?) OR "
                 f"(resource_type='path' AND resource_id IN ({path_marks}))",
-                (table["id"], table["id"] + ":%", *paths),
+                (table["id"], row_prefix, row_prefix_end, *paths),
             ).fetchall()
         by_resource = {
             (policy["resource_type"], policy["resource_id"]): (
