@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
-from .conftest import auth
+from .conftest import auth, put_acl
 
 
 def seed(client):
@@ -71,10 +72,16 @@ def test_concurrent_updates(library):
 def test_acl_move_and_attachment(library):
     tid, rid = seed(library)
     assert (
-        library.put(
-            f"/api/v1/acl/table/{tid}",
-            headers=auth("admin"),
-            json={"grants": {"alice": ["read", "write", "attach"], "bob": ["read"]}},
+        put_acl(
+            library,
+            "table",
+            tid,
+            {
+                "alice": ["read", "write", "attach"],
+                "bob": ["read"],
+                "attach-only": ["attach"],
+                "read-attach": ["read", "attach"],
+            },
         ).status_code
         == 200
     )
@@ -87,12 +94,98 @@ def test_acl_move_and_attachment(library):
     )
     assert result.status_code == 201, result.text
     aid = result.json()["data"]["attachment_id"]
+    metadata = library.get("/api/v1/attachments/" + aid, params={"table_id": tid}, headers=auth("bob"))
+    assert metadata.status_code == 200
+    assert metadata.json()["data"]["filename"] == "proof.pdf"
+    assert metadata.json()["data"]["row_id"] == rid
+    assert library.get(
+        f"/api/v1/tables/{tid}/rows/{rid}/attachments", headers=auth("bob")
+    ).json()["data"][0]["attachment_id"] == aid
+    library.app.state.settings.dev_tokens["reader"] = {
+        "sub": "reader", "scope": "xelibrary:read", "agent_kind": "human"
+    }
+    denied_upload = library.post(
+        "/api/v1/attachments",
+        params={"table_id": tid, "row_id": rid},
+        headers=auth("reader"),
+        files={"upload": ("blocked.txt", b"no", "text/plain")},
+    )
+    assert denied_upload.status_code == 403
     assert (
         library.get(
             f"/api/v1/attachments/{aid}/content", params={"table_id": tid}, headers=auth("bob")
         ).content
         == b"%PDF-test"
     )
+    second = library.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"title": "第二条记录", "confidence": 0.5}},
+    )
+    rid2 = second.json()["data"]["_row_id"]
+    library.app.state.settings.dev_tokens["attach-only"] = {
+        "sub": "attach-only", "scope": "xelibrary:attach", "agent_kind": "human"
+    }
+    attach_only = library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth("attach-only"),
+        json={"attachment_id": aid},
+    )
+    assert attach_only.status_code == 403
+    assert attach_only.json()["error"]["code"] == "FORBIDDEN"
+    library.app.state.settings.dev_tokens["read-attach"] = {
+        "sub": "read-attach", "scope": "xelibrary:read xelibrary:attach", "agent_kind": "human"
+    }
+    assert put_acl(
+        library,
+        "row",
+        f"{tid}:{rid}",
+        {"alice": ["read", "attach"], "bob": ["read"], "read-attach": ["attach"]},
+    ).status_code == 200
+    source_acl_denied = library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth("read-attach"),
+        json={"attachment_id": aid},
+    )
+    assert source_acl_denied.status_code == 403
+    assert source_acl_denied.json()["error"]["code"] == "XL_FORBIDDEN"
+    assert library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth("bob"),
+        json={"attachment_id": aid},
+    ).status_code == 403
+    linked = library.post(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments",
+        headers=auth(),
+        json={"attachment_id": aid},
+    )
+    assert linked.status_code == 201, linked.text
+    linked_id = linked.json()["data"]["attachment_id"]
+    assert library.get(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments", headers=auth()
+    ).json()["data"][0]["attachment_id"] == linked_id
+    assert library.get(
+        f"/api/v1/attachments/{linked_id}/content", params={"table_id": tid}, headers=auth("bob")
+    ).content == b"%PDF-test"
+    assert put_acl(library, "row", f"{tid}:{rid2}", {"alice": ["read", "attach"]}).status_code == 200
+    assert library.get(
+        "/api/v1/attachments/" + linked_id, params={"table_id": tid}, headers=auth("bob")
+    ).status_code == 403
+    assert library.get(
+        f"/api/v1/attachments/{linked_id}/content", params={"table_id": tid}, headers=auth("bob")
+    ).status_code == 403
+    assert library.delete(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments/{linked_id}", headers=auth()
+    ).status_code == 200
+    assert library.get(
+        f"/api/v1/tables/{tid}/rows/{rid2}/attachments", headers=auth()
+    ).json()["data"] == []
+    assert library.get(
+        f"/api/v1/attachments/{linked_id}/content", params={"table_id": tid}, headers=auth()
+    ).status_code == 404
+    assert library.get(
+        f"/api/v1/attachments/{aid}/content", params={"table_id": tid}, headers=auth("bob")
+    ).content == b"%PDF-test"
     meta = library.get(f"/api/v1/tables/{tid}", headers=auth())
     result = library.post(
         f"/api/v1/tables/{tid}/move",
@@ -161,7 +254,7 @@ def test_idempotency_and_schema_migration(library):
 
 
 def test_parent_acl_prevents_creation(library):
-    library.put("/api/v1/acl/path//数学", headers=auth("admin"), json={"grants": {"bob": ["read"]}})
+    put_acl(library, "path", "/数学", {"bob": ["read"]})
     result = library.post(
         "/api/v1/tables",
         headers=auth(),
@@ -203,19 +296,11 @@ def test_deleted_rows_are_opt_in_and_still_acl_checked(library):
     rows_path = f"/api/v1/tables/{tid}/rows"
     assert library.get(rows_path, headers=auth()).json()["data"] == []
     assert library.get(rows_path + "?include_deleted=true", headers=auth()).json()["data"][0]["_deleted_at"]
-    assert library.put(
-        f"/api/v1/acl/table/{tid}", headers=auth("admin"), json={"grants": {"bob": ["read"]}}
-    ).status_code == 200
-    assert library.put(
-        f"/api/v1/acl/row/{tid}:{rid}", headers=auth("admin"), json={"grants": {}}
-    ).status_code == 200
+    assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{rid}", {}).status_code == 200
     assert library.get(rows_path + "?include_deleted=true", headers=auth("bob")).json()["data"] == []
 
-    assert library.put(
-        f"/api/v1/acl/row/{tid}:{rid}",
-        headers=auth("admin"),
-        json={"grants": {"bob": ["read"]}},
-    ).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{rid}", {"bob": ["read"]}).status_code == 200
     visible = library.get(rows_path + "?include_deleted=true", headers=auth("bob"))
     assert [row["_row_id"] for row in visible.json()["data"]] == [rid]
 
@@ -254,9 +339,93 @@ def test_acl_inspection_and_audit_are_admin_only(library):
     assert library.get(path, headers=auth()).status_code == 403
     assert library.get("/api/v1/audit", headers=auth()).status_code == 403
     assert library.get(path, headers=auth("admin")).json()["data"]["explicit"] is False
-    assert library.put(path, headers=auth("admin"), json={"grants": {"bob": ["read"]}}).status_code == 200
+    assert library.put(
+        path,
+        headers=auth("alice", **{"If-Match": '"revision:0"'}),
+        json={"grants": {"bob": ["read"]}},
+    ).status_code == 403
+    assert library.delete(path, headers=auth("alice", **{"If-Match": '"revision:0"'})).status_code == 403
+    assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
     assert library.get(path, headers=auth("admin")).json()["data"]["grants"] == {"bob": ["read"]}
     assert any(
         r["event"] == "acl.changed"
         for r in library.get("/api/v1/audit", headers=auth("admin")).json()["data"]
     )
+
+
+def test_acl_revision_etag_concurrency_and_inheritance_clear(library):
+    tid, _ = seed(library)
+    path = f"/api/v1/acl/table/{tid}"
+    initial = library.get(path, headers=auth("admin"))
+    assert initial.status_code == 200
+    assert initial.headers["ETag"] == '"revision:0"'
+    assert initial.json()["data"]["revision"] == 0
+
+    body = {"grants": {"bob": ["read"]}}
+    assert library.put(path, headers=auth("admin"), json=body).status_code == 412
+
+    def update(_):
+        return library.put(path, headers=auth("admin", **{"If-Match": initial.headers["ETag"]}), json=body)
+
+    with ThreadPoolExecutor(2) as pool:
+        responses = list(pool.map(update, [1, 2]))
+    assert sorted(response.status_code for response in responses) == [200, 412]
+    current = library.get(path, headers=auth("admin"))
+    assert current.headers["ETag"] == '"revision:1"'
+    assert current.json()["data"]["explicit"] is True
+    assert current.json()["data"]["grants"] == {"bob": ["read"]}
+    assert put_acl(library, "path", "/数学", {"bob": ["read"]}).status_code == 200
+
+    cleared = library.delete(path, headers=auth("admin", **{"If-Match": current.headers["ETag"]}))
+    assert cleared.status_code == 200
+    assert cleared.headers["ETag"] == '"revision:2"'
+    assert cleared.json()["data"]["explicit"] is False
+    assert cleared.json()["data"]["grants"] == {}
+    # Removing the table override restores the matching ancestor path ACL.
+    assert library.get(f"/api/v1/tables/{tid}", headers=auth("bob")).status_code == 200
+    assert library.delete(path, headers=auth("admin", **{"If-Match": current.headers["ETag"]})).status_code == 412
+
+
+def test_acl_listing_is_cursor_paginated_and_admin_only(library):
+    tid, rid = seed(library)
+    assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{rid}", {"bob": ["read"]}).status_code == 200
+    assert library.get("/api/v1/acl", headers=auth()).status_code == 403
+    first = library.get("/api/v1/acl?limit=1", headers=auth("admin"))
+    assert first.status_code == 200
+    assert len(first.json()["data"]) == 1
+    cursor = first.json()["meta"]["next_cursor"]
+    assert cursor
+    assert first.json()["data"][0]["explicit"] is True
+    assert isinstance(first.json()["data"][0]["grants"], dict)
+    second = library.get("/api/v1/acl", params={"limit": 1, "cursor": cursor}, headers=auth("admin"))
+    assert second.status_code == 200
+    assert len(second.json()["data"]) == 1
+    assert second.json()["data"][0]["resource_id"] != first.json()["data"][0]["resource_id"]
+    path = "/api/v1/acl/path/" + quote("/数学/分析", safe="")
+    assert library.get(path, headers=auth("admin")).status_code == 200
+
+
+def test_acl_old_catalog_migrates_revision_and_explicit_without_data_loss(settings):
+    import sqlite3
+
+    from fastapi.testclient import TestClient
+
+    from xeonolab.library import create_app
+
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    catalogue = settings.data_dir / "catalogue.sqlite"
+    with sqlite3.connect(catalogue) as db:
+        db.executescript("""
+            CREATE TABLE tables(id TEXT PRIMARY KEY,path TEXT,name TEXT,owner TEXT,UNIQUE(path,name));
+            CREATE TABLE acl(resource_type TEXT,resource_id TEXT,grants TEXT,PRIMARY KEY(resource_type,resource_id));
+            CREATE TABLE audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,resource TEXT,at TEXT);
+        """)
+        db.execute("INSERT INTO acl VALUES(?,?,?)", ("path", "/legacy", '{"bob":["read"]}'))
+
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/api/v1/acl/path//legacy", headers=auth("admin"))
+    assert response.status_code == 200
+    assert response.headers["ETag"] == '"revision:1"'
+    assert response.json()["data"]["explicit"] is True
+    assert response.json()["data"]["grants"] == {"bob": ["read"]}
