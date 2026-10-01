@@ -1,5 +1,14 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #71 System Dashboard 知识表首次加载状态已通过 Deploy Gateway 上线。部署提交
+`51a859c2e349c51e14a4a9d50bfec6de3b2db797`（功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`），
+release `da941881-eba2-4d91-aa34-74baff428470`，deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3`
+状态 `completed`，租约已释放。无 API、数据库 schema 或生产数据变更。前端 39 项、后端 279 项测试和
+TypeScript/Vite build 通过。部署后公网登录态 Chrome 44 项检查全部通过；Knowledge API/行列表 API
+均为 200，Dashboard 表数和图表与目录 API 一致，无浏览器、控制台、HTTP 错误或横向溢出。五个服务
+readiness 均为 200，公网 JS/CSS SHA-256 与本机构建一致。Issue #71 继续保持打开，完整 UI/UX 工作
+及 `plan.md` 尚未完成。详细验收见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
+
 2026-10-01 更新：Issue #80 过期 Work 认领状态区分已通过 Deploy Gateway 发布。代码 commit
 `c16efc35c99ce7deb1b457dad35da08ca805542d`，release
 `03fd828d-399d-498e-8e7d-e27049ab0da4`，deployment

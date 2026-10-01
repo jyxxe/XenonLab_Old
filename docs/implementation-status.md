@@ -241,3 +241,7 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #80 过期 Work 认领状态区分（2026-10-01，已部署）
 
 `c16efc35c99ce7deb1b457dad35da08ca805542d` 将 `queued` 与有效 `claimed` 统一作为活动项；过期领取独立计数、展示并允许重领，覆盖 Dashboard、状态小组件、Dock badge、Development、Issues、System Agents 和 Work。Deploy Gateway release `03fd828d-399d-498e-8e7d-e27049ab0da4` / deployment `2083222b-8a1d-4615-bc99-4cd2b671ff9b` 已完成，租约已释放。39 项前端、279 项后端、41 项 Work API 测试通过；TypeScript/Vite build、OpenAPI 无 diff 和 diff check 通过。部署后静态资源与构建哈希一致，5/5 readiness、匿名 API 401；只读生产 Work API 显示活动 21 项、过期领取 20 项。尚未在发布后重新运行登录态 Chrome 流程，因此 #80 暂保持开放，完整 V1 Plan 仍未完成。验收细节见 `docs/acceptance/issue-80-2026-10-01.md`。
+
+### Issue #71 Dashboard 知识表加载状态（2026-10-01，已部署）
+
+首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
