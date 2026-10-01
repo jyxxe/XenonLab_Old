@@ -116,3 +116,7 @@ Forgejo Issue #33 为实际联调记录，创建自动入队、关闭撤销 clai
 仅 issues 事件驱动同步，其余事件仅记录；ALLOWED_HOST_LIST 固定 192.168.0.101，
 webhook HTTP 8081 仅接受 Forgejo 110 来源，服务再次校验签名。Secret 以私密文件提供。
 仍需完善同一 updated_at 的冲突事件处理与主动 reconcile，不能以此次常规路径验收推断全部故障恢复完成。
+
+## 三类 Agent 公网身份复核（2026-10-01）
+
+ChatGPT Web、Zcode、General Agent 的私有 Agent.md 已补充工具可用性检查、无本地文件时的协调器写入草稿、按 Harness 隔离的请求文件及公网 API 入口。三账号通过公网 Forgejo `GET /dev/api/v1/user` 验证本人身份均为 200；各自公网 `/auth/realms/xeonolab/protocol/openid-connect/token` client_credentials 与平台 `GET /api/v1/users/me` 均为 200。LAN 同样通过；仓库 pull/push 为 true、admin 为 false，站点管理员为 false。各 profile 与现有账号凭据匹配，目录 0700、文件 0600，由 Git 忽略；未打印凭据。验证没有业务写入或部署。远端写入授权仍只属于 Codex，普通 Agent 将操作草稿和必要澄清交关联 Issue。
