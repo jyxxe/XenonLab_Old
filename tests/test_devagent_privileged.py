@@ -1,6 +1,8 @@
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -164,9 +166,39 @@ def test_operation_logs_redact_before_output_truncation(tmp_path, monkeypatch):
 
 def test_preflight_disables_git_replacement_objects(tmp_path, monkeypatch):
     validator = load("validate")
-    commands = []
-    monkeypatch.setattr(
-        validator.subprocess, "run", lambda argv, **kw: commands.append(argv) or SimpleNamespace(returncode=0)
+    execute = subprocess.run
+    env = dict(os.environ)
+    env.pop("GIT_NO_REPLACE_OBJECTS", None)
+
+    def git(*args):
+        return execute(
+            ["/usr/bin/git", "-C", str(tmp_path), *args], env=env, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    git("init")
+    git("config", "user.name", "Validation fixture")
+    git("config", "user.email", "validation@example.invalid")
+    (tmp_path / "payload").write_text("original commit content")
+    git("add", "payload")
+    git("commit", "-m", "original")
+    original = git("rev-parse", "HEAD")
+    (tmp_path / "payload").write_text("replacement commit content")
+    git("commit", "-am", "replacement")
+    git("replace", original, git("rev-parse", "HEAD"))
+    assert git("show", original + ":payload") == "replacement commit content"
+
+    def transient_unit(argv, **kwargs):
+        # Run real Git with the environment supplied to the validation unit.
+        unit_env = dict(env)
+        for arg in argv:
+            if arg.startswith("--setenv="):
+                key, value = arg[len("--setenv=") :].split("=", 1)
+                unit_env[key] = value
+        return execute(argv[argv.index("/usr/bin/git") :], env=unit_env, **kwargs)
+
+    monkeypatch.setattr(validator.subprocess, "run", transient_unit)
+    log = tmp_path / "log"
+    validator.user_command(
+        ["/usr/bin/git", "-C", str(tmp_path), "show", original + ":payload"], tmp_path, log
     )
-    validator.user_command(["/usr/bin/git", "cat-file", "-e", "a" * 40], tmp_path, tmp_path / "log")
-    assert "--setenv=GIT_NO_REPLACE_OBJECTS=1" in commands[0]
+    assert log.read_text() == "original commit content"
