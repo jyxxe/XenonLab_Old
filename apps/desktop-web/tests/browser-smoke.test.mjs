@@ -22,7 +22,7 @@ test('headless browser smoke: synthetic login, Knowledge and Work paging, recove
   const context = await browser.newContext({viewport: {width: 1440, height: 900}, reducedMotion: 'reduce'});
   const page = await context.newPage();
   const diagnostics = {console: [], pageErrors: [], failedRequests: [], httpErrors: []};
-  const state = {mode: 'anonymous', exchangeCount: 0, workRequests: [], workPage: 0};
+  const state = {mode: 'anonymous', exchangeCount: 0, workRequests: [], workPage: 0, layout: {dock: [], windows: []}, layoutPuts: [], logoutMethods: [], unknownApiRoutes: []};
   await context.tracing.start({screenshots: true, snapshots: true, sources: true});
   page.on('console', message => diagnostics.console.push({type: message.type(), text: message.text()}));
   page.on('pageerror', error => diagnostics.pageErrors.push(error.message));
@@ -65,10 +65,17 @@ test('headless browser smoke: synthetic login, Knowledge and Work paging, recove
         if (state.mode === 'anonymous') return route.fulfill({status: 401, json: {error: {code: 'NO_SESSION'}}});
         return route.fulfill({json: {token: 'synthetic-session-token', expires: 9999999999}});
       }
-      if (apiPath === '/auth/session/logout') return route.fulfill({json: {}});
+      if (apiPath === '/auth/session/logout') {state.logoutMethods.push(request.method()); state.mode = 'anonymous'; return route.fulfill({json: {}});}
       if (apiPath === '/users/me') return route.fulfill({json: {data: {subject: 'ci-smoke-user', kind: 'human', scopes: ['desktop:read', 'xelibrary:read', 'dev:read']}, meta: {request_id: 'ci-smoke'}}});
       if (apiPath === '/users/me/preferences') return route.fulfill({json: {data: {theme: 'dark', accent: 'blue', wallpaper: 'silver', timezone: 'UTC', widgets: [], dock_size: 'medium', dock_autohide: false, restore_windows: true, animations: false, reduced_motion: true}, meta: {request_id: 'ci-smoke'}}});
-      if (apiPath === '/users/me/layout') return route.fulfill({json: {data: {dock: [], windows: []}, meta: {request_id: 'ci-smoke'}}});
+      if (apiPath === '/users/me/layout') {
+        if (request.method() === 'PUT') {
+          const body = request.postDataJSON();
+          state.layoutPuts.push({method: request.method(), body});
+          state.layout = body;
+        }
+        return route.fulfill({json: {data: state.layout, meta: {request_id: 'ci-smoke'}}});
+      }
       if (apiPath === '/apps') return route.fulfill({json: {data: [], meta: {request_id: 'ci-smoke'}}});
       if (apiPath === '/tables') return route.fulfill({json: {data: [{id: 'smoke-table', path: '/CI', name: 'Smoke Knowledge'}], meta: {request_id: 'ci-smoke', next_cursor: null}}});
       if (apiPath === '/tables/smoke-table/schema' || apiPath === '/tables/smoke-table') return route.fulfill({json: {data: {id: 'smoke-table', path: '/CI', name: 'Smoke Knowledge', columns: [{name: 'title', type: 'text', nullable: false, default_value: null}], table_revision: 1, schema_revision: 1}, meta: {request_id: 'ci-smoke'}}});
@@ -88,7 +95,8 @@ test('headless browser smoke: synthetic login, Knowledge and Work paging, recove
         state.workPage += 1;
         return route.fulfill({json: {data: [{id: 'smoke-work-page-1', repository: 'xenon-admin/XeonoLab', issue_id: 901, title: 'CI smoke first page', status: 'queued', holder: null, expires: 0, epoch: 1, claim_active: false}], meta: {request_id: 'ci-smoke', next_cursor: 'smoke-page-2'}}});
       }
-      return route.fulfill({json: {data: [], meta: {request_id: 'ci-smoke', next_cursor: null}}});
+      state.unknownApiRoutes.push({method: request.method(), path: apiPath});
+      return route.abort('failed');
     });
 
     await page.goto(`${base}/`);
@@ -109,6 +117,29 @@ test('headless browser smoke: synthetic login, Knowledge and Work paging, recove
     await work.getByRole('button', {name: '加载更多', exact: true}).click();
     await expect(work).toContainText('CI smoke second page');
     assert.deepEqual(state.workRequests.slice(-2), [null, 'smoke-page-2']);
+
+    await page.locator('nav.dock button[title="系统设置"]').click();
+    const settings = page.locator('.window[data-app-id=settings]');
+    await expect(settings).toBeVisible();
+    const hasExpectedLayout = () => state.layoutPuts.some(saved => ['knowledge', 'issues', 'settings'].every(appId => saved.body.windows.some(win => win.app_id === appId)));
+    await expect.poll(hasExpectedLayout).toBe(true, {timeout: 5000});
+    const layoutPutsBeforeExplicitSave = state.layoutPuts.length;
+    await settings.getByRole('button', {name: '立即保存当前布局', exact: true}).click();
+    await expect(settings.getByRole('status')).toContainText('当前窗口位置、大小与 Dock 已保存');
+    await expect.poll(() => state.layoutPuts.length).toBeGreaterThan(layoutPutsBeforeExplicitSave);
+    const savedLayoutRequest = state.layoutPuts.at(-1);
+    assert.equal(savedLayoutRequest.method, 'PUT');
+    assert.equal(savedLayoutRequest.body.dock_initialized, true);
+    assert.ok(savedLayoutRequest.body.dock.includes('knowledge'));
+    assert.ok(['knowledge', 'issues', 'settings'].every(appId => savedLayoutRequest.body.windows.some(win => win.app_id === appId)), 'layout payload includes each open native app');
+
+    await page.reload();
+    await expect(page.locator('nav.dock')).toBeVisible();
+    await expect(page.locator('.window[data-app-id=knowledge]')).toBeVisible();
+    await expect(page.locator('.window[data-app-id=issues]')).toBeVisible();
+    await expect(page.locator('.window[data-app-id=settings]')).toBeVisible();
+    await page.locator('nav.dock button[title="任务"]').click();
+    await expect(work).toBeVisible();
 
     const assertWorkspaceRetained = async label => {
       await expect(page.locator('nav.dock')).toBeVisible();
@@ -144,6 +175,14 @@ test('headless browser smoke: synthetic login, Knowledge and Work paging, recove
     await expect(page.locator('[data-testid=session-status-banner]')).toBeVisible();
     await expect.poll(() => diagnostics.httpErrors.some(entry => entry.status === 401 && entry.url === '/api/v1/work')).toBe(true);
     await assertWorkspaceRetained('401');
+    await page.locator('.menubar-app-menu > button').click();
+    await page.getByRole('menuitem', {name: '退出登录', exact: true}).click();
+    await expect(page.getByRole('button', {name: '登录 XeonoLab', exact: true})).toBeVisible();
+    await expect(page.locator('output[data-testid=session-status]')).toHaveAttribute('data-phase', 'signed-out');
+    await expect(page.locator('nav.dock')).toHaveCount(0);
+    await expect(page.locator('.window')).toHaveCount(0);
+    assert.deepEqual(state.logoutMethods, ['POST'], 'explicit logout calls the synthetic logout endpoint after clearing local desktop state');
+    assert.deepEqual(state.unknownApiRoutes, [], 'the local API stub rejects any route not explicitly covered by this smoke test');
     assert.deepEqual(diagnostics.pageErrors, [], 'no uncaught browser exceptions');
   } catch (error) {
     await fs.mkdir(artifactDir, {recursive: true});

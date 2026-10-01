@@ -124,7 +124,11 @@ The frontend CI job uses a deterministic Playwright smoke test. It starts Vite o
 completes login against a synthetic OIDC provider, and stubs every platform API response in the
 browser. It checks that Knowledge and Work load, Work cursor pagination reaches page two, and
 401/429/500/503 plus timeout and network failures keep the desktop workspace and its unrelated
-Knowledge window mounted. It does not use a production identity, model, service, or tunnel.
+Knowledge window mounted. It verifies persisted window layout with a PUT request and reload, explicit
+logout clearing the windows and session, and fails on any API path absent from the local stub
+allowlist. The separate CI regression step also runs the existing session, Work, and shell browser
+acceptance suites, including the Dock preference/autohide checks. It does not use a production
+identity, model, service, or tunnel.
 
 Run the frontend gate from the repository root:
 
@@ -134,6 +138,7 @@ npm ci
 npx playwright install --with-deps chromium
 npm test
 npm run test:browser-smoke
+npm run test:browser-regression
 npm run build
 ```
 
