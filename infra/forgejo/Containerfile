@@ -1,3 +1,12 @@
 FROM docker.io/library/node@sha256:64af3819f9275802414d7cdc38c27e9d82bd564dec4d4da87d008255d36c63b4
 COPY ca-bundle.crt /etc/forgejo-runner/ca-bundle.crt
-ENV SSL_CERT_FILE=/etc/forgejo-runner/ca-bundle.crt GIT_SSL_CAINFO=/etc/forgejo-runner/ca-bundle.crt NODE_EXTRA_CA_CERTS=/etc/forgejo-runner/ca-bundle.crt
+COPY uv /opt/hostedtoolcache/uv/0.12.1/x86_64/uv
+COPY uvx /opt/hostedtoolcache/uv/0.12.1/x86_64/uvx
+COPY python /opt/xeonolab/python
+COPY browser /opt/ci/browser
+COPY uv-cache /opt/ci/uv-cache
+RUN mkdir -p /opt/hostedtoolcache/node/24.21.0 && ln -s /usr/local /opt/hostedtoolcache/node/24.21.0/x64 && touch /opt/hostedtoolcache/node/24.21.0/x64.complete /opt/hostedtoolcache/uv/0.12.1/x86_64.complete
+RUN apt-get update && apt-get install -y --no-install-recommends libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2 libgtk-3-0 fonts-liberation && rm -rf /var/lib/apt/lists/*
+COPY wheels /opt/ci/wheels
+RUN mkdir -p /root/.cache && ln -s /opt/ci/uv-cache /root/.cache/uv
+ENV SSL_CERT_FILE=/etc/forgejo-runner/ca-bundle.crt GIT_SSL_CAINFO=/etc/forgejo-runner/ca-bundle.crt NODE_EXTRA_CA_CERTS=/etc/forgejo-runner/ca-bundle.crt UV_PYTHON_INSTALL_DIR=/opt/xeonolab/python UV_CACHE_DIR=/opt/ci/uv-cache UV_FIND_LINKS=/opt/ci/wheels
