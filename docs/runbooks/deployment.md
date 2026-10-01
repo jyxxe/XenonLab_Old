@@ -1,5 +1,18 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #80 过期 Work 认领状态区分已通过 Deploy Gateway 发布。代码 commit
+`c16efc35c99ce7deb1b457dad35da08ca805542d`，release
+`03fd828d-399d-498e-8e7d-e27049ab0da4`，deployment
+`2083222b-8a1d-4615-bc99-4cd2b671ff9b`，状态 `completed`，发布租约已释放。纯前端更新，无 API
+或数据库 schema 变更。全套后端 279 项、Work API 41 项、前端 39 项测试通过；TypeScript/Vite
+production build、OpenAPI 无 diff 与 diff check 通过。LAN 五个 readiness 均为 200；LAN/公网 JS
+与 CSS 的 SHA-256 均匹配该构建，认证配置为 200，未认证 Work API 为 401。生产只读 Work API 返回
+69 项，其中 queued 20、有效 claimed 1、过期 claimed 20、completed 27、blocked 1，故活动数为 21。
+随后协调器释放了自己为该 Issue 持有的 Work lease，并保持 Issue open；最新只读计数为 queued 21、
+过期 claimed 20、completed 27、blocked 1，活动数仍为 21。
+自动化 Chrome 验收覆盖合成过期任务和重新领取动作；部署后未重新运行登录态 Chrome 全流程，因此
+Issue #80 暂保持开放。
+
 2026-10-01 更新：Issue #71 Shell、键盘操作、Settings 与会话续期体验增量已通过 Deploy Gateway 发布。
 代码 commit `296a55e98cb2ede4095ed46c3035a30dfc0bc154`，release
 `c570bb5a-c455-4de8-b54f-ceebd349fa08`，deployment
