@@ -157,6 +157,22 @@ coordination-only: it may triage and route real code work to other project
 Agents, but it does not edit or test code. Nine historical failed manual tasks
 remain excluded from automatic retries; they do not create timer work.
 
+### Timer restart recovery finding — 2026-10-02
+
+Production journal review found the watch timer had been stopped at 18:37:09
+UTC and restarted at 18:37:36 after its `OnUnitInactiveSec` deadline had
+passed. It then remained elapsed and did not trigger another watcher run.
+`Persistent=true` does not recover missed monotonic timer events; it applies to
+`OnCalendar` schedules. The source fix changes both recurring timers to explicit
+UTC calendar schedules while retaining their boot checks. After installing the
+updated units, verify each timer's effective calendar, persistence setting and
+next deadline, then record two unattended timer/service activations per timer.
+Test missed-run recovery separately after the boot check has passed: stop a
+timer across a calendar deadline, restart it, and confirm one catch-up service
+run and a future calendar deadline. Persistence schedules a catch-up run; it
+does not replay every missed occurrence. Allow for `RandomizedDelaySec` and
+systemd's timer accuracy window when checking timestamps.
+
 The DevAgent identity successfully queried Forgejo Issue #77 and used the typed
 PVE interface to read VM111 status (`running`). Its Git HTTPS push permission
 passed a `--dry-run` probe; Forgejo confirmed the probe ref was not created.
