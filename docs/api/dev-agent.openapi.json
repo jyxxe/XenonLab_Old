@@ -155,7 +155,7 @@
       },
       "get": {
         "summary": "Listing",
-        "description": "Server-side lease semantics (issue #93): `active=true|false` filters on the\nsame predicate the UI derives client-side, and every row carries an explicit\n`lease_expired` flag so clients no longer re-implement the comparison.",
+        "description": "Lease semantics and queue ordering (issues #92, #93).\n\nRows are ordered FIFO by creation time (oldest first) with the id as a\ndeterministic tiebreak, so pagination is stable while new items arrive.\nThe cursor is `<created_at>:<id>`. `active=true|false` and the optional\n`status` (comma-separated), `repository` and `issue_id` filters apply in\nSQL; `meta.counts` always reports status totals for the whole queue.",
         "operationId": "listing_api_v1_work_get",
         "parameters": [
           {
@@ -186,6 +186,42 @@
               "type": "string",
               "default": "",
               "title": "Active"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "repository",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Repository"
+            }
+          },
+          {
+            "name": "issue_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Issue Id"
             }
           }
         ],

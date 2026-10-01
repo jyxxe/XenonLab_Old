@@ -852,3 +852,62 @@ def test_listing_active_filter_and_lease_expired(settings):
     assert client.get("/api/v1/work?active=maybe", headers=auth()).status_code == 422
     error = client.get("/api/v1/work?active=maybe", headers=auth()).json()["error"]
     assert error["code"] == "INVALID_ACTIVE"
+
+
+def test_listing_orders_fifo_filters_and_counts(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title, repository="xenon-admin/XeonoLab"):
+        body = {"repository": repository, "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]["id"]
+
+    legacy = create(201, "Legacy item")
+    create(202, "Second item")
+    create(203, "Third item")
+    other = create(204, "Other repo item", repository="other/Repo")
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET created_at=0 WHERE id=?", (legacy,))
+        db.commit()
+
+    page1 = client.get("/api/v1/work?limit=2", headers=auth()).json()
+    assert [row["title"] for row in page1["data"]] == ["Legacy item", "Second item"], "legacy rows sort first (FIFO)"
+    assert page1["data"][0]["created_at"] == 0
+    assert page1["data"][1]["created_at"] > 0
+    assert page1["meta"]["counts"] == {"queued": 4, "claimed": 0, "completed": 0, "blocked": 0}
+    repeat = client.get("/api/v1/work?limit=2", headers=auth()).json()
+    assert [row["id"] for row in repeat["data"]] == [row["id"] for row in page1["data"]], "order is deterministic"
+
+    follow = client.get(
+        f"/api/v1/work?limit=2&cursor={page1['meta']['next_cursor']}", headers=auth()
+    ).json()
+    assert [row["title"] for row in follow["data"]] == ["Third item", "Other repo item"]
+    assert follow["meta"]["next_cursor"] is None
+
+    assert client.post(f"/api/v1/work/{other}/claim", headers=auth(), json={"ttl_seconds": 3600}).status_code == 200
+    claimed = {row["title"] for row in client.get("/api/v1/work?status=claimed", headers=auth()).json()["data"]}
+    assert claimed == {"Other repo item"}
+    multi = {row["title"] for row in
+             client.get("/api/v1/work?status=queued,claimed&limit=100", headers=auth()).json()["data"]}
+    assert multi == {"Legacy item", "Second item", "Third item", "Other repo item"}
+    assert client.get("/api/v1/work?status=queued,nope", headers=auth()).json()["error"]["code"] == "INVALID_STATUS"
+    assert client.get("/api/v1/work?cursor=not-a-cursor", headers=auth()).json()["error"]["code"] == "INVALID_CURSOR"
+
+    other_only = {row["title"] for row in
+                  client.get("/api/v1/work?repository=other/Repo", headers=auth()).json()["data"]}
+    assert other_only == {"Other repo item"}
+    by_issue = {row["title"] for row in client.get("/api/v1/work?issue_id=202", headers=auth()).json()["data"]}
+    assert by_issue == {"Second item"}
+
+
+def test_created_at_survives_reconcile_and_restart(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+    body = {"repository": "xenon-admin/XeonoLab", "issue_id": 301, "title": "Persisted item"}
+    created = client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+    assert created["created_at"] > 0
+    reopened = TestClient(create_app("dev-agent", settings))
+    row = reopened.get("/api/v1/work?issue_id=301", headers=auth()).json()["data"][0]
+    assert row["created_at"] == created["created_at"], "migrated/legacy columns persist across restart"
