@@ -8,6 +8,7 @@ import {LaunchPad} from './LaunchPad';
 import {MenuBar} from './MenuBar';
 import {WindowFrame} from './WindowFrame';
 import {IFrameApp} from './IFrameApp';
+import {isActiveWork} from '../work-state';
 import {
   activeWindow,
   clampRect,
@@ -301,7 +302,7 @@ export function DesktopShell({
       void apiPage('/work?limit=1000')
         .then(page => {
           const data = page.data as Array<{status: string; claim_active?: boolean}>;
-          const active = data.filter(item => item.status === 'queued' || item.status === 'claimed').length;
+          const active = data.filter(isActiveWork).length;
           setBadges(current => ({...current, issues: page.meta.next_cursor ? null : active, development: page.meta.next_cursor ? null : active}));
         })
         .catch(() => setBadges(current => ({...current, issues: null, development: null})));

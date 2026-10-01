@@ -12,7 +12,7 @@ const apiPage=async(path:string)=>{
     meta:{counts:{queued:jobCount,running:0,completed:0,failed:0}},
   };
   if(path.startsWith('/work'))return {
-    data:Array.from({length:50},(_,i)=>({id:`work-${i}`,repository:'xenon/XeonoLab',issue_id:i+1,title:`Harness fixture task ${i+1}`,status:i<27?'queued':i<32?'claimed':i<49?'completed':'blocked',holder:null,claim_active:false})),
+    data:Array.from({length:50},(_,i)=>({id:`work-${i}`,repository:'xenon/XeonoLab',issue_id:i+1,title:`Harness fixture task ${i+1}`,status:i<10?'queued':i<20?'claimed':i<30?'claimed':i<40?'completed':'blocked',holder:null,claim_active:i>=10&&i<20})),
     meta:{},
   };
   return {data:[{id:'table-1',name:'示例',path:'/示例'}],meta:{}};

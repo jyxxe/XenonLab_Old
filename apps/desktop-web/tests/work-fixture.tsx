@@ -9,8 +9,8 @@ type FixtureItem = {
 
 const makeItem = (n:number):FixtureItem => ({
   id:`synthetic-${n}`, repository:'xenon-admin/XeonoLab', issue_id:50+n,
-  title:`Synthetic Work item ${n}`, status:n===4?'completed':'open',
-  holder:n===2?'fixture-user':n===3?'other-agent':null, expires:0, epoch:1,
+  title:`Synthetic Work item ${n}`, status:n===1?'queued':n===2||n===3||n===5?'claimed':n===4?'completed':n===6?'blocked':'queued',
+  holder:n===2?'fixture-user':n===3?'other-agent':n===5?'expired-agent':null, expires:0, epoch:1,
   claim_active:n===2||n===3,
 });
 
@@ -18,6 +18,7 @@ const firstPage = Array.from({length:100},(_,i)=>makeItem(i+1));
 firstPage[98] = {...makeItem(99),repository:'xenon-admin/../XeonoLab'};
 let refreshCount = 0;
 let cursorMode:'normal'|'loop' = 'normal';
+const claimRequests:{path:string;body:any}[]=[];
 let resolveDelayedPage:(value:{data:FixtureItem[];meta:{next_cursor:string|null}})=>void = ()=>{};
 let delayedPageRequests = 0;
 
@@ -44,9 +45,20 @@ const apiPage = async (path:string) => {
 (window as any).workFixture={
   get refreshCount(){return refreshCount},
   get delayedPageRequests(){return delayedPageRequests},
+  claimRequests,
   set cursorMode(value:'normal'|'loop'){cursorMode=value},
   resolveDelayedPage(data:FixtureItem[]=[{...makeItem(999),id:'stale-page-row',title:'STALE PAGE RESPONSE'}]){resolveDelayedPage({data,meta:{next_cursor:null}})},
 };
 
-const api=async()=>({subject:'fixture-user'});
+const api=async(path:string,init:RequestInit={})=>{
+  if(path==='/users/me')return {subject:'fixture-user'};
+  if(path.endsWith('/claim')){
+    claimRequests.push({path,body:typeof init.body==='string'?JSON.parse(init.body):null});
+    const id=path.split('/').at(-2);
+    const item=firstPage.find(row=>row.id===id);
+    if(item){item.holder='fixture-user';item.claim_active=true}
+    return {};
+  }
+  return {};
+};
 createRoot(document.getElementById('root')!).render(<Work api={api} apiPage={apiPage}/>);

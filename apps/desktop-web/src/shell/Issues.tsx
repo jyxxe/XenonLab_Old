@@ -2,6 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton, StatusDot, Tabs} from '../design-system/primitives';
 import {forgejoBase} from './apps';
 import type {AppViewProps} from './types';
+import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from '../work-state';
 
 type WorkItem = {
   id: string;
@@ -15,16 +16,18 @@ type WorkItem = {
   claim_active: boolean;
 };
 
-const statusLabels: Record<string, string> = {queued: '排队', claimed: '进行中', completed: '已完成', blocked: '需处理'};
-const statusTones: Record<string, 'neutral' | 'accent' | 'success' | 'danger'> = {
+const statusLabels: Record<string, string> = {queued: '排队', claimed: '进行中', expired: '领取已过期 · 可重领', completed: '已完成', blocked: '需处理'};
+const statusTones: Record<string, 'neutral' | 'accent' | 'success' | 'danger' | 'warning'> = {
   queued: 'neutral',
   claimed: 'accent',
+  expired: 'warning',
   completed: 'success',
   blocked: 'danger',
 };
 const filters = [
   {id: 'active', label: '进行中'},
   {id: 'queued', label: '排队'},
+  {id: 'expired', label: '已过期'},
   {id: 'completed', label: '已完成'},
   {id: 'blocked', label: '需处理'},
   {id: 'all', label: '全部'},
@@ -96,13 +99,14 @@ export function Issues({apiPage, notify, windowId}: AppViewProps) {
     const needle = query.trim().toLowerCase();
     return items
       .filter(item => {
-        if (filter === 'active') return item.status === 'queued' || item.status === 'claimed';
+        if (filter === 'active') return isActiveWork(item);
+        if (filter === 'expired') return isExpiredWorkClaim(item);
         if (filter === 'all') return true;
         return item.status === filter;
       })
       .filter(item => !needle || `${item.issue_id} ${item.title} ${item.repository} ${item.holder || ''}`.toLowerCase().includes(needle))
       .sort((a, b) => {
-        const rank = (item: WorkItem) => (item.status === 'claimed' ? 0 : item.status === 'queued' ? 1 : item.status === 'blocked' ? 2 : 3);
+        const rank = (item: WorkItem) => (isExpiredWorkClaim(item) ? 2 : item.status === 'claimed' ? 0 : item.status === 'queued' ? 1 : item.status === 'blocked' ? 3 : 4);
         if (sort === 'newest') return b.issue_id - a.issue_id;
         if (sort === 'title') return a.title.localeCompare(b.title, 'zh-CN') || a.issue_id - b.issue_id;
         if (sort === 'issue') return a.issue_id - b.issue_id;
@@ -111,10 +115,11 @@ export function Issues({apiPage, notify, windowId}: AppViewProps) {
   }, [items, filter, query, sort]);
 
   const counts = useMemo(() => {
-    const result: Record<string, number> = {active: 0, queued: 0, completed: 0, blocked: 0, all: items.length};
+    const result: Record<string, number> = {active: 0, queued: 0, expired: 0, completed: 0, blocked: 0, all: items.length};
     for (const item of items) {
-      if (item.status === 'queued' || item.status === 'claimed') result.active += 1;
-      if (result[item.status] != null) result[item.status] += 1;
+      if (isActiveWork(item)) result.active += 1;
+      const status = workDisplayStatus(item);
+      if (result[status] != null) result[status] += 1;
     }
     return result;
   }, [items]);
@@ -176,14 +181,15 @@ export function Issues({apiPage, notify, windowId}: AppViewProps) {
                 ))
               : visible.map(item => {
                   const href = issueUrl(item.repository, item.issue_id);
+                  const displayStatus = workDisplayStatus(item);
                   return (
                     <tr key={item.id} onDoubleClick={() => href && window.open(href, '_blank', 'noopener')}>
                       <td>{href ? <a href={href} target="_blank" rel="noopener noreferrer">#{item.issue_id}</a> : `#${item.issue_id}`}</td>
                       <td title={item.title}>{item.title}</td>
                       <td>
-                        <Badge tone={statusTones[item.status] ?? 'neutral'}>
-                          <StatusDot tone={statusTones[item.status] ?? 'neutral'} label={undefined} />
-                          {statusLabels[item.status] ?? item.status}
+                        <Badge tone={statusTones[displayStatus] ?? 'neutral'}>
+                          <StatusDot tone={statusTones[displayStatus] ?? 'neutral'} label={undefined} />
+                          {statusLabels[displayStatus] ?? item.status}
                         </Badge>
                       </td>
                       <td>{item.holder ? `${item.holder.slice(0, 8)}…` : <span className="ds-muted">未领取</span>}</td>

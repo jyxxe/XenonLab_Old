@@ -39,8 +39,8 @@ const work = Array.from({length: 5}, (_, index) => ({
   repository: 'xenon-admin/XeonoLab',
   issue_id: 70 + index,
   title: `Synthetic issue ${70 + index}`,
-  status: index === 0 ? 'claimed' : index === 4 ? 'completed' : 'queued',
-  holder: index === 0 ? 'fixture-user-0001' : null,
+  status: ['claimed', 'queued', 'claimed', 'completed', 'blocked'][index],
+  holder: index === 0 ? 'fixture-user-0001' : index === 2 ? 'expired-agent' : null,
   expires: 0,
   epoch: 1,
   claim_active: index === 0,
@@ -78,6 +78,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     const url = new URL(path, 'http://fixture.local');
     const cursor = url.searchParams.get('cursor');
     if (cursor === 'page-2') return {data: work.slice(3), meta: {next_cursor: null}};
+    if (url.searchParams.get('limit') === '1000') return {data: work, meta: {next_cursor: null}};
     return {data: work.slice(0, 3), meta: {next_cursor: 'page-2'}};
   }
   if (path === '/jobs?limit=50') return {data: [], meta: {counts: {queued: 0, running: 0, completed: 0, failed: 0}}};

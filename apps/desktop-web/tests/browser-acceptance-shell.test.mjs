@@ -200,6 +200,11 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
 
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.desktop'))"), 'desktop shell');
     await waitFor(() => cdp.evaluate("document.querySelectorAll('nav.dock .dock-item').length>=6"), 'dock apps');
+    await waitFor(() => cdp.evaluate("document.querySelector('.widget-status')?.innerText.includes('1 项领取已过期')"), 'signed-in status widget shows expired claims');
+    const widgetState = await cdp.evaluate("document.querySelector('.widget-status').innerText");
+    assert.match(widgetState, /2 进行中/);
+    assert.match(widgetState, /1 项领取已过期，可在任务中心重领/);
+    await waitFor(() => cdp.evaluate("document.querySelector('nav.dock button[title=\\\"任务\\\"] .dock-badge')?.innerText==='2'"), 'app badges count queued plus active claims');
 
     const chromeState = await cdp.evaluate(`(() => ({
       menubar: [...document.querySelectorAll('.menubar button')].map(button=>button.innerText.trim()).filter(Boolean),
@@ -327,11 +332,24 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     );
     await cdp.key('Enter', 'Enter');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=issues] .issues-app'))"), 'issues app from palette');
-    await waitFor(() => cdp.evaluate("document.querySelectorAll('.issues-table tbody tr').length===3"), 'issues first page');
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.issues-table tbody tr').length===2"), 'active Issues excludes the expired claim');
+    assert.match(await cdp.evaluate("[...document.querySelectorAll('.issues-toolbar [role=tab]')].find(tab=>tab.innerText.includes('进行中')).innerText"), /2/);
     await cdp.evaluate("[...document.querySelectorAll('.issues-app button')].find(button=>button.innerText.includes('加载更多'))?.click()");
-    await waitFor(() => cdp.evaluate("document.querySelector('[role=tab][aria-selected=true]')?.innerText.includes('进行中') && document.querySelectorAll('.issues-table tbody tr').length===4"), 'issues second page');
+    await waitFor(() => cdp.evaluate("document.querySelector('[role=tab][aria-selected=true]')?.innerText.includes('进行中') && document.querySelectorAll('.issues-table tbody tr').length===2"), 'active counter remains correct after pagination');
+    await cdp.evaluate("[...document.querySelectorAll('.issues-toolbar [role=tab]')].find(tab=>tab.innerText.includes('已过期'))?.click()");
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.issues-table tbody tr').length===1 && document.querySelector('.issues-table tbody').innerText.includes('领取已过期')"), 'expired Issue remains separately visible');
+    assert.match(await cdp.evaluate("document.querySelector('.issues-table tbody').innerText"), /可重领/);
+    assert.equal(await cdp.evaluate("document.querySelector('.issues-table tbody .ds-badge')?.classList.contains('ds-badge-warning')"),true,'expired claim receives the expired state tone');
     await cdp.evaluate("[...document.querySelectorAll('.issues-toolbar [role=tab]')].find(tab=>tab.innerText.includes('全部'))?.click()");
     await waitFor(() => cdp.evaluate("document.querySelectorAll('.issues-table tbody tr').length===5"), 'issues all filter');
+
+    // The Development summary uses active counts while keeping expired work visible.
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\\\"开发\\\"]')?.click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.development-app'))"), 'Development task summary');
+    const developmentState = await cdp.evaluate("[...document.querySelectorAll('.dev-card')].find(card=>card.innerText.includes('Harness 任务')).innerText");
+    assert.match(developmentState, /2 进行中/);
+    assert.match(developmentState, /已过期 · 可重领/);
+    await cdp.evaluate("document.querySelector('.window[data-app-id=development] .bar .close')?.click()");
 
     // Settings persist through the platform API and drive the document theme.
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统设置\"]').click()");
@@ -387,6 +405,15 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     })()`);
     await waitFor(()=>cdp.evaluate("!([...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.querySelector('[role=alert]'))"),'dashboard queue retry recovery');
     assert.ok(await cdp.evaluate("[...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.innerText.includes('打开任务中心')"));
+    const dashboardWork = await cdp.evaluate(`(() => {
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('Harness 任务队列'));
+      return {ring:card?.querySelector('.mac-ring')?.getAttribute('aria-label'),text:card?.innerText};
+    })()`);
+    assert.match(dashboardWork.ring,/排队 1.*进行中 1.*已过期 1.*已完成 1.*阻塞 1/);
+    assert.match(dashboardWork.text,/已过期 · 可重领/);
+    await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='Agents').click()");
+    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody')?.innerText.includes('领取已过期')"),'System Agents view marks expired claim');
+    assert.match(await cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody').innerText"),/已过期 · 可重领/);
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='存储').click()");
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('容量信息尚未接入')"),'Storage unavailable');
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='审计').click()");

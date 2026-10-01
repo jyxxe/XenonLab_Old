@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
+import {isActiveWork, isExpiredWorkClaim} from './work-state';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
-type WorkItem={id:string;status:string};
+type WorkItem={id:string;status:string;claim_active:boolean};
 type Job={job_id:string;status:string};
 const zone=(timezone:string)=>timezone==='system'?undefined:timezone;
 export function MenuClock({timezone}:{timezone:string}){
@@ -28,11 +29,13 @@ export function StatusWidget({apiPage,onOpen}:{apiPage:APIPage;onOpen:()=>void})
       try{const page=await latest.current('/jobs?limit=50');if(active){setJobs(page.data);setJobCounts(page.meta.counts||null)}}catch{if(active){setJobs(null);setJobCounts(null)}}};
     load();const timer=setInterval(load,60000);return()=>{active=false;clearInterval(timer)};
   },[]);
-  const active_=work?.filter(item=>item.status==='queued'||item.status==='claimed').length??0;
+  const active_=work?.filter(isActiveWork).length??0;
+  const expired_=work?.filter(isExpiredWorkClaim).length??0;
   const running=jobs?(jobCounts?(jobCounts.queued||0)+(jobCounts.running||0):jobs.filter(job=>job.status==='queued'||job.status==='running').length):null;
   return <button className="widget widget-status" onClick={onOpen} title="打开系统面板">
     <header><strong>系统状态</strong><i className={`status-dot${work===null?' bad':''}`}/></header>
     <dl><div><dt>Harness 任务</dt><dd>{work===null?'—':`${workTruncated?'至少 ':''}${active_} 进行中`}</dd></div><div><dt>Embedding 队列</dt><dd>{running===null?'需管理员':`${running} 进行中`}</dd></div></dl>
+    {expired_>0&&<small>{workTruncated?'至少 ':''}{expired_} 项领取已过期，可在任务中心重领</small>}
     <small>点击打开系统面板 →</small>
   </button>;
 }

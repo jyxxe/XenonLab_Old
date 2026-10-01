@@ -162,7 +162,7 @@
 .job-list small{color:var(--text-muted);white-space:nowrap}
 .chip{padding:1px 8px;border-radius:var(--radius-pill);background:var(--control);font-size:var(--font-size-xs);white-space:nowrap}
 .chip.completed{background:var(--success-soft);color:var(--success)}
-.chip.running,.chip.queued,.chip.claimed{background:var(--warning-soft);color:var(--warning)}
+.chip.running,.chip.queued,.chip.claimed,.chip.expired{background:var(--warning-soft);color:var(--warning)}
 .chip.failed,.chip.blocked{background:var(--danger-soft);color:var(--danger)}
 .check-list{display:flex;flex-direction:column;gap:var(--spacing-2)}
 .status-line{display:flex;align-items:center;gap:var(--spacing-2);font-size:var(--font-size-md)}

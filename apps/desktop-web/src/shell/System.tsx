@@ -2,12 +2,13 @@ import React, {useEffect, useRef, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Skeleton} from '../design-system/primitives';
 import {Dashboard} from '../Dashboard';
 import type {AppViewProps} from './types';
+import {workDisplayStatus} from '../work-state';
 
 const sections = [
   ['overview', '概览'], ['services', '服务'], ['storage', '存储'], ['embedding', 'Embedding'],
   ['hfcache', 'HF Cache'], ['agents', 'Agents'], ['deployments', '部署'], ['network', '网络'], ['audit', '审计'],
 ];
-const statusLabels: Record<string,string> = {queued:'排队',running:'运行中',claimed:'已领取',completed:'已完成',failed:'失败',blocked:'阻塞'};
+const statusLabels: Record<string,string> = {queued:'排队',running:'运行中',claimed:'已领取',expired:'领取已过期 · 可重领',completed:'已完成',failed:'失败',blocked:'阻塞'};
 const unavailable: Record<string,[string,string]> = {
   storage:['容量信息尚未接入','知识库表数量不能代表磁盘容量。当前桌面没有磁盘或池水位 API。'],
   hfcache:['HF Cache 尚未接入桌面','HF Cache 服务使用独立 API；当前桌面没有受控的状态读取入口。'],
@@ -79,7 +80,7 @@ export function System(props: AppViewProps) {
         </> : tab==='network' ? <dl className="dev-meta"><div><dt>浏览器连接提示</dt><dd>{online ? '浏览器报告网络可用' : '浏览器报告离线'}</dd></div><div><dt>当前入口</dt><dd>{location.origin}</dd></div><div><dt>服务端网络与 Tunnel</dt><dd>状态读取尚未接入；浏览器提示不能确认 Tunnel 或上游服务健康。</dd></div></dl> : rowsView ? <>
           {jobView && <p className="muted">索引任务队列不等于模型健康检查；Qwen quality worker 的部署状态没有在此 API 中提供。</p>}
           {rows.length ? <div className="system-table-scroll"><table className="ds-table"><thead><tr>{tab==='audit' ? <><th>时间</th><th>事件</th><th>操作者</th><th>对象</th></> : <><th>{jobView ? '任务 / 知识表' : 'Issue'}</th><th>状态</th><th>{jobView ? '更新时间' : '持有者'}</th><th>{jobView ? '错误' : '租约'}</th></>}</tr></thead><tbody>
-            {rows.map(row => <tr key={row.id || row.job_id}>{tab==='audit' ? <><td>{row.at ? new Date(typeof row.at==='number' ? row.at*1000 : row.at).toLocaleString() : '—'}</td><td>{row.event}</td><td>{row.actor}</td><td title={row.resource || row.target}>{row.resource || row.target}</td></> : <><td title={jobView ? row.table_id : row.title}>{jobView ? `${row.job_id} · ${row.table_id}` : `#${row.issue_id} ${row.title}`}</td><td><Badge tone={row.status==='failed'||row.status==='blocked' ? 'danger' : row.status==='completed' ? 'success' : 'neutral'}>{statusLabels[row.status] || row.status}</Badge></td><td>{jobView ? row.updated_at || row.created_at || '—' : row.holder || '待领取'}</td><td>{jobView ? row.error || '—' : row.claim_active ? `有效 · epoch ${row.epoch}` : '无有效租约'}</td></>}</tr>)}
+            {rows.map(row => {const displayStatus=jobView?row.status:workDisplayStatus(row);return <tr key={row.id || row.job_id}>{tab==='audit' ? <><td>{row.at ? new Date(typeof row.at==='number' ? row.at*1000 : row.at).toLocaleString() : '—'}</td><td>{row.event}</td><td>{row.actor}</td><td title={row.resource || row.target}>{row.resource || row.target}</td></> : <><td title={jobView ? row.table_id : row.title}>{jobView ? `${row.job_id} · ${row.table_id}` : `#${row.issue_id} ${row.title}`}</td><td><Badge tone={displayStatus==='failed'||displayStatus==='blocked' ? 'danger' : displayStatus==='completed' ? 'success' : displayStatus==='expired' ? 'warning' : 'neutral'}>{statusLabels[displayStatus] || displayStatus}</Badge></td><td>{jobView ? row.updated_at || row.created_at || '—' : row.holder || '待领取'}</td><td>{jobView ? row.error || '—' : row.claim_active ? `有效 · epoch ${row.epoch}` : displayStatus==='expired' ? '已过期 · 可重领' : '无有效租约'}</td></>}</tr>})}
           </tbody></table></div> : <EmptyState title="暂无记录" description="此 API 当前没有返回可见记录。"/>}
           {cursor && <Button disabled={loadingMore} onClick={async () => {
             const currentGeneration=generation.current;

@@ -98,6 +98,10 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
     assert.equal(foreignActions,0);
     const completedActions=await cdp.evaluate("[...document.querySelectorAll('tbody tr')][3].cells[3].querySelectorAll('button').length");
     assert.equal(completedActions,0);
+    const expired=await cdp.evaluate("({status:[...document.querySelectorAll('tbody tr')][4].cells[1].innerText,action:[...document.querySelectorAll('tbody tr')][4].cells[3].innerText})");
+    assert.match(expired.status,/领取已过期.*可重领/);
+    assert.match(expired.action,/重新领取/);
+    assert.match(await cdp.evaluate("[...document.querySelectorAll('tbody tr')][5].cells[1].innerText"),/blocked/);
     await cdp.evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent.includes('加载更多'))?.click()");
     await waitFor(()=>cdp.evaluate("document.querySelectorAll('tbody tr').length===194"),'second page and duplicate filtering');
     const twoPages=await cdp.evaluate("({rows:document.querySelectorAll('tbody tr').length,ids:[...document.querySelectorAll('tbody tr')].map(row=>row.dataset.workId),loaded:document.querySelector('small')?.textContent})");
@@ -129,6 +133,12 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
     await waitFor(()=>cdp.evaluate("document.body.innerText.includes('游标重复')"),'repeated cursor guard');
     const loop=await cdp.evaluate("({more:[...document.querySelectorAll('button')].some(button=>button.textContent.includes('加载更多')),message:document.body.innerText.includes('游标重复')})");
     assert.equal(loop.more,false);assert.equal(loop.message,true);
+    await cdp.evaluate("window.workFixture.cursorMode='normal';document.querySelector('input[aria-label=\\\"筛选已加载任务\\\"]').value='';document.querySelector('button').click()");
+    await waitFor(()=>cdp.evaluate('window.workFixture.refreshCount===4 && document.querySelectorAll("tbody tr").length===100'),'refresh before reclaim');
+    await cdp.evaluate("[...document.querySelectorAll('tbody tr')][4].querySelector('button')?.click()");
+    await waitFor(()=>cdp.evaluate('window.workFixture.claimRequests.length===1'),'expired claim request');
+    assert.deepEqual(await cdp.evaluate('window.workFixture.claimRequests[0]'),{path:'/work/synthetic-5/claim',body:{ttl_seconds:900}});
+    await waitFor(()=>cdp.evaluate("[...document.querySelectorAll('tbody tr')][4].cells[1].innerText.includes('领取有效')"),'reclaim transitions to active');
     assert.ok(version.Browser,'connected to a local Chrome DevTools browser');
   }finally{
     cdp?.socket.close();

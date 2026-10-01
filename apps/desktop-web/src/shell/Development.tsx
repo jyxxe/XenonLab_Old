@@ -2,6 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Panel, Skeleton} from '../design-system/primitives';
 import {forgejoBase} from '../shell/apps';
 import type {AppViewProps} from '../shell/types';
+import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from '../work-state';
 
 type WorkItem = {
   id: string;
@@ -15,10 +16,11 @@ type WorkItem = {
 };
 
 const REPOSITORY = 'xenon-admin/XeonoLab';
-const statusLabels: Record<string, string> = {queued: '排队', claimed: '进行中', completed: '已完成', blocked: '阻塞'};
+const statusLabels: Record<string, string> = {queued: '排队', claimed: '进行中', expired: '已过期 · 可重领', completed: '已完成', blocked: '阻塞'};
 const statusTones: Record<string, 'neutral' | 'accent' | 'success' | 'danger' | 'warning'> = {
   queued: 'neutral',
   claimed: 'accent',
+  expired: 'warning',
   completed: 'success',
   blocked: 'danger',
 };
@@ -54,7 +56,9 @@ export function Development({apiPage, openApp, notify, windowId}: AppViewProps) 
 
   useEffect(() => {const refresh = (event: Event) => {if (!(event as CustomEvent).detail?.windowId || (event as CustomEvent).detail.windowId === windowId) setTick(value => value+1)}; addEventListener('xeonolab.app.refresh',refresh); return () => removeEventListener('xeonolab.app.refresh',refresh)},[]);
 
-  const activeWork = work?.filter(item => item.status === 'queued' || item.status === 'claimed') ?? [];
+  const activeWork = work?.filter(isActiveWork) ?? [];
+  const expiredWork = work?.filter(isExpiredWorkClaim) ?? [];
+  const visibleWork = [...expiredWork, ...activeWork];
   const recent = [...(work ?? [])].sort((a,b) => b.issue_id-a.issue_id).slice(0, 6);
 
   return (
@@ -90,18 +94,18 @@ export function Development({apiPage, openApp, notify, windowId}: AppViewProps) 
             <div className="dev-lines"><Skeleton height={16} /><Skeleton height={16} width="70%" /><Skeleton height={16} width="84%" /></div>
           ) : workError ? (
             <ErrorState title="任务队列不可用" message={workError} onRetry={() => setTick(value => value+1)} />
-          ) : activeWork.length ? (
+          ) : visibleWork.length ? (
             <ul className="dev-list">
-              {activeWork.slice(0, 5).map(item => (
+              {visibleWork.slice(0, 5).map(item => (
                 <li key={item.id}>
-                  <Badge tone={statusTones[item.status] ?? 'neutral'}>{statusLabels[item.status] ?? item.status}</Badge>
+                  <Badge tone={statusTones[workDisplayStatus(item)] ?? 'neutral'}>{statusLabels[workDisplayStatus(item)] ?? item.status}</Badge>
                   <span title={item.title}>#{item.issue_id} {item.title}</span>
                   <small>{item.holder ? `由 ${item.holder.slice(0, 8)}… 领取` : '待领取'}</small>
                 </li>
               ))}
             </ul>
           ) : (
-            <EmptyState icon="✓" title="队列为空" description="当前没有排队或进行中的 Harness 任务。" />
+            <EmptyState icon="✓" title="队列为空" description="当前没有排队、进行中或已过期的 Harness 任务。" />
           )}
           {truncated && <p className="muted">状态仅覆盖已载入的 {work?.length ?? 0} 项；完整列表请打开任务中心。</p>}
           <Button size="sm" onClick={() => openApp('issues')}>打开任务中心</Button>

@@ -1,6 +1,7 @@
 import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Bars,Legend,Meter,Ring,chartColor} from './MacCharts';
 import {ErrorState} from './design-system/primitives';
+import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{request_id?:string;next_cursor?:string|null;[key:string]:any}}>;
 type WorkItem={id:string;repository:string;issue_id:number;title:string;status:string;holder:string|null;claim_active:boolean};
 type Job={job_id:string;owner:string;table_id:string;status:string;created_at?:string;updated_at?:string;error?:string};
@@ -8,8 +9,8 @@ type Table={id:string;name:string;path:string};
 const jobOrder=['queued','running','completed','failed'] as const;
 const jobLabels:Record<string,string>={queued:'排队',running:'运行中',completed:'完成',failed:'失败'};
 const jobColors:Record<string,string>={queued:'#4e8cde',running:'#ff9f0a',completed:'#30d158',failed:'#ff453a'};
-const workOrder=['queued','claimed','completed','blocked'] as const;
-const workLabels:Record<string,string>={queued:'排队',claimed:'进行中',completed:'已完成',blocked:'阻塞'};
+const workOrder=['queued','claimed','expired','completed','blocked'] as const;
+const workLabels:Record<string,string>={queued:'排队',claimed:'进行中',expired:'已过期',completed:'已完成',blocked:'阻塞'};
 function timeAgo(iso?:string){
   const stamp=iso?Date.parse(iso):NaN;
   if(Number.isNaN(stamp))return '—';
@@ -71,7 +72,8 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
   },[]);
   const tableName=(id:string)=>{const table=tables.find(item=>item.id===id);return table?table.path+'/'+table.name:id.slice(0,8)};
   const jobSegments=jobOrder.map(status=>({label:jobLabels[status],value:jobCounts?.[status]??jobs.filter(job=>job.status===status).length,color:jobColors[status]}));
-  const workSegments=workOrder.map((status,index)=>({label:workLabels[status],value:work.filter(item=>item.status===status).length,color:chartColor(index)}));
+  const workSegments=workOrder.map((status,index)=>({label:workLabels[status],value:status==='claimed'?work.filter(item=>item.status==='claimed'&&item.claim_active).length:status==='expired'?work.filter(isExpiredWorkClaim).length:work.filter(item=>item.status===status).length,color:chartColor(index)}));
+  const visibleWork=[...work.filter(isExpiredWorkClaim),...work.filter(isActiveWork)];
   const pathCounts:Record<string,number>={};
   tables.forEach(table=>{const top=table.path.split('/').filter(Boolean)[0]||'/';pathCounts[top]=(pathCounts[top]||0)+1});
   const pathData=Object.entries(pathCounts).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([label,value])=>({label:label.length>6?label.slice(0,6)+'…':label,value}));
@@ -97,8 +99,8 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
           <Legend items={workSegments}/>
         </div>}
         {!notes.work&&workTruncated&&<p className="muted">状态统计仅覆盖当前载入的前 1000 项。</p>}
-        {!notes.work&&work.some(item=>item.status==='queued'||item.status==='claimed')&&<ul className="job-list">{work.filter(item=>item.status==='queued'||item.status==='claimed').slice(0,4).map(item=><li key={item.id}>
-          <span className={`chip ${item.status}`}>{workLabels[item.status]||item.status}</span>
+        {!notes.work&&visibleWork.length>0&&<ul className="job-list">{visibleWork.slice(0,4).map(item=><li key={item.id}>
+          <span className={`chip ${workDisplayStatus(item)}`}>{workDisplayStatus(item)==='expired'?'已过期 · 可重领':workLabels[item.status]||item.status}</span>
           <a className="job-table" href={issueHref(item.repository,item.issue_id)} target="_blank" rel="noopener noreferrer" title={item.title}>#{item.issue_id} {item.title}</a>
           <small>{item.holder||'待领取'}</small>
         </li>)}</ul>}
