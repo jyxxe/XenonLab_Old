@@ -1,6 +1,6 @@
 # 本地浏览器验收 — Issue #71 UI/UX 重构增量（2026-10-01）
 
-本记录只覆盖本次本地实现与合成数据验收，**不是生产验收**：没有连接生产后端、没有使用真实账号、没有部署。
+本记录前半部分记录本地实现与合成数据验收；末尾的“生产发布后验收”补充了实际部署结果和仍未完成的检查。
 
 ## 范围
 
@@ -16,9 +16,11 @@
 | 命令 | 结果 |
 |---|---|
 | `cd apps/desktop-web && npm run build` | `tsc --noEmit` 与 Vite production build 通过 |
-| `cd apps/desktop-web && npm test` | 24 项通过（含既有 Work 分页浏览器夹具） |
-| `uv run pytest -q` | 211 项通过 |
-| `uv run python scripts/export_openapi.py` | `docs/api/desktop-web.openapi.json` 已更新（仅新增偏好字段） |
+| `cd apps/desktop-web && npm test` | 25 项通过（含 Shell、Work 分页浏览器夹具） |
+| `uv run pytest -q` | 235 项通过 |
+| `uv run ruff check xeonolab/desktop.py tests/test_desktop.py` | 通过 |
+| `uv run python scripts/export_openapi.py --check` | 通过 |
+| `cd apps/desktop-web && npm run build` | `tsc --noEmit` 与 Vite production build 通过 |
 
 浏览器验收（headless Chrome + CDP，`tests/browser-acceptance-shell.test.mjs`，无未捕获异常断言）：
 
@@ -41,7 +43,7 @@
 
 截图使用合成数据：窗口中的“AI 对话”是对不会响应的本地端口的超时演示，任务数据为 fixture 生成的合成 Issue。
 
-## 未验证 / 未完成
+## 本地提交时未验证 / 未完成
 
 - 未使用真实后端与真实账号登录，未在生产环境运行；`scripts/browser_acceptance.mjs` 生产 QA 需在部署后由协调器执行。
 - OpenWebUI（chat.xenon.lan）真实连通性未验证；Forgejo 内嵌未实现，Development/Issues 只提供外链。
@@ -64,3 +66,15 @@ Development 使用可达的 Forgejo 外链，不再启动不存在的内置 Forg
 ## System 应用增量
 
 新增概览、服务、存储、Embedding、HF Cache、Agents、部署、网络、审计分类。概览复用既有 Dashboard；Embedding 使用 `/jobs`，Agents 使用 `/work`，审计使用 `/audit`，分页按游标读取并丢弃跨分类/刷新后的陈旧响应。服务健康只确认桌面 `/health/ready`，不把桌面健康推断为全部服务健康；磁盘、HF Cache、部署历史等无受控桌面 API 的分类明确显示未接入。网络显示浏览器连接提示及当前入口，不伪造 Tunnel 状态。审计兼容 RFC3339 时间。所有视图只读，保留现有 scope 检查，未添加生产依赖。
+
+## 生产发布后验收（2026-10-01）
+
+- 发布 commit：`5a33d9342f9d65b737d16b64943ffb3cc58d6434`
+- Deploy Gateway release：`b42c8abe-81be-4024-9fe1-9fafdbc0f186`
+- Deployment：`578b46c7-4f05-4eae-8b56-a1490e07e502`，状态 `completed`，发布租约已释放。
+- 激活前对 Web 101 的 `desktop.sqlite` 使用 SQLite backup API 创建快照：`runtime/backups/2026-10-01-issue71/predeploy-desktop.sqlite`；`PRAGMA integrity_check` 返回 `ok`。
+- 公网桌面、JS/CSS、认证配置和 OIDC discovery 返回 200；JS/CSS SHA-256 与发布构建一致。匿名 `/api/v1/users/me` 返回预期的 401。
+- 桌面、XeLibrary、Tool Gateway、Deploy Gateway、LLM Gateway、Embedding、DevAgent 七个 readiness 检查均返回 200。
+- 直接 IP 入口首页和认证配置返回 200；通过 `https://192.168.0.101:9443` 完成真实 PKCE、服务端 session exchange、cookie 恢复、授权 API 读取与 logout 撤销。
+- 公网配置与 discovery 返回正确 issuer，但本次自动化公网 PKCE 检查未完成：本机 HTTPX 代理在 Keycloak 登录表单 POST 时超时，直连公网的 TLS 握手也超时。此结果不能证明公网登录失败，也不能作为公网登录通过证据；需在真实浏览器网络路径复测。
+- Issue #71 保持打开。XeLibrary 三栏知识管理、表格/搜索/Query Console、原生 Forgejo Dashboard 和完整公网登录后的浏览器验收尚未完成；本次上线是桌面 Shell 与系统页面的增量发布。

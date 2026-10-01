@@ -1,5 +1,17 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #71 桌面 Shell/System 增量已通过 Deploy Gateway 上线。代码 commit
+`5a33d9342f9d65b737d16b64943ffb3cc58d6434`，release
+`b42c8abe-81be-4024-9fe1-9fafdbc0f186`，deployment
+`578b46c7-4f05-4eae-8b56-a1490e07e502` completed，发布租约已释放。无数据库 schema 迁移；发布前
+SQLite backup API 快照 `/var/lib/xeonolab/desktop-web/desktop.sqlite`，本地副本
+`runtime/backups/2026-10-01-issue71/predeploy-desktop.sqlite` 的 `integrity_check` 为 `ok`。
+235 后端测试、25 前端测试、TypeScript/Vite build、Ruff、OpenAPI check 通过。公网 JS/CSS hash
+与发布构建一致，公网 OIDC config/discovery 和直接 IP 完整 PKCE/session 流程通过，七个服务
+readiness 均为 200。公网自动化 PKCE 在本机代理提交 Keycloak 登录表单时超时，因此完整公网登录
+仍待真实浏览器路径复测；Issue #71 继续开放，XeLibrary 全量管理界面及原生 Forgejo Dashboard
+尚未完成，验收细节见 `docs/acceptance/ui-refactor-2026-10-01.md`。
+
 2026-10-01 更新：Issue #11 Qdrant `fast_text` 实现已随 commit
 `c9e095108b678e98037fc123bb15dabae54ed7e7` 部署；release
 `e6cb8491-dab2-4ec4-bed7-56795d195235` / deployment

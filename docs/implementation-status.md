@@ -227,3 +227,5 @@ Issue #11 Qdrant `fast_text` production integration (2026-10-01): release `e6cb8
 
 
 Issue #71 Sol 接管本地增量：修复设置回调与保存反馈、空 Dock/排序保存、最大化尺寸恢复、窗口菜单、移动端活跃应用和焦点陷阱；新增只读 System 分栏并复用已有 jobs/work/audit API。OpenWebUI 未部署时明确显示尚未配置，Forgejo 使用完整外链入口；未增加生产依赖。235 backend tests、25 frontend tests 与 TypeScript/Vite build 通过，Chrome 合成夹具检查明暗与五种视口；真实生产登录/集成验收及 #72 Library 整合仍待完成。本记录不是已部署或 #71 已完成的声明。
+
+Issue #71 桌面 Shell/System 增量已于 2026-10-01 部署：commit `5a33d9342f9d65b737d16b64943ffb3cc58d6434`，release `b42c8abe-81be-4024-9fe1-9fafdbc0f186`，deployment `578b46c7-4f05-4eae-8b56-a1490e07e502`，状态 completed，租约已释放。235 backend tests、25 frontend tests、TypeScript/Vite build、Ruff、OpenAPI check 通过；公网静态资源 hash 与构建相同，七个服务 readiness 与直连 IP PKCE/session exchange/restore/API/logout 检查通过。公网 OIDC 配置和 discovery 正常，但本机自动化登录在代理提交 Keycloak 登录表单时超时，公网端到端浏览器登录仍待复测。Issue #71 保持打开：完整 XeLibrary 知识管理界面、原生 Forgejo Dashboard 和其余视觉/浏览器验收尚未达到 Definition of Done。详见 `docs/acceptance/ui-refactor-2026-10-01.md`。
