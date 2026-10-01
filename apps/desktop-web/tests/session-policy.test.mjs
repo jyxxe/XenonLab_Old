@@ -67,6 +67,8 @@ test('retryAfterDelayMs honors delta seconds and HTTP dates', () => {
 
 test('canReplayRequest accepts reusable reads but excludes one-shot POST bodies', () => {
   assert.equal(canReplayRequest('/attachments/1/content', 'GET'), true);
+  assert.equal(canReplayRequest('/attachments/1/content', 'GET', 'unexpected body'), false);
+  assert.equal(canReplayRequest('/attachments/1/content', 'GET', new ReadableStream()), false);
   assert.equal(canReplayRequest('/query', 'POST', JSON.stringify({expression: 'FROM "/**"'})), true);
   assert.equal(canReplayRequest('/search/semantic', 'POST', JSON.stringify({query: 'fixture'})), true);
   assert.equal(canReplayRequest('/query', 'POST', new FormData()), false);

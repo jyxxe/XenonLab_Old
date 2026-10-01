@@ -17,7 +17,7 @@ export const DEFAULT_RETRY_DELAY_MS = 12000;
  * or duplicating a write. Current safe POST callers pass JSON strings.
  */
 export function canReplayRequest(path, method, body) {
-  if (method === 'GET') return true;
+  if (method === 'GET') return body == null;
   if (method !== 'POST' || (body != null && typeof body !== 'string')) return false;
   const route = path.split('?')[0];
   return ['/query', '/query/validate', '/query/explain', '/search/text', '/search/semantic', '/search/hybrid'].includes(route)
