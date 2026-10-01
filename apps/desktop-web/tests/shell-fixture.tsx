@@ -12,7 +12,10 @@ import {DesktopShell} from '../src/shell/DesktopShell';
 type Call = {method: string; path: string; body: any};
 const calls: Call[] = [];
 const registry:any[]=[];
-const control={failLayout:false,failPreferences:false,failWork:false};
+const tables=[
+  {id:'example-table',name:'部署验收',path:'/示例/平台'},
+];
+const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0};
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -82,7 +85,13 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     return {data: work.slice(0, 3), meta: {next_cursor: 'page-2'}};
   }
   if (path === '/jobs?limit=50') return {data: [], meta: {counts: {queued: 0, running: 0, completed: 0, failed: 0}}};
-  if (path.startsWith('/tables?')) return {data: [], meta: {next_cursor: null}};
+  if (path.startsWith('/tables?')) {
+    control.tablesInFlight++;
+    try {
+      if (control.delayTables) await new Promise(resolve=>setTimeout(resolve,400));
+      return {data:tables,meta:{next_cursor:null}};
+    } finally {control.tablesInFlight--}
+  }
   throw new Error(`unexpected fixture request ${method} ${path}`);
 }
 

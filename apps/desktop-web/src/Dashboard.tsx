@@ -31,19 +31,20 @@ function issueHref(repository:string,issueId:number){
   return `https://xenon.jyxxe.com/dev/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueId}`;
 }
 export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)=>void}){
-  const [work,setWork]=useState<WorkItem[]>([]),[workTruncated,setWorkTruncated]=useState(false),[jobs,setJobs]=useState<Job[]>([]),[tables,setTables]=useState<Table[]>([]),[tablesTruncated,setTablesTruncated]=useState(false),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null);
+  const [work,setWork]=useState<WorkItem[]>([]),[workTruncated,setWorkTruncated]=useState(false),[jobs,setJobs]=useState<Job[]>([]),[tables,setTables]=useState<Table[]>([]),[tablesTruncated,setTablesTruncated]=useState(false),[tablesLoading,setTablesLoading]=useState(true),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null);
   const [notes,setNotes]=useState<Record<string,string>>({}),[health,setHealth]=useState<{service:string;ready:boolean;latency:number}|null>(null);
   const [stamp,setStamp]=useState(0),[tick,setTick]=useState(0);
   const gridRef=useRef<HTMLDivElement>(null);
   const retry=()=>setTick(value=>value+1);
   useEffect(()=>{
     let active=true;
+    setTablesLoading(true);
     const optional=async(key:string,load:()=>Promise<void>)=>{try{await load();if(active)setNotes(old=>{const next={...old};delete next[key];return next})}catch(error){if(active)setNotes(old=>({...old,[key]:String(error)}))}};
     (async()=>{
       await Promise.all([
         optional('work',async()=>{try{const page=await apiPage('/work?limit=1000');if(active){setWork(page.data);setWorkTruncated(Boolean(page.meta.next_cursor))}}catch(error){throw Error(/403|scope required/.test(String(error))?'需要 dev:read 权限才能查看任务队列':String(error))}}),
         optional('jobs',async()=>{try{const page=await apiPage('/jobs?limit=50');if(active){setJobs(page.data);setJobCounts(page.meta.counts||null)}}catch(error){throw Error(/403|scope required/.test(String(error))?'需要 xelibrary:admin 权限才能查看索引队列':String(error))}}),
-        optional('tables',async()=>{const page=await apiPage('/tables?limit=1000');if(active){setTables(page.data);setTablesTruncated(Boolean(page.meta.next_cursor))}}),
+        optional('tables',async()=>{try{const page=await apiPage('/tables?limit=1000');if(active){setTables(page.data);setTablesTruncated(Boolean(page.meta.next_cursor))}}finally{if(active)setTablesLoading(false)}}),
         optional('health',async()=>{const started=performance.now();const ready=await fetch('/health/ready');const body=await ready.json();if(active)setHealth({service:body.service||'desktop-web',ready:ready.ok,latency:Math.round(performance.now()-started)})}),
       ]);
       if(active)setStamp(Date.now());
@@ -106,9 +107,9 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
         </li>)}</ul>}
         <button onClick={()=>openApp('work')}>打开任务中心</button>
       </article>
-      <article className="mac-card"><header><h3>知识库概览</h3><span className="mac-badge">{tablesTruncated?`${tables.length}+ 张表`:`${tables.length} 张表`}</span></header>
-        {notes.tables?<ErrorState title="无法读取知识库概览" message={notes.tables} onRetry={retry}/>:pathData.length?<Bars data={pathData} unit=" 张表"/>:<p className="muted">暂无可见知识表。</p>}
-        {!notes.tables&&tablesTruncated&&<p className="muted">路径统计仅覆盖当前载入的前 1000 张表。</p>}
+      <article className="mac-card"><header><h3>知识库概览</h3><span className="mac-badge">{tablesLoading?'读取中…':notes.tables?'不可用':tablesTruncated?`${tables.length}+ 张表`:`${tables.length} 张表`}</span></header>
+        {notes.tables?<ErrorState title="无法读取知识库概览" message={notes.tables} onRetry={retry}/>:tablesLoading?<p className="muted" role="status">正在读取可见知识表…</p>:pathData.length?<Bars data={pathData} unit=" 张表"/>:<p className="muted">暂无可见知识表。</p>}
+        {!notes.tables&&!tablesLoading&&tablesTruncated&&<p className="muted">路径统计仅覆盖当前载入的前 1000 张表。</p>}
         <button onClick={()=>openApp('knowledge')}>打开知识库</button>
       </article>
       <article className="mac-card"><header><h3>服务状态</h3></header>

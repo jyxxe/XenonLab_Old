@@ -389,8 +389,16 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
 
     // System pages expose true missing-data and permission states.
     await cdp.evaluate('window.shellFixture.control.failWork=true');
+    await cdp.evaluate('window.shellFixture.control.delayTables=true');
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统状态\"]').click()");
     await waitFor(()=>cdp.evaluate("Boolean(document.querySelector('.system-app'))"),'System app');
+    await waitFor(()=>cdp.evaluate(`(() => {
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('知识库概览'));
+      return card?.querySelector('.mac-badge')?.innerText==='读取中…' && window.shellFixture.control.tablesInFlight===1;
+    })()`),'Dashboard catalogue loading state');
+    assert.match(await cdp.evaluate("[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('知识库概览')).innerText"),/正在读取可见知识表/);
+    assert.doesNotMatch(await cdp.evaluate("[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('知识库概览')).innerText"),/0 张表/);
+    await cdp.evaluate('window.shellFixture.control.delayTables=false');
     await waitFor(()=>cdp.evaluate("Boolean([...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.querySelector('[role=alert]'))"),'dashboard queue error state');
     const queueError = await cdp.evaluate(`(() => {
       const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('Harness 任务队列'));
@@ -405,6 +413,17 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     })()`);
     await waitFor(()=>cdp.evaluate("!([...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.querySelector('[role=alert]'))"),'dashboard queue retry recovery');
     assert.ok(await cdp.evaluate("[...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.innerText.includes('打开任务中心')"));
+    await waitFor(()=>cdp.evaluate(`(() => {
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('知识库概览'));
+      return window.shellFixture.control.tablesInFlight===0 && card?.querySelector('.mac-badge')?.innerText==='1 张表' && Boolean(card?.querySelector('.mac-bars'));
+    })()`),'Dashboard catalogue loaded');
+    const knowledgeOverview = await cdp.evaluate(`(() => {
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('知识库概览'));
+      return {text:card?.innerText,chart:card?.querySelector('.mac-bars')?.getAttribute('aria-label'),requests:window.shellFixture.calls.filter(call=>call.path.startsWith('/tables?')).map(call=>call.path)};
+    })()`);
+    assert.match(knowledgeOverview.text,/1 张表/);
+    assert.match(knowledgeOverview.chart,/示例 1 张表/);
+    assert.ok(knowledgeOverview.requests.includes('/tables?limit=1000'));
     const dashboardWork = await cdp.evaluate(`(() => {
       const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('Harness 任务队列'));
       return {ring:card?.querySelector('.mac-ring')?.getAttribute('aria-label'),text:card?.innerText};
