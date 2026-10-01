@@ -18,6 +18,9 @@ MAX_RESPONSE_BYTES = 4096
 POOL_NAME = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 ZPOOL_COMMAND = "/sbin/zpool"
 RECEIVER_PATH = "/api/v1/pool-metrics"
+# Keep the receiver boundary aligned with the deployed firewall and unit.
+RECEIVER_HOST = "192.168.0.103"
+RECEIVER_PORT = 9183
 
 
 class CollectorError(ValueError):
@@ -81,9 +84,15 @@ def signed_headers(payload: bytes, secret: bytes, timestamp: int) -> dict[str, s
 
 
 def send(payload: dict[str, str | int], receiver_url: str, secret: bytes, now: int | None = None) -> None:
-    parts = urlsplit(receiver_url)
+    try:
+        parts = urlsplit(receiver_url)
+        port = parts.port
+    except ValueError as exc:
+        raise CollectorError("invalid telemetry receiver URL") from exc
     if parts.scheme != "http" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
         raise CollectorError("POOL_TELEMETRY_RECEIVER_URL must be an HTTP URL without credentials or query")
+    if parts.hostname != RECEIVER_HOST or port != RECEIVER_PORT:
+        raise CollectorError("telemetry receiver must match the fixed VM 103 address and port")
     if parts.path not in ("", "/", RECEIVER_PATH):
         raise CollectorError("receiver URL path must be the fixed pool-metrics endpoint")
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -97,7 +106,7 @@ def send(payload: dict[str, str | int], receiver_url: str, secret: bytes, now: i
             raise CollectorError("sample has no valid observation timestamp") from exc
     else:
         timestamp = now
-    connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=10)
+    connection = http.client.HTTPConnection(RECEIVER_HOST, RECEIVER_PORT, timeout=10)
     try:
         connection.request("POST", RECEIVER_PATH, body=body, headers=signed_headers(body, secret, timestamp))
         response = connection.getresponse()

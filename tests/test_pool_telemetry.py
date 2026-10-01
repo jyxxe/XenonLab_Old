@@ -18,7 +18,7 @@ from infra.hfcache.pool_metrics_receiver import (
     handler_for,
     signing_bytes,
 )
-from infra.pve.pool_telemetry_collector import CollectorError, collect, signed_headers
+from infra.pve.pool_telemetry_collector import CollectorError, collect, send, signed_headers
 
 POOL = "physical-pool-from-deployment-config"
 SECRET = b"test-only-hmac-key-with-at-least-32-bytes"
@@ -95,6 +95,50 @@ def test_collector_rejects_unexpected_zpool_output(output):
 
     with pytest.raises(CollectorError):
         collect(POOL, run=fake_run)
+
+
+@pytest.mark.parametrize("url", [
+    "http://192.168.0.103:8107/api/v1/pool-metrics",
+    "http://192.168.0.103/api/v1/pool-metrics",
+    "http://192.168.0.104:9183/api/v1/pool-metrics",
+    "http://hf-cache.xenon.lan:9183/api/v1/pool-metrics",
+    "http://[::1]:9183/api/v1/pool-metrics",
+    "http://192.168.0.103:invalid/api/v1/pool-metrics",
+    "https://192.168.0.103:9183/api/v1/pool-metrics",
+    "http://user:password@192.168.0.103:9183/api/v1/pool-metrics",
+    "http://192.168.0.103:9183/other",
+    "http://192.168.0.103:9183/api/v1/pool-metrics?redirect=1",
+])
+def test_collector_rejects_wrong_receiver_before_connecting(url, monkeypatch):
+    def forbidden_connection(*_args, **_kwargs):
+        pytest.fail("invalid receiver must not open a connection")
+
+    monkeypatch.setattr(http.client, "HTTPConnection", forbidden_connection)
+    with pytest.raises(CollectorError):
+        send(sample(), url, SECRET)
+
+
+def test_collector_sends_signed_sample_only_to_fixed_receiver(monkeypatch):
+    calls = []
+
+    class Connection:
+        def __init__(self, host, port, timeout):
+            calls.append((host, port, timeout))
+
+        def request(self, method, path, body, headers):
+            assert method == "POST" and path == PATH
+            assert headers == signed_headers(body, SECRET, NOW)
+            assert json.loads(body) == sample()
+
+        def getresponse(self):
+            return type("Response", (), {"status": 204, "read": lambda _self, _limit: b""})()
+
+        def close(self):
+            calls.append("closed")
+
+    monkeypatch.setattr(http.client, "HTTPConnection", Connection)
+    send(sample(), "http://192.168.0.103:9183/api/v1/pool-metrics", SECRET)
+    assert calls == [("192.168.0.103", 9183, 10), "closed"]
 
 
 def test_receiver_rejects_malformed_expired_wrong_pool_and_partial_updates(tmp_path):

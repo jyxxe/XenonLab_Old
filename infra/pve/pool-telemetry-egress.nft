@@ -1,0 +1,7 @@
+# Restrict this dedicated telemetry port to the configured VM 103 destination.
+# This table does not filter unrelated PVE management traffic.
+add table inet xeonolab_pool_telemetry
+flush table inet xeonolab_pool_telemetry
+add chain inet xeonolab_pool_telemetry output { type filter hook output priority -6; policy accept; }
+add rule inet xeonolab_pool_telemetry output ip daddr 192.168.0.103 tcp dport 9183 counter accept
+add rule inet xeonolab_pool_telemetry output tcp dport 9183 counter reject

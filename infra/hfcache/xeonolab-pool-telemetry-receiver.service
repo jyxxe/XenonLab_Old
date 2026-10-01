@@ -2,6 +2,8 @@
 Description=Receive authenticated PVE physical-pool capacity samples
 After=network-online.target
 Wants=network-online.target
+Requires=xeonolab-pool-telemetry-firewall.service
+After=xeonolab-pool-telemetry-firewall.service
 
 [Service]
 Type=simple
@@ -21,6 +23,8 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 CapabilityBoundingSet=
+MemoryMax=128M
+TasksMax=16
 Restart=on-failure
 RestartSec=2s
 

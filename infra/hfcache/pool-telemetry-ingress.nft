@@ -1,0 +1,7 @@
+# Deployment mapping: only the PVE collector may reach VM 103's receiver.
+# Reload only this dedicated table; preserve unrelated application/SSH rules.
+add table inet xeonolab_pool_telemetry
+flush table inet xeonolab_pool_telemetry
+add chain inet xeonolab_pool_telemetry input { type filter hook input priority -6; policy accept; }
+add rule inet xeonolab_pool_telemetry input ip saddr 192.168.0.10 tcp dport 9183 counter accept
+add rule inet xeonolab_pool_telemetry input tcp dport 9183 counter reject

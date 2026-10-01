@@ -4,8 +4,8 @@ This is the local implementation for plan.md §72. It collects one explicitly co
 pool on the PVE host and publishes its current byte counts to the HF-cache VM (VM 103 in the existing
 inventory). The receiver writes the pool metrics file, and the HF-cache API reads that same file
 through its root-fed storage adapter; the receiver does not query PVE APIs or run commands on the PVE
-host. Read-only PVE API inspection on 2026-10-01 confirmed the pool and host addresses below. The
-receiver port and HMAC secret still need provisioning before production activation.
+host. Read-only PVE API inspection on 2026-10-01 confirmed the pool and host addresses below. The receiver deployment selects TCP 9183, verified unused on 2026-10-01.
+Production activation and HF-cache consumer wiring require separate evidence.
 
 ## Confirmed production mapping
 
@@ -22,12 +22,13 @@ The deployment values established by that read-only check are:
 | `POOL_TELEMETRY_POOL` | `aux-10t` |
 | `POOL_TELEMETRY_ALLOWED_POOLS` | `aux-10t` |
 | `POOL_TELEMETRY_BIND_ADDRESS` | `192.168.0.103` |
-| `POOL_TELEMETRY_RECEIVER_URL` | `http://192.168.0.103:<selected-port>/api/v1/pool-metrics` |
+| `POOL_TELEMETRY_RECEIVER_URL` | `http://192.168.0.103:9183/api/v1/pool-metrics` |
 | `POOL_METRICS_FILE` | `/var/lib/xeonolab/pool-telemetry/physical-pool.json` |
 | HF-cache consumer file | `/var/lib/xeonolab/pool-telemetry/physical-pool.json` |
 | `HF_CACHE_EXPECTED_POOL` | `aux-10t` |
 
-Select a receiver port that is confirmed unused on VM 103. Generate a new random HMAC secret and
+TCP 9183 is the fixed receiver port, aligned with collector URL validation, systemd IP restrictions
+and the deployment firewall. Changing this mapping requires reviewing all three together. Generate a new random HMAC secret and
 install it independently on both hosts with root-only access; do not reuse any API credential.
 
 ## File contract
@@ -59,9 +60,9 @@ Keep all values deployment-specific; do not copy a sample pool name or secret fr
 |---|---|---|
 | `POOL_TELEMETRY_POOL` | Required exact physical pool name selected by the operator. No implicit default. | — |
 | `POOL_TELEMETRY_ALLOWED_POOLS` | — | Required comma-separated expected pool allowlist; include only pool names intentionally reported to HF-cache. |
-| `POOL_TELEMETRY_RECEIVER_URL` | Required `http://<VM103-private-address>:<port>/api/v1/pool-metrics`. | — |
+| `POOL_TELEMETRY_RECEIVER_URL` | Required exact `http://192.168.0.103:9183/api/v1/pool-metrics`. | — |
 | `POOL_TELEMETRY_BIND_ADDRESS` | — | Required VM 103 private interface address. |
-| `POOL_TELEMETRY_PORT` | — | Required TCP port, 1–65535. |
+| `POOL_TELEMETRY_PORT` | — | Required deployment TCP port `9183`. |
 | `POOL_TELEMETRY_HMAC_SECRET` | Required shared random secret, at least 32 bytes. | Same secret, installed independently with root-only access. |
 | `POOL_METRICS_FILE` | — | Required absolute path under `/var/lib/xeonolab/pool-telemetry/`, for example `physical-pool.json`. |
 | `HF_CACHE_POOL_METRICS_FILE` | — | Required on the HF-cache API process; use the same absolute path as the receiver's `POOL_METRICS_FILE`. |
@@ -91,14 +92,22 @@ The receiver runs as root only so it can publish the required root-owned file. I
 read-only system view and a single writable state directory, no capabilities, no device access, no
 home access, and no privilege gain. The collector runs as root for read-only `/dev/zfs` access; its
 unit grants only `CAP_SYS_ADMIN`, exposes only `/dev/zfs`, and has no writable system paths. It invokes
-only `zpool list` for the configured pool.
+only `zpool list` for the configured pool. Its IPAddressDeny/Allow restricts the receiver IP,
+and the collector validates the fixed host and port before opening a connection. Memory/tasks are
+bounded independently for the collector and receiver.
 
 On VM 103, bind the receiver to its configured private address. Configure the VM and network firewalls
 to permit inbound TCP only from the exact PVE host source address to the configured receiver port;
 drop other sources to that port. On PVE, permit the collector's outbound connection only to the
 configured VM 103 address and port. Do not expose the receiver through Caddy, the public ingress, or
 any general application gateway. Keep normal management access rules separate. Verify the installed
-rules from the firewall configuration; this change does not install or activate production rules.
+rules from the firewall configuration; load `infra/hfcache/pool-telemetry-ingress.nft` on VM 103 and
+`infra/pve/pool-telemetry-egress.nft` on PVE as `/etc/xeonolab/pool-telemetry.nft`.
+Both use a dedicated `inet xeonolab_pool_telemetry` table; they do not flush unrelated tables.
+Install `infra/network/xeonolab-pool-telemetry-firewall.service` on both hosts and verify
+`nft -c -f` before activation. Collector/receiver require the firewall unit; reload it after changes.
+Check first activation and repeated reload retain exactly the intended two rules. A rule accepting
+a packet in this table does not override a later drop in another table; verify actual traffic.
 
 Keep the `HF_CACHE_*` settings in the existing HF-cache API service configuration on VM 103, separate
 from the receiver's environment file. The receiver's environment contains the HMAC secret; do not

@@ -2,6 +2,8 @@
 Description=Collect configured physical ZFS pool capacity for HF-cache
 After=local-fs.target network-online.target
 Wants=network-online.target
+Requires=xeonolab-pool-telemetry-firewall.service
+After=xeonolab-pool-telemetry-firewall.service
 
 [Service]
 Type=oneshot
@@ -22,3 +24,8 @@ RestrictAddressFamilies=AF_INET AF_INET6
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
+MemoryMax=64M
+TasksMax=8
+TimeoutStartSec=25s
+IPAddressDeny=any
+IPAddressAllow=192.168.0.103/32

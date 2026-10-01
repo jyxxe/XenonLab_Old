@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply the dedicated physical pool telemetry firewall
+Before=xeonolab-pool-telemetry-receiver.service xeonolab-pool-telemetry.service
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/xeonolab/pool-telemetry.nft
+ExecReload=/usr/sbin/nft -f /etc/xeonolab/pool-telemetry.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
