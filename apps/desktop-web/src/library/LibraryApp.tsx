@@ -10,7 +10,7 @@ import {SearchView} from './SearchView';
 import {QueryConsole} from './QueryConsole';
 import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
-import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
+import {useCatalogue, useIndexStatus, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {ancestorPaths, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, Table} from './types';
 
@@ -45,6 +45,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
   const canAdmin = scopes.includes('xelibrary:admin');
   const table = session.table;
   const {jobs, error: jobsError, reload: reloadJobs} = useJobs(apiPage, table?.id ?? '', canAdmin && view === 'library' && Boolean(table));
+  const {status: indexStatus, error: indexStatusError, reload: reloadIndexStatus} = useIndexStatus(apiPage, table?.id ?? '', view === 'library' && Boolean(table));
 
   const tableNames = useMemo(() => new Map(catalogue.tables.map(item => [item.id, item.name])), [catalogue.tables]);
   const tableName = (id: string) => tableNames.get(id) || id.slice(0, 8);
@@ -516,8 +517,11 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
           scopes={scopes}
           jobs={jobs}
           jobsError={jobsError}
+          indexStatus={indexStatus}
+          indexStatusError={indexStatusError}
           canAdmin={canAdmin}
           onReloadJobs={() => void reloadJobs()}
+          onReloadIndexStatus={() => void reloadIndexStatus()}
           onReindex={() => void reindex()}
           conflict={conflict}
           onSave={saveRow}

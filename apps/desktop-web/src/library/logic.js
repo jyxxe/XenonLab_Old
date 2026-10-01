@@ -265,6 +265,25 @@ export function indexStatusFromJobs(jobs = []) {
   return {state, detail, latest};
 }
 
+export function indexStatusFromServer(status) {
+  if (!status || typeof status !== 'object') {
+    return {state: 'unavailable', tone: 'neutral', label: '—', detail: '索引状态数据不可用。'};
+  }
+  const rows = Number(status.row_count) || 0;
+  const embedded = Number(status.embedded_rows) || 0;
+  const pending = Number(status.pending_rows) || 0;
+  const state = String(status.state || '');
+  const base = {state, rows, embedded, pending, last_job: status.last_job || null};
+  if (state === 'ready') return {...base, tone: 'success', label: 'ready', detail: `全部 ${rows} 行已按当前版本建立向量索引。`};
+  if (state === 'stale') return {...base, tone: 'warning', label: 'stale', detail: `有 ${pending} 行变更待重新索引；当前已索引 ${embedded}/${rows} 行。`};
+  if (state === 'queued') return {...base, tone: 'warning', label: 'queued', detail: '索引任务已排队，等待 Embedding worker。'};
+  if (state === 'indexing') return {...base, tone: 'warning', label: 'indexing', detail: '索引任务正在运行。'};
+  if (state === 'failed') return {...base, tone: 'danger', label: 'failed', detail: `最近一次索引任务失败${status.last_job?.error ? `：${status.last_job.error}` : '。'}`};
+  if (state === 'empty') return {...base, tone: 'neutral', label: 'empty', detail: '表内暂无行；写入数据后再重建索引。'};
+  if (state === 'not_indexed') return {...base, tone: 'neutral', label: 'not_indexed', detail: rows ? `${rows} 行尚未建立向量索引；语义搜索不会覆盖该表。` : '表内暂无行。'};
+  return {...base, tone: 'neutral', label: state || '—', detail: '索引状态未知。'};
+}
+
 export function mergeRecent(list, entry, limit = 8) {
   const filtered = list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
   return [entry, ...filtered].slice(0, limit);

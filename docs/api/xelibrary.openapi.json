@@ -1873,6 +1873,44 @@
         }
       }
     },
+    "/api/v1/tables/{tid}/index-status": {
+      "get": {
+        "summary": "Index Status",
+        "description": "Per-table index visibility for every reader of the table (issue #72).\n\nDerives live coverage from the table itself instead of the admin-only\njob log: rows at their current revision are counted through\n__xl_vectors, rows still waiting through __xl_changes.indexed_revision.\nModel/chunker staleness is deliberately not folded into these numbers;\nsearch responses already surface it explicitly.",
+        "operationId": "index_status_api_v1_tables__tid__index_status_get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/search/semantic": {
       "post": {
         "summary": "Semantic",

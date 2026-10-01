@@ -11,6 +11,7 @@ import {
   flattenTree,
   formatBytes,
   indexStatusFromJobs,
+  indexStatusFromServer,
   isKeywordResult,
   libraryPrefsStorageKey,
   mergeRecent,
@@ -189,4 +190,24 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
   assert.equal(withQueryPagination('FROM "/**"', 100, 20), 'FROM "/**" LIMIT 100 OFFSET 20');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(-1), '—');
+});
+
+test('indexStatusFromServer maps every server state with counts', () => {
+  const ready = indexStatusFromServer({state: 'ready', row_count: 12, embedded_rows: 12, missing_rows: 0, pending_rows: 0, chunk_count: 30, last_job: {job_id: 'j1', status: 'completed'}});
+  assert.equal(ready.tone, 'success');
+  assert.match(ready.detail, /12 行/);
+  const stale = indexStatusFromServer({state: 'stale', row_count: 12, embedded_rows: 10, missing_rows: 2, pending_rows: 3, chunk_count: 25, last_job: null});
+  assert.equal(stale.tone, 'warning');
+  assert.match(stale.detail, /3 行变更/);
+  assert.match(stale.detail, /10\/12/);
+  assert.equal(indexStatusFromServer({state: 'queued'}).tone, 'warning');
+  assert.equal(indexStatusFromServer({state: 'indexing'}).tone, 'warning');
+  const failed = indexStatusFromServer({state: 'failed', row_count: 1, embedded_rows: 0, missing_rows: 1, pending_rows: 1, chunk_count: 0, last_job: {job_id: 'j2', status: 'failed', error: 'worker gone'}});
+  assert.equal(failed.tone, 'danger');
+  assert.match(failed.detail, /worker gone/);
+  assert.equal(indexStatusFromServer({state: 'empty', row_count: 0, embedded_rows: 0, missing_rows: 0, pending_rows: 0, chunk_count: 0, last_job: null}).tone, 'neutral');
+  const missing = indexStatusFromServer({state: 'not_indexed', row_count: 4, embedded_rows: 0, missing_rows: 4, pending_rows: 4, chunk_count: 0, last_job: null});
+  assert.equal(missing.tone, 'neutral');
+  assert.match(missing.detail, /4 行尚未建立向量索引/);
+  assert.equal(indexStatusFromServer(null).state, 'unavailable');
 });

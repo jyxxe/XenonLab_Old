@@ -192,6 +192,10 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await capture('xelibrary-inspector-dark-1440x900');
     await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('索引')).click()");
     await waitFor(() => cdp.evaluate("document.querySelector('.inspector-index')?.innerText.includes('job-9')"), 'table-scoped index job');
+    const indexPanel = await cdp.evaluate("document.querySelector('.inspector-index')?.innerText || ''");
+    assert.ok(indexPanel.includes('已索引行'), 'per-table index status API feeds the panel');
+    assert.ok(/100/.test(indexPanel) && /137/.test(indexPanel), `coverage counts render: ${JSON.stringify(indexPanel)}`);
+    await capture('issue-72-index-status-1440x900');
 
     // A rejected index mutation must preserve correlation metadata in its toast.
     await cdp.evaluate("window.libraryFixture.state.reindexFailure='correlated'; [...document.querySelectorAll('.inspector-index button')].find(button=>button.innerText.includes('重建 Embedding 索引')).click()");
