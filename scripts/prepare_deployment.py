@@ -145,8 +145,9 @@ artifact = {
             "artifacts": [artifact],
             "migration_manifest": "no catalogue schema migration; production semantic search requires Qdrant HTTPS/API key; .xl remains the source of truth and vectors are rebuildable",
             "test_report": (
-                "2026-10-01 validation: uv run pytest 276 passed; changed Python files pass Ruff; "
-                "OpenAPI regenerated with DevAgent claim side effects, safe comment cleanup and 409/503 contract updates"
+                "2026-10-01 validation: uv run pytest 279 passed; changed Python files pass Ruff; "
+                "OpenAPI regenerated with DevAgent claim side effects, safe comment cleanup, "
+                "nullable Forgejo assignees and 409/503 contract updates"
             ),
         }
     )

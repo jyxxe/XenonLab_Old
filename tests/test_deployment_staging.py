@@ -162,9 +162,11 @@ def test_release_report_matches_current_validation_and_openapi_change():
     source = Path(__file__).resolve().parents[1] / "scripts/prepare_deployment.py"
     text = source.read_text()
 
-    assert "uv run pytest 276 passed" in text
+    assert "uv run pytest 279 passed" in text
     assert "OpenAPI regenerated with DevAgent claim side effects" in text
     assert "safe comment cleanup" in text
+    assert "nullable Forgejo assignees" in text
+    assert "uv run pytest 276 passed" not in text
     assert "uv run pytest 250 passed" not in text
     assert "234 backend tests passed" not in text
     assert "OpenAPI export unchanged" not in text

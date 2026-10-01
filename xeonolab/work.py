@@ -139,7 +139,11 @@ def sync_forgejo_claim(item, actor, settings):
         issue = issue_response.json()
         if issue.get("number") != item["issue_id"] or issue.get("state") != "open":
             raise APIError(409, "ISSUE_NOT_OPEN", "Forgejo Issue is no longer open")
-        old_assignees = [entry["login"] for entry in issue.get("assignees", []) if isinstance(entry, dict) and entry.get("login")]
+        # Forgejo returns null as well as [] for an unassigned Issue.
+        assignees = issue.get("assignees")
+        if assignees is None:
+            assignees = []
+        old_assignees = [entry["login"] for entry in assignees if isinstance(entry, dict) and entry.get("login")]
         if username not in old_assignees:
             sync.assignee = "unknown"
             assigned = client.patch(root, headers=headers, json={"assignees": old_assignees + [username]})

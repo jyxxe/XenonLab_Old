@@ -374,6 +374,45 @@ def test_stale_sync_deletes_only_own_comment_and_preserves_shared_assignees(
     assert current["holder"] == (None if state in ("closed", "blocked") else "bob" if state == "other_holder" else "alice")
 
 
+@pytest.mark.parametrize("issue_fields", [{"assignees": None}, {"assignees": []}, {}], ids=["null", "empty", "missing"])
+def test_claim_synchronizes_unassigned_forgejo_issue(settings, forgejo_claim_transport, issue_fields):
+    import json
+
+    import httpx
+
+    calls = []
+
+    def remote(request):
+        calls.append((request.method, request.url.path, json.loads(request.content) if request.content else None))
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "number": 73, "state": "open", "assignee": None, "milestone": None,
+                "labels": None, "pull_request": None, **issue_fields,
+            })
+        if request.method == "PATCH":
+            return httpx.Response(201, json={})
+        assert request.method == "POST"
+        return httpx.Response(201, json={"id": 12})
+
+    forgejo_claim_transport(remote)
+    api = TestClient(create_app("dev-agent", settings))
+    item = api.post(
+        "/api/v1/work", headers=auth(),
+        json={"repository": "xenon-admin/XeonoLab", "issue_id": 73, "title": "Harness claims"},
+    ).json()["data"]
+    result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth(), json={})
+
+    assert result.status_code == 200
+    assert result.json()["data"]["holder"] == "alice" and result.json()["data"]["epoch"] == 1
+    assert [method for method, _, _ in calls] == ["GET", "PATCH", "POST"]
+    assert calls[1][1:] == ("/api/v1/repos/xenon-admin/XeonoLab/issues/73", {"assignees": ["general-agent"]})
+    assert calls[2][1] == "/api/v1/repos/xenon-admin/XeonoLab/issues/73/comments"
+    assert calls[2][2]["body"] == (
+        "Harness claim: @general-agent claimed this Issue (Work epoch 1). "
+        "Verify the active holder and epoch via the Work API before working."
+    )
+
+
 @pytest.mark.parametrize("failure", ["patch_timeout", "post_timeout", "missing_comment_id", "invalid_comment_id"])
 def test_ambiguous_remote_writes_do_not_overwrite_new_claim_or_guess_comment_id(
     settings, forgejo_claim_transport, failure,
