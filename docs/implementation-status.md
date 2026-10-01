@@ -1,4 +1,4 @@
-# 实施状态 — 2026-10-01
+# 实施状态 — 2026-10-02
 
 ## 已验证
 
@@ -19,7 +19,7 @@
   删除过滤已通过 smoke。
 - 精确搜索过滤当前 ACL/行版本/删除状态，索引缺失返回 partial/missing_embeddings。
 - Deploy release/人工审批/原子单租约/holder/epoch/renew/release/审计。
-  即使 lease 过期，未确认结束的 deployment 仍阻止获取新 lease；OpenCode 无法部署。
+  即使 lease 过期，未确认结束的 deployment 仍阻止获取新 lease；DevAgent 只能通过 root-owned、精确 SHA 的受限 deployment helper 部署。
 - Forgejo webhook HMAC 签名、delivery 去重与冲突检测；Issue 文本仅保存为数据。
 - Tool Gateway 只提供 search/query/get，透传验证的 bearer token，不代换超级管理员身份。
 - LLM Gateway 固定 deepseek-flash、服务端 provider credential、非流式转发。
@@ -37,7 +37,7 @@
 | 4 Qwen | 尚无模型 worker、vision、quality rerank/cache；质量请求返回 unavailable |
 | 5 UI/Tools | 桌面和只读网关已实现；OIDC 浏览器 PKCE 登录已接入；OpenWebUI 原生用户 token exchange 尚未接入 |
 | 6 Library Agent | 只有 skeleton；推理、证据、proposal、Lean sandbox 未实现 |
-| 7 DevAgent | 已实现签名 webhook 与队列同步、规则 triage、Issue links、持久任务队列；LLM triage、自动评论/标签联动和多副本共享队列库仍待实施 |
+| 7 DevAgent | V1 已部署至 VM111：OpenCode 1.18.34、deepseek-v4.1-flash、2 分钟 watcher 与 30 分钟 reconciliation；自动模式只做协调和 Issue 路由，不修改代码。生产部署/重启验证及权限边界见 [DevAgent runbook](runbooks/devagent-maintainer.md) 与 [deployment runbook](runbooks/deployment.md)。多副本共享队列库仍未实施 |
 | 8 Deploy | 租约已验证；固定 executor、健康检查与激活失败回滚已实现；完整状态机、SSE、跨版本迁移尚未实现 |
 | 9 HF-cache | 已实现 SHA 固定 ensure、HF Hub 下载、manifest/hash、pin/lease/GC、异步预取 job、结构化候选审核、root-fed pool metrics fail-closed reader，以及 `hfcache_usage_bytes`、下载/hit/miss/eviction counters 和结构化事件日志；PVE collector/VM103 receiver 现已实测上线，见 pool-telemetry 验收；VM103 应用未安装，API consumer/真实下载与自动 signal discovery 尚未接入 |
 

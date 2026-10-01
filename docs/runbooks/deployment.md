@@ -239,3 +239,35 @@ restored and verified, then temporary QA user/config/NSS trust were removed.
 Issue #75 closed; details: `docs/acceptance/issue-75-dock-2026-10-01.md`.
 The subsequent #82 changes are CI/test-only; application build assets remain
 identical. No separate application activation is implied by a CI source push.
+
+## DevAgent V1 production release (2026-10-01 UTC)
+
+PR #89 was merged as `4372e9ea43e4150a858bb73c52635ea5bc55830b`; Forgejo push
+CI run 150 succeeded. The merge tree matches the reviewed and protected-validated
+tree. Local production build verification passed: `npm ci` audited 26 packages
+with zero vulnerabilities, all 45 frontend unit tests passed, and TypeScript /
+Vite build completed. The deployment included the accumulated DevAgent V1 and
+XeLibrary changes; its only `.xl` change is a rebuildable additive FTS5 CJK
+index, with no destructive migration.
+
+Deploy Gateway release `04fbd36b-8a08-4c85-ab39-72bfe9d4b2c0` and deployment
+`fb33352a-c146-48dc-a630-4b5e8b0d19c4` completed for VMs 101, 104, 106, 107,
+and 111. The lease was released. All five readiness endpoints returned 200,
+all seven application systemd units were active, and each VM's `current` symlink
+resolved to the exact merge SHA. LAN and public JS/CSS hashes matched the local
+build; public desktop and Forgejo login returned 200, auth config returned 200,
+and the unauthenticated Work API returned the expected 401.
+
+VM111 was rebooted after deployment. `devagent-web.service` and
+`xeonolab@dev-agent.service` recovered, OpenCode Web returned 200 at the
+LAN-only `http://192.168.0.111:4096/`, and the firewall rejected port 4096
+outside `192.168.0.0/24`. Watch and reconciliation timers are enabled at two
+and thirty minute intervals. A model-free baseline and the first timer run
+observed zero changes; no automatic model session was started.
+
+Production Issue #77 was verified with a read-only keyword search for `积分`;
+the existing `/示例/平台/部署验收` record was returned with `partial=false` and
+an explicit `approximate=true` marker, then the Issue was closed with the
+evidence. No production records were created or edited during the check. The
+fixed-executor rollback path was not invoked because the deployment completed
+and postchecks passed.

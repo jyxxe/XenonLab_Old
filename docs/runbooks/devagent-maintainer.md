@@ -135,17 +135,51 @@ Node v24.21.0 and Chrome 150.0.7871.186 are installed for verification. The
 current frontend lockfile has a local dependency seed because npm egress remains
 blocked (#87); changed lockfiles still require a reachable dependency source.
 
-## Handoff status
+## Handoff status — 2026-10-01 UTC
 
-This runbook records bootstrap progress, **not completed production handoff**.
-Automatic timers are deliberately not enabled until the deployment and merge
-acceptance is complete. Outstanding acceptance includes full protected
-preflight/PR review/merge, production staging/activation/rollback verification,
-actual restart recovery, final secret/log audit and updated
-operator handover evidence. Keep the Goal active until those checks pass.
+The DevAgent V1 runtime is deployed on VM111. Production commit
+`4372e9ea43e4150a858bb73c52635ea5bc55830b`, release
+`04fbd36b-8a08-4c85-ab39-72bfe9d4b2c0`, and deployment
+`fb33352a-c146-48dc-a630-4b5e8b0d19c4` completed through the Deploy Gateway;
+the lease was released. All five application readiness endpoints returned 200,
+all target VMs resolved to the deployed SHA, and public/LAN desktop assets
+matched the release build. VM111 was rebooted after deployment; the DevAgent API,
+OpenCode Web, and firewall returned active. OpenCode Web is intentionally
+passwordless and bound to `192.168.0.111:4096`; nftables permits the port only
+from `192.168.0.0/24`. The installed OpenCode version is 1.18.34.
 
-For human takeover, stop both timers and any current model unit, preserve root
-audits and use the existing administrator SSH/Deploy Gateway access. Never
-force-clear a lease until the executor has confirmed the previous deployment
-ended. Source updates to the Agent itself do not silently replace its installed
-root-owned safety policy or privileged helpers.
+The two systemd timers are enabled: incremental watch every two minutes and
+full reconciliation every thirty minutes. Before enabling them, the current
+Forgejo state was recorded with a model-free baseline. The baseline and first
+timer run each reported zero changes; the automatic queue had no pending work
+and no `model.started` audit event was recorded. The automatic prompt is
+coordination-only: it may triage and route real code work to other project
+Agents, but it does not edit or test code. Nine historical failed manual tasks
+remain excluded from automatic retries; they do not create timer work.
+
+The DevAgent identity successfully queried Forgejo Issue #77 and used the typed
+PVE interface to read VM111 status (`running`). Its Git HTTPS push permission
+passed a `--dry-run` probe; Forgejo confirmed the probe ref was not created.
+The DevAgent checkout was clean and fast-forwarded to the deployed SHA. A
+read-only production search for `积分` returned the existing XeLibrary record
+with an explicit approximate-result marker; Issue #77 was then closed with the
+deployment and verification evidence.
+
+The root-owned PVE key remains mode 0600 and unreadable by the `devagent` Unix
+user; an arbitrary `sudo id` attempt by that user was rejected. No exact
+credential values were found in the scanned service journals or private logs,
+and repository credential files are not tracked. A successful prior
+`devagent-msg` session is present in the private audit; no new model request was
+needed for this release acceptance. The user has asked Codex to perform
+publication writes, so this production activation was executed by Codex through
+the existing lease-protected gateway. We did not deliberately induce a
+production deployment failure or exercise rollback by interrupting a live
+release; the tested rollback path remains available in the fixed executor.
+
+Keep the Goal active until the final operator handoff and any remaining
+permission-boundary checks are recorded. For human takeover, stop both timers
+and any current model unit, preserve root audits and use the existing
+administrator SSH/Deploy Gateway access. Never force-clear a lease until the
+executor has confirmed the previous deployment ended. Source updates to the
+Agent itself do not silently replace its installed root-owned safety policy or
+privileged helpers.
