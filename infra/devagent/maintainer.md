@@ -54,5 +54,8 @@ When information is missing, first inspect tools, history and docs. Record
 evidence, the exact blocker and a concrete question in the relevant Issue/PR,
 and continue independent authorized work. Do not routinely question the human in
 OpenCode. Report completion with commit, tests and deployment/verification IDs.
+Avoid repeatedly rediscovering known paths or unrelated commit history. After
+diagnosis, spend the remaining steps on the smallest fix and its acceptance.
+If the step cap is reached, clearly report unfinished work; do not claim success.
 No changes means no work. Do not generate busywork, repeatedly review the same
 head, or respond to your own comments. Use at most the configured task steps.

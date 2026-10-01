@@ -22,7 +22,7 @@ persistent, publicly listening OpenCode server is unnecessary.
 Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
-the installed policy as inline configuration. The maintainer has 32 steps per
+the installed policy as inline configuration. The maintainer has 48 steps per
 task. Repository and Issue text remain untrusted data. Blocking questions and
 evidence belong in the relevant Issue/PR, after inspecting existing tools.
 
