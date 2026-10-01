@@ -238,6 +238,7 @@ Coordinator 本地验证：38 项前端测试、235 项后端测试、TypeScript
 
 Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 commit `44e5d1a2b2875b122f70eb27daa9afbe6d83361f`，release `85b605ea-46ba-4a26-bcd5-26d1caa79d75`，deployment `33a0af38-94e2-4a60-8d1a-3b6248c281e4` completed，租约已释放。工作队列、索引队列、知识库概览及 readiness 读取失败时统一展示带键盘可用重试的 ErrorState；合成浏览器验收覆盖工作队列失败与恢复。235 后端测试、38 前端测试、TypeScript/Vite build、OpenAPI 导出和 diff check 通过；LAN 五个服务 readiness、桌面 JS/CSS 发布哈希及未认证 API 401 验收通过。未做真实登录态浏览器验收；#71 保持开放。
 
+
 ### Issue #80 过期 Work 认领状态区分（2026-10-01，已部署）
 
 `c16efc35c99ce7deb1b457dad35da08ca805542d` 将 `queued` 与有效 `claimed` 统一作为活动项；过期领取独立计数、展示并允许重领，覆盖 Dashboard、状态小组件、Dock badge、Development、Issues、System Agents 和 Work。Deploy Gateway release `03fd828d-399d-498e-8e7d-e27049ab0da4` / deployment `2083222b-8a1d-4615-bc99-4cd2b671ff9b` 已完成，租约已释放。39 项前端、279 项后端、41 项 Work API 测试通过；TypeScript/Vite build、OpenAPI 无 diff 和 diff check 通过。部署后静态资源与构建哈希一致，5/5 readiness、匿名 API 401；只读生产 Work API 显示活动 21 项、过期领取 20 项。尚未在发布后重新运行登录态 Chrome 流程，因此 #80 暂保持开放，完整 V1 Plan 仍未完成。验收细节见 `docs/acceptance/issue-80-2026-10-01.md`。
@@ -245,3 +246,7 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #71 Dashboard 知识表加载状态（2026-10-01，已部署）
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
+
+### Issue #74 可视 Embedding 队列增量（zcode 本地交付，待协调器验收/发布）
+
+分支 `zcode/issue-74-embedding-queue`（worktree `runtime/agent-worktrees/issue-74-embedding-queue`，基于 `a2f264e`）。Embedding 服务新增 `EmbeddingRequestStore`（`xeonolab/embedding_requests.py`，SQLite `embedding-requests.sqlite3`）：每个到达 D100M worker 的请求记录 running→completed/failed（模型、文本数、字符数、truncation、tokens、耗时、错误码、调用方 sub），忙时 429 拒绝也记为 failed/EMBEDDING_BUSY；未配置/未知模型请求不入库。已完成历史滚动保留最近 1000 条，running 行永不剪枝，进程重启时遗留 running 行标记 WORKER_RESTARTED（沿用 index_jobs 恢复语义）。新增只读端点 `GET /api/v1/embedding/queue`（active+counts+worker 状态）与 `GET /api/v1/embedding/requests?limit=&cursor=&status=`（新到旧 cursor 分页），scope 均为 `dev:read`（与 work/issues 运维只读视图一致，默认桌面身份可见）；队列不含任何输入文本，避免知识内容经 dev:read 泄露。`infra/network/xeonolab.caddy` 与 `cloudflare-origin.caddy` 新增 `/api/v1/embedding/queue*`、`/api/v1/embedding/requests*` → 192.168.0.107:8104 路由。桌面新增原生应用「Embedding 队列」（`EmbeddingQueue.tsx` + `embedding-queue-logic.js`，注册于 `shell/apps.tsx`，permissions `dev:read`，10 秒轮询 + 陈旧响应丢弃 + cursor 去重），展示 worker 忙碌/就绪/未配置、运行中/已完成/失败计数、未完成请求列表与最近请求表（加载更多分页）。验证：新增 8 项后端测试（全库 243 项通过）、5 项前端逻辑单测（全库 44 项通过）、tsc+vite build、OpenAPI 重新导出（仅 embedding.openapi.json 增加两路径）、合成数据 headless Chrome 验收通过（截图 `runtime/acceptance-artifacts/issue-74-embedding-queue-1440x900.png`，测试数据全部为本地合成 fixture）。未做真实登录态浏览器验收与生产路由验收，需发布后由协调器补充；忙时拒绝请求会占用每身份 embedding-fast 限流窗口之外的额外写库（可忽略量级）。

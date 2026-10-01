@@ -11,6 +11,10 @@
   handle @work_api {
     reverse_proxy 192.168.0.111:8106
   }
+  @embedding_queue_api path /api/v1/embedding/queue* /api/v1/embedding/requests*
+  handle @embedding_queue_api {
+    reverse_proxy 192.168.0.107:8104
+  }
   handle /api/v1/* {
     reverse_proxy 192.168.0.104:8100
   }

@@ -2,6 +2,7 @@ import React from 'react';
 import {EmptyState} from '../design-system/primitives';
 import {Knowledge} from '../Knowledge';
 import {Work} from '../Work';
+import {EmbeddingQueue} from '../EmbeddingQueue';
 import {System} from './System';
 import {Settings} from '../Settings';
 import {Development} from './Development';
@@ -87,6 +88,19 @@ export function builtinApps(): DesktopApp[] {
       description: 'Harness 任务与 Issue 状态',
       menu: [{id: 'refresh', label: '刷新任务', action: 'refresh'}],
       component: Issues as React.ComponentType<any>,
+    },
+    {
+      id: 'embedding-queue',
+      title: 'Embedding 队列',
+      icon: '≡',
+      kind: 'native',
+      permissions: ['dev:read'],
+      defaultSize: [1020, 700],
+      minSize: [720, 480],
+      singleton: true,
+      dock: true,
+      description: 'Embedding 请求实时队列与最近完成记录',
+      component: EmbeddingQueue as React.ComponentType<any>,
     },
     {
       id: 'system',
