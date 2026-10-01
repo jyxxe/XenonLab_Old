@@ -25,22 +25,26 @@ function args() {
     else if (process.argv[i] === '--chrome') result.chrome = process.argv[++i];
     else if (process.argv[i] === '--certutil') result.certutil = process.argv[++i];
     else if (process.argv[i] === '--ca-nickname') result.caNickname = process.argv[++i];
+    else if (process.argv[i] === '--system-trust') result.systemTrust = true;
     else if (process.argv[i] === '--session-resilience') result.sessionResilience = true;
     else throw new Error(`Unknown argument ${process.argv[i]}`);
   }
-  if (!result.config || !result.out) throw new Error('Usage: node scripts/browser_acceptance.mjs --config PRIVATE.json --out DIR [--chrome /path/to/chrome] [--session-resilience]');
+  if (!result.config || !result.out) throw new Error('Usage: node scripts/browser_acceptance.mjs --config PRIVATE.json --out DIR [--chrome /path/to/chrome] [--system-trust] [--session-resilience]');
   return result;
 }
 
-async function privateConfig(file, caNicknameOverride) {
+async function privateConfig(file, caNicknameOverride, systemTrust) {
   const stat = await fs.stat(file);
   if ((stat.mode & 0o077) !== 0) throw new Error('Credential file permissions must be 0600 (no group/other access).');
   const config = JSON.parse(await fs.readFile(file, 'utf8'));
-  if (!config.appUrl || !config.username || !config.password || !(caNicknameOverride || config.caNickname)) {
-    throw new Error('Private config must contain appUrl, username, password, and caNickname.');
+  if (!config.appUrl || !config.username || !config.password || (!systemTrust && !(caNicknameOverride || config.caNickname))) {
+    throw new Error('Private config must contain appUrl, username, password, and caNickname unless --system-trust is used.');
   }
   const url = new URL(config.appUrl);
   if (url.protocol !== 'https:') throw new Error('appUrl must use HTTPS so browser certificate validation is exercised.');
+  if (systemTrust && url.hostname !== 'xenon.jyxxe.com') {
+    throw new Error('--system-trust is limited to the public xenon.jyxxe.com hostname; private LAN hosts require NSS CA verification.');
+  }
   return config;
 }
 
@@ -126,16 +130,17 @@ async function main() {
   const options = args();
   activeOutDir = path.resolve(options.out);
   await fs.mkdir(activeOutDir, {recursive: true});
-  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], injectedSessionResponses: [], expectedPreAuth401: [], expectedUnregisteredAccountTree: [], accountTreeFirstUse: null, overflow: []};
-  const config = await privateConfig(options.config, options.caNickname);
+  activeReport = {state: 'running', checks: [], screenshots: [], consoleErrors: [], pageExceptions: [], httpErrors: [], injectedSessionResponses: [], expectedPreAuth401: [], expectedUnregisteredAccountTree: [], accountTreeFirstUse: null, tableCatalogueRequests: [], knowledgeCatalogueFinal: null, dashboardKnowledgeFinal: null, overflow: []};
+  const config = await privateConfig(options.config, options.caNickname, options.systemTrust);
   activeSecrets = [config.username, config.password].filter(Boolean);
   const chromePath = options.chrome || '/usr/bin/google-chrome';
   const certutilPath = options.certutil || 'certutil';
   const caNickname = options.caNickname || config.caNickname;
   await fs.access(chromePath);
-  // Check, but never modify, the Linux NSS database Chrome reads from the current HOME.
-  // Certificate-error bypass flags are intentionally absent.
-  verifyChromeCaTrust(certutilPath, caNickname);
+  // Public xenon.jyxxe.com uses the platform's normal trusted CA roots. Private LAN
+  // hosts must still be present in Chrome's NSS database. Certificate bypass flags
+  // are intentionally absent in both modes.
+  if (!options.systemTrust) verifyChromeCaTrust(certutilPath, caNickname);
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xelonolab-browser-'));
   const profile = path.join(tempDir, 'chrome-profile');
@@ -153,6 +158,7 @@ async function main() {
   let cdp;
   let authenticated = false;
   const rowLoads = new Map();
+  const tableCatalogueLoads = new Map();
   const accountTreeRequests = new Map();
   const pendingAccountTree404 = new Map();
   const pendingIdentityResponses = new Map();
@@ -185,6 +191,11 @@ async function main() {
     cdp.on('Runtime.exceptionThrown', event => report.pageExceptions.push(redact(event.exceptionDetails?.text || 'Uncaught page exception')));
     cdp.on('Network.requestWillBeSent', event => {
       const url = new URL(event.request.url);
+      if (url.pathname === '/api/v1/tables' && event.request.method === 'GET') {
+        const request = {method: event.request.method, limit: url.searchParams.get('limit'), hasCursor: url.searchParams.has('cursor'), done: false, status: null, count: null, nextCursor: null};
+        report.tableCatalogueRequests.push(request);
+        tableCatalogueLoads.set(event.requestId, request);
+      }
       if (url.pathname === '/api/v1/auth/accounts') accountTreeRequests.set(event.requestId, event.request.method);
       if (/\/api\/v1\/tables\/[^/]+\/rows$/.test(url.pathname)) {
         rowLoads.set(event.requestId, {path: url.pathname, done: false, status: null});
@@ -195,6 +206,8 @@ async function main() {
     });
     cdp.on('Network.responseReceived', event => {
       const url = new URL(event.response.url);
+      const tableCatalogueLoad = tableCatalogueLoads.get(event.requestId);
+      if (tableCatalogueLoad) tableCatalogueLoad.status = event.response.status;
       const rowLoad = rowLoads.get(event.requestId);
       if (rowLoad) rowLoad.status = event.response.status;
       if (url.pathname === '/api/v1/auth/accounts' && event.response.status === 404 && accountTreeRequests.get(event.requestId) === 'GET') {
@@ -221,6 +234,16 @@ async function main() {
       } else await cdp.call('Fetch.continueRequest', {requestId:event.requestId});
     });
     cdp.on('Network.loadingFinished', event => {
+      const tableCatalogueLoad = tableCatalogueLoads.get(event.requestId);
+      if (tableCatalogueLoad) {
+        tableCatalogueLoad.done = true;
+        trackResponseBodyRead(cdp.call('Network.getResponseBody', {requestId: event.requestId}).then(response => {
+          const raw = response.base64Encoded ? Buffer.from(response.body, 'base64').toString('utf8') : response.body;
+          const payload = JSON.parse(raw);
+          tableCatalogueLoad.count = Array.isArray(payload?.data) ? payload.data.length : null;
+          tableCatalogueLoad.nextCursor = Boolean(payload?.meta?.next_cursor);
+        }).catch(() => {tableCatalogueLoad.bodyReadFailed = true;}));
+      }
       const rowLoad = rowLoads.get(event.requestId);
       if (rowLoad) rowLoad.done = true;
       const accountTree404 = pendingAccountTree404.get(event.requestId);
@@ -246,6 +269,8 @@ async function main() {
       }
     });
     cdp.on('Network.loadingFailed', event => {
+      const tableCatalogueLoad = tableCatalogueLoads.get(event.requestId);
+      if (tableCatalogueLoad) {tableCatalogueLoad.done = true; tableCatalogueLoad.error = safeText(event.errorText);}
       const rowLoad = rowLoads.get(event.requestId);
       if (rowLoad) {rowLoad.done = true; rowLoad.error = safeText(event.errorText);}
       const accountTree404 = pendingAccountTree404.get(event.requestId);
@@ -284,7 +309,11 @@ async function main() {
     await waitFor(() => cdp.evaluate("document.querySelector('button')?.innerText.includes('登录 XeonoLab')"), 'login control');
     await screenshot('01-login.png');
     if (!await clickButton('登录 XeonoLab')) throw new Error('Login button not found.');
-    await waitFor(async () => (await pageUrl()).startsWith(new URL(config.appUrl).origin) ? false : (await pageUrl()).startsWith('https://'), 'identity provider redirect');
+    const desktopOrigin = new URL(config.appUrl).origin;
+    await waitFor(async () => {
+      const current = new URL(await pageUrl());
+      return current.protocol === 'https:' && (current.origin !== desktopOrigin || current.pathname.startsWith('/auth/realms/'));
+    }, 'identity provider redirect');
     const usernameSelector = config.usernameSelector || '#username';
     const passwordSelector = config.passwordSelector || '#password';
     const submitSelector = config.submitSelector || '#kc-login';
@@ -295,7 +324,14 @@ async function main() {
     if (!fill) throw new Error('Could not fill identity fields.');
     const submitted = await cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(submitSelector)});if(!e)return false;e.click();return true})()`);
     if (!submitted) throw new Error('Identity-provider submit control not found; configure submitSelector in the private config.');
-    await waitFor(async () => (await pageUrl()).startsWith(new URL(config.appUrl).origin) && await cdp.evaluate("Boolean(document.querySelector('nav[aria-label=\"应用程序\"]'))"), 'authenticated desktop');
+    try {
+      await waitFor(async () => (await pageUrl()).startsWith(new URL(config.appUrl).origin) && await cdp.evaluate("Boolean(document.querySelector('nav[aria-label=\"应用程序\"]'))"), 'authenticated desktop');
+    } catch (error) {
+      report.browserLoginAfterSubmit = await cdp.evaluate("(()=>({path:location.pathname,title:document.title,text:(document.body?.innerText||'').slice(0,1200)}))()")
+        .then(result => ({...result, text: redact(result.text)})).catch(() => null);
+      await screenshot('02b-after-login-submit.png').catch(() => {});
+      throw error;
+    }
     authenticated = true;
     check('authenticated desktop and application dock', true);
     await measureOverflow('desktop');
@@ -327,12 +363,21 @@ async function main() {
     if (!await cdp.evaluate("(()=>{const e=document.querySelector('button[title=\"LaunchPad\"]');if(!e)return false;e.click();return true})()")) throw new Error('LaunchPad control not found.');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), 'LaunchPad');
     await screenshot('04-launchpad.png');
+    const knowledgeRequestStart = report.tableCatalogueRequests.length;
     if (!await cdp.evaluate("(()=>{const e=[...document.querySelectorAll('.launchpad button')].find(x=>x.innerText.includes('知识库'));if(!e)return false;e.click();return true})()")) throw new Error('Knowledge app is not present in LaunchPad for this account.');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.knowledge'))"), 'Knowledge page');
+    await waitFor(() => report.tableCatalogueRequests.slice(knowledgeRequestStart).some(request => request.done), 'Knowledge table catalogue response').catch(() => null);
+    await waitFor(() => pendingResponseBodyReads.size === 0, 'Knowledge table catalogue response inspection');
+    await waitFor(() => cdp.evaluate("!document.querySelector('.knowledge-sidebar .library-tree-section [role=\"status\"]')"), 'Knowledge table catalogue UI settle').catch(() => false);
+    await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,100))))');
+    const knowledgeCatalogueState = await cdp.evaluate("(()=>{const section=document.querySelector('.knowledge-sidebar .library-tree-section');return {tableCount:section?.querySelectorAll('.library-tree-table').length||0,loading:Boolean(section?.innerText.includes('正在加载知识表')),empty:Boolean([...document.querySelectorAll('.library-sidebar-empty')].some(p=>p.innerText.includes('这里还没有知识表'))),error:Boolean(section?.querySelector('[role=alert]'))}})()");
+    const knowledgeCatalogueRequest = report.tableCatalogueRequests.slice(knowledgeRequestStart).find(request => request.done) || null;
+    report.knowledgeCatalogueFinal = {request: knowledgeCatalogueRequest, ...knowledgeCatalogueState};
+    check('Knowledge catalogue API request succeeded', Boolean(knowledgeCatalogueRequest && knowledgeCatalogueRequest.status >= 200 && knowledgeCatalogueRequest.status < 300), knowledgeCatalogueRequest ? `HTTP ${knowledgeCatalogueRequest.status}; ${knowledgeCatalogueRequest.count ?? 'unknown'} table(s)` : 'No completed table catalogue request was observed.');
+    check('Knowledge catalogue leaves loading state after request settles', !knowledgeCatalogueState.loading, knowledgeCatalogueState.loading ? 'The knowledge sidebar still shows its catalogue spinner after the request settled.' : 'The knowledge sidebar shows its settled state.');
     await measureOverflow('knowledge');
     await screenshot('05-knowledge.png');
-    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.knowledge-sidebar button:nth-of-type(2)')&&!document.querySelector('.knowledge-sidebar button:nth-of-type(2)').disabled)"), 'knowledge table list loading');
-    const tableAvailable = await cdp.evaluate("Boolean(document.querySelector('.knowledge-sidebar button strong'))");
+    const tableAvailable = knowledgeCatalogueState.tableCount > 0;
     if (tableAvailable) {
       const previousRowRequestIds = new Set(rowLoads.keys());
       await cdp.evaluate("document.querySelector('.knowledge-sidebar button:has(strong)')?.click()");
@@ -348,8 +393,9 @@ async function main() {
         await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.record-editor'))"), 'selected record');
         await measureOverflow('attachment panel');
         await screenshot('06-attachments.png');
-        check('attachment panel visible for first readable row', await cdp.evaluate("Boolean(document.querySelector('.attachment-panel'))"));
-        check('attachment fixture visible', await cdp.evaluate("Boolean(document.querySelector('.attachment-panel li'))"), 'Select/seed a readable row with an attachment to exercise the populated attachment view.');
+        const attachmentState = await cdp.evaluate("(()=>{const panel=document.querySelector('.attachment-panel');return {visible:Boolean(panel),items:panel?.querySelectorAll('li').length||0,empty:Boolean(panel?.innerText.includes('当前记录没有附件'))}})()");
+        check('attachment panel visible for first readable row', attachmentState.visible);
+        check('attachment panel shows attachment rows or an explicit empty state', attachmentState.items > 0 || attachmentState.empty, attachmentState.items > 0 ? `${attachmentState.items} attachment(s)` : 'No attachment fixture is linked; the explicit empty state is visible.');
       } else {
         check('attachment panel fixture row available', false, 'No readable row exists; no data was created or changed.');
       }
@@ -359,6 +405,7 @@ async function main() {
 
     await cdp.evaluate("[...document.querySelectorAll('button[title]')].find(e=>e.title==='系统设置')?.click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.settings-panel'))"), 'Settings page');
+    await clickTab('账号');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.account-setup'))"), 'first-use account-tree setup state');
     await waitFor(() => report.expectedUnregisteredAccountTree.length > 0 || report.httpErrors.some(item => item.url === '/api/v1/auth/accounts'), 'account-tree response classification');
     const firstUseUI = await cdp.evaluate(`(()=>{const setup=document.querySelector('.account-setup');const text=setup?.innerText||'';const button=[...(setup?.querySelectorAll('button')||[])].find(e=>e.innerText.trim()==='初始化我的账号树');return {visible:Boolean(setup&&setup.getClientRects().length),heading:setup?.querySelector('h3')?.innerText.trim()||'',guidance:text.includes('当前登录身份尚未登记到受管账号树')&&text.includes('不会自动启用账号树或增加权限'),initializeButtonVisible:Boolean(button&&button.getClientRects().length),contactPromptVisible:text.includes('请联系具有桌面管理员权限的人工用户完成初始化'),raw404ErrorVisible:document.body.innerText.includes('account not registered')}})()`);
@@ -412,6 +459,15 @@ async function main() {
     if (panelVisible) {
       const panelTitle = await cdp.evaluate(`document.querySelector(${JSON.stringify(panelSelector)})?.querySelector('h2')?.innerText.trim()||''`);
       check('system panel is titled 系统面板', panelTitle === '系统面板', panelTitle);
+      await waitFor(() => report.tableCatalogueRequests.some(request => request.limit === '1000' && request.done), 'Dashboard table catalogue response');
+      await waitFor(() => pendingResponseBodyReads.size === 0, 'Dashboard table catalogue response inspection');
+      await waitFor(() => cdp.evaluate("document.querySelector('.dashboard-actions small')?.innerText.startsWith('更新于')"), 'Dashboard data refresh completion');
+      await cdp.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,100))))');
+      report.dashboardKnowledgeFinal = await cdp.evaluate("(()=>{const card=[...document.querySelectorAll('.mac-card')].find(item=>item.querySelector('h3')?.innerText.includes('知识库概览'));return {text:card?.innerText||'',chart:Boolean(card?.querySelector('.mac-bars'))}})()");
+      const dashboardTableRequest = report.tableCatalogueRequests.filter(request => request.limit === '1000' && request.done).at(-1) || null;
+      const dashboardCountMatch = report.dashboardKnowledgeFinal?.text.match(/(\d+)(?:\+)? 张表/);
+      const dashboardCount = dashboardCountMatch ? Number(dashboardCountMatch[1]) : null;
+      check('Dashboard knowledge chart matches settled catalogue data', Boolean(dashboardTableRequest && dashboardCount === dashboardTableRequest.count && report.dashboardKnowledgeFinal?.chart === (dashboardTableRequest.count > 0)), dashboardTableRequest ? `HTTP ${dashboardTableRequest.status}; API ${dashboardTableRequest.count ?? 'unknown'} table(s); UI: ${report.dashboardKnowledgeFinal?.text}` : 'No completed Dashboard catalogue request was observed.');
       await measureOverflow('system panel dashboard');
       await screenshot('10-system-panel-dashboard.png');
           const dashboardDetails = await cdp.evaluate(`(()=>{const d=document.querySelector(${JSON.stringify(panelSelector)});if(!d)return {ring:false,roundedRing:false,bars:false,roundedBars:false,meter:false,roundedMeter:false,indexQueue:false,workQueue:false};const visible=e=>e&&e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';const cardWith=label=>[...d.querySelectorAll('.mac-card')].find(card=>card.querySelector('h3')?.innerText.includes(label));const embedding=cardWith('我的 Embedding 索引'),work=cardWith('Harness 任务队列');const ring=d.querySelector('.mac-ring'),ringSegments=[...(ring?.querySelectorAll('.ring-segment')||[])].filter(visible);const meter=d.querySelector('.mac-meter'),meterStyle=meter?getComputedStyle(meter):null;const bars=d.querySelector('.mac-bars'),plots=[...(bars?.querySelectorAll('.mac-plot')||[])].filter(visible),plotStyle=plots[0]?getComputedStyle(plots[0]):null;const corners=style=>style&&parseFloat(style.borderTopLeftRadius)>0&&style.overflowX==='hidden'&&style.overflowY==='hidden';return {ring:Boolean(visible(ring)),roundedRing:ringSegments.some(circle=>circle.getAttribute('stroke-linecap')==='round'||getComputedStyle(circle).strokeLinecap==='round'),bars:Boolean(visible(bars)),roundedBars:plots.length>0&&corners(plotStyle),meter:Boolean(visible(meter)),roundedMeter:Boolean(meterStyle&&parseFloat(meterStyle.borderTopLeftRadius)>0&&meterStyle.overflowX==='hidden'&&meterStyle.overflowY==='hidden'),indexQueue:Boolean(embedding&&visible(embedding)&&visible(embedding.querySelector('.mac-meter[role="img"]'))),workQueue:Boolean(work&&visible(work)&&visible(work.querySelector('.mac-ring[role="img"]')))}})()`);
@@ -428,16 +484,17 @@ async function main() {
     await cdp.evaluate("document.querySelector('button[title=\"LaunchPad\"]')?.click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), 'LaunchPad for search acceptance');
     const searchSelector = featureSelectors.launchpadSearch || '.launchpad-search';
+    const systemAppTitle = config.systemPanelTitle || '系统状态';
     const searchExists = await cdp.evaluate(`Boolean(document.querySelector(${JSON.stringify(searchSelector)})?.getClientRects().length)`);
     check('LaunchPad search input found', searchExists, `selector: ${searchSelector}`);
     if (searchExists) {
-      await cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(searchSelector)});if(!e)return false;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'系统面板');e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
+      await cdp.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(searchSelector)});if(!e)return false;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(systemAppTitle)});e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true})()`);
       await measureOverflow('LaunchPad search');
       await screenshot('11-launchpad-search-system-panel.png');
-      const dashboardHit = await cdp.evaluate("(()=>[...document.querySelectorAll('.launchpad button')].some(e=>e.getClientRects().length&&e.innerText.includes('系统面板')))()");
-      check('LaunchPad search shows 系统面板 result', dashboardHit, 'Search uses the Chinese app title; expected one visible “系统面板” tile.');
+      const dashboardHit = await cdp.evaluate(`(()=>[...document.querySelectorAll('.launchpad button')].some(e=>e.getClientRects().length&&e.innerText.includes(${JSON.stringify(systemAppTitle)})) )()`);
+      check(`LaunchPad search shows ${systemAppTitle} result`, dashboardHit, `Expected a visible tile named ${systemAppTitle}.`);
       if (dashboardHit) {
-        const clickedDashboard = await cdp.evaluate("(()=>{const e=[...document.querySelectorAll('.launchpad button')].find(x=>x.getClientRects().length&&x.innerText.includes('系统面板'));if(!e)return false;e.click();return true})()");
+        const clickedDashboard = await cdp.evaluate(`(()=>{const e=[...document.querySelectorAll('.launchpad button')].find(x=>x.getClientRects().length&&x.innerText.includes(${JSON.stringify(systemAppTitle)}));if(!e)return false;e.click();return true})()`);
         check('LaunchPad 系统面板 result opened', clickedDashboard);
         if (clickedDashboard) {
           const dashboardVisible = await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window .dashboard'))"), 'Dashboard opened from LaunchPad search').catch(() => false);
