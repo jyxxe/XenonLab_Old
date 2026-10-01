@@ -202,3 +202,24 @@ def test_preflight_disables_git_replacement_objects(tmp_path, monkeypatch):
         ["/usr/bin/git", "-C", str(tmp_path), "show", original + ":payload"], tmp_path, log
     )
     assert log.read_text() == "original commit content"
+
+
+def test_repeated_build_metadata_does_not_change_release_digest(tmp_path):
+    runner = load("deploy_runner")
+    archives = []
+    for attempt in (1, 2):
+        bundle, frontend = tmp_path / f"release-{attempt}.tar", tmp_path / f"frontend-{attempt}.tar"
+        with tarfile.open(bundle, "w") as archive:
+            entry = tarfile.TarInfo("pyproject.toml")
+            entry.size = 3
+            archive.addfile(entry, io.BytesIO(b"src"))
+        with tarfile.open(frontend, "w") as archive:
+            entry = tarfile.TarInfo("apps/desktop-web/dist/index.html")
+            entry.size, entry.mtime, entry.uid, entry.gid = 4, attempt * 1000, attempt, attempt
+            entry.uname = f"builder-{attempt}"
+            archive.addfile(entry, io.BytesIO(b"same"))
+        runner.append_frontend(bundle, frontend)
+        archives.append(bundle.read_bytes())
+        with tarfile.open(bundle) as archive:
+            assert archive.extractfile("apps/desktop-web/dist/index.html").read() == b"same"
+    assert archives[0] == archives[1]
