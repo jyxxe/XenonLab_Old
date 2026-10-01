@@ -40,8 +40,10 @@ TLS verification stayed enabled. This is path-specific evidence, not a proven
 general network cause. See the [Go compatibility reference](https://go.dev/doc/godebug)
 and [Forgejo runner guide](https://forgejo.org/docs/v16.0/admin/actions/installation/binary/).
 
-The temporary proxy must be removed and must not become the production CI
-dependency. #87 requires independent NetworkServer egress, constrained access,
+The temporary SSH reverse proxy was terminated on 2026-10-01; VM 111 loopback
+port 17897 was confirmed to have no listener, and forgejo-runner remained
+inactive. It must not become the production CI dependency. #87 requires
+independent NetworkServer egress, constrained access,
 TLS/DNS handling, startup/health evidence and actual CI verification after the
 workstation tunnel stops. A cached image alone does not satisfy action/npm/uv/
 Chromium download requirements. #82 remains open until actual execution.
