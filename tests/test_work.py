@@ -38,6 +38,130 @@ def test_claim_fencing_persistence_and_permissions(settings):
     assert restarted.post(path + "/release", headers=auth(owner), json={"epoch": epoch}).status_code == 409
 
 
+def test_claim_synchronizes_forgejo_assignee_and_comment(settings, monkeypatch, tmp_path):
+    import json
+
+    from xeonolab import work
+
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    token_file = tmp_path / "forgejo-token"
+    token_file.write_text("test-token")
+    users_file = tmp_path / "forgejo-users.json"
+    users_file.write_text(json.dumps({"alice": "general-agent"}))
+    monkeypatch.setenv("FORGEJO_URL", "https://forgejo.example")
+    monkeypatch.setenv("FORGEJO_CLAIM_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("FORGEJO_AGENT_USERS_FILE", str(users_file))
+
+    class Reply:
+        def __init__(self, value):
+            self.value = value
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.value
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.calls = []
+
+        def get(self, url, **kwargs):
+            self.calls.append(("get", url, kwargs))
+            return Reply({"number": 73, "state": "open", "assignees": [{"login": "triage"}]})
+
+        def patch(self, url, **kwargs):
+            self.calls.append(("patch", url, kwargs))
+            return Reply({})
+
+        def post(self, url, **kwargs):
+            self.calls.append(("post", url, kwargs))
+            return Reply({"id": 12})
+
+        def close(self):
+            return None
+
+    client = Client()
+    monkeypatch.setattr(work.httpx, "Client", lambda **kwargs: client)
+    api = TestClient(create_app("dev-agent", settings))
+    item = api.post(
+        "/api/v1/work", headers=auth(),
+        json={"repository": "xenon-admin/XeonoLab", "issue_id": 73, "title": "Harness claims"},
+    ).json()["data"]
+    result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth("alice"), json={})
+
+    assert result.status_code == 200
+    assert [call[0] for call in client.calls] == ["get", "patch", "post"]
+    assert client.calls[1][2]["json"] == {"assignees": ["triage", "general-agent"]}
+    assert client.calls[2][2]["json"]["body"] == (
+        "Harness claim: @general-agent claimed this Issue (Work epoch 1)."
+    )
+
+
+def test_claim_sync_failure_releases_claim_and_restores_assignees(settings, monkeypatch, tmp_path):
+    import json
+
+    import httpx
+
+    from xeonolab import work
+
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    token_file = tmp_path / "forgejo-token"
+    token_file.write_text("test-token")
+    users_file = tmp_path / "forgejo-users.json"
+    users_file.write_text(json.dumps({"alice": "general-agent"}))
+    monkeypatch.setenv("FORGEJO_URL", "https://forgejo.example")
+    monkeypatch.setenv("FORGEJO_CLAIM_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("FORGEJO_AGENT_USERS_FILE", str(users_file))
+
+    class Reply:
+        def __init__(self, value=None, fail=False):
+            self.value, self.fail = value, fail
+
+        def raise_for_status(self):
+            if self.fail:
+                request = httpx.Request("POST", "https://forgejo.example/comments")
+                response = httpx.Response(503, request=request)
+                raise httpx.HTTPStatusError("provider unavailable", request=request, response=response)
+
+        def json(self):
+            return self.value
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.patches = []
+
+        def get(self, url, **kwargs):
+            return Reply({"number": 73, "state": "open", "assignees": [{"login": "triage"}]})
+
+        def patch(self, url, **kwargs):
+            self.patches.append(kwargs["json"])
+            return Reply({})
+
+        def post(self, url, **kwargs):
+            return Reply(fail=True)
+
+        def close(self):
+            return None
+
+    client = Client()
+    monkeypatch.setattr(work.httpx, "Client", lambda **kwargs: client)
+    api = TestClient(create_app("dev-agent", settings))
+    item = api.post(
+        "/api/v1/work", headers=auth(),
+        json={"repository": "xenon-admin/XeonoLab", "issue_id": 73, "title": "Harness claims"},
+    ).json()["data"]
+    result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth("alice"), json={})
+
+    assert result.status_code == 503
+    current = next(row for row in api.get("/api/v1/work", headers=auth()).json()["data"] if row["id"] == item["id"])
+    assert current["status"] == "queued" and current["holder"] is None and current["epoch"] == 2
+    assert client.patches == [
+        {"assignees": ["triage", "general-agent"]},
+        {"assignees": ["triage"]},
+    ]
+
+
 def test_expired_claim_cannot_complete_reassigned_task(settings, monkeypatch):
     from xeonolab import work
 

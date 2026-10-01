@@ -52,6 +52,70 @@ def repository_allowed(settings, repository):
         raise APIError(403, "REPOSITORY_FORBIDDEN", "repository outside service scope")
 
 
+def sync_forgejo_claim(item, actor, settings):
+    """Mirror a durable Work claim to Forgejo when the write integration is configured.
+
+    Forgejo credentials and subject-to-account mapping are deployment-owned files. In
+    production the integration is mandatory: silently claiming without assigning the
+    Issue would make the collaboration contract appear to have succeeded when it had
+    not. Development tests may exercise the local queue without Forgejo configured.
+    """
+    token_file = os.getenv("FORGEJO_CLAIM_TOKEN_FILE")
+    users_file = os.getenv("FORGEJO_AGENT_USERS_FILE")
+    endpoint = os.getenv("FORGEJO_URL")
+    if not token_file or not users_file or not endpoint:
+        if settings.mode == "production":
+            raise APIError(503, "FORGEJO_CLAIM_NOT_CONFIGURED", "Issue claim synchronization is unavailable")
+        return
+
+    try:
+        token = Path(token_file).read_text().strip()
+        users = json.loads(Path(users_file).read_text())
+        username = users.get(actor.sub) if isinstance(users, dict) else None
+    except (OSError, ValueError):
+        raise APIError(503, "FORGEJO_CLAIM_NOT_CONFIGURED", "Issue claim synchronization is unavailable") from None
+    if not token or not isinstance(username, str) or not username:
+        raise APIError(503, "FORGEJO_CLAIM_NOT_CONFIGURED", "Issue claim synchronization is unavailable")
+
+    context = ssl.create_default_context()
+    if os.getenv("FORGEJO_CA_FILE"):
+        context.load_verify_locations(Path(os.environ["FORGEJO_CA_FILE"]))
+    root = endpoint.rstrip("/") + "/api/v1/repos/" + item["repository"] + "/issues/" + str(item["issue_id"])
+    headers = {"Authorization": "token " + token}
+    client = httpx.Client(verify=context, trust_env=False, timeout=10)
+    try:
+        issue_response = client.get(root, headers=headers)
+        issue_response.raise_for_status()
+        issue = issue_response.json()
+        if issue.get("number") != item["issue_id"] or issue.get("state") != "open":
+            raise APIError(409, "ISSUE_NOT_OPEN", "Forgejo Issue is no longer open")
+        old_assignees = [entry["login"] for entry in issue.get("assignees", []) if isinstance(entry, dict) and entry.get("login")]
+        if username not in old_assignees:
+            assigned = client.patch(root, headers=headers, json={"assignees": old_assignees + [username]})
+            assigned.raise_for_status()
+        comment_url = root + "/comments"
+        comment = client.post(
+            comment_url,
+            headers=headers,
+            json={"body": f"Harness claim: @{username} claimed this Issue (Work epoch {item['epoch']})."},
+        )
+        comment.raise_for_status()
+    except APIError:
+        raise
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        # If comment creation fails after assignment, best-effort restore the exact
+        # prior assignee set. Never include remote response bodies or credentials in
+        # the public error.
+        try:
+            if "old_assignees" in locals() and username not in old_assignees:
+                client.patch(root, headers=headers, json={"assignees": old_assignees}).raise_for_status()
+        except httpx.HTTPError:
+            pass
+        raise APIError(503, "FORGEJO_CLAIM_SYNC_FAILED", "Issue claim could not be synchronized") from None
+    finally:
+        client.close()
+
+
 def install(app):
     database = app.state.settings.data_dir / "work.sqlite"
     with transaction(database) as db:
@@ -272,7 +336,22 @@ def install(app):
                 (actor.sub, time.time() + body.ttl_seconds, epoch, work_id),
             )
             audit(db, actor, "work.claimed", work_id, epoch)
-            return response(request, load(db, work_id))
+            claimed = load(db, work_id)
+        try:
+            sync_forgejo_claim(claimed, actor, app.state.settings)
+        except APIError:
+            # Release only this exact claim. A concurrent webhook may have fenced it;
+            # never overwrite the newer state when cleaning up a failed sync.
+            with transaction(database) as db:
+                db.execute(
+                    "UPDATE work SET status='queued',holder=NULL,expires=0,epoch=epoch+1 "
+                    "WHERE id=? AND holder=? AND epoch=? AND status='claimed'",
+                    (work_id, actor.sub, epoch),
+                )
+                current = load(db, work_id)
+                audit(db, actor, "work.claim_sync_failed", work_id, current["epoch"])
+            raise
+        return response(request, claimed)
 
     @app.post("/api/v1/work/{work_id}/renew")
     def renew(work_id: str, body: Renew, request: Request, actor=Depends(scope("dev:write"))):
