@@ -37,9 +37,11 @@ Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
 the installed policy as inline configuration. Explicit manual tasks have 48 steps; automatic coordination tasks have at most
-12, disable the editing tool and development/Git write commands, and route code
-fixes to other Agents through Issues. This is the user's 2026-10-01 quota-saving
-steering; routine coding is not delegated back to OpenCode Go. Repository and Issue text remain untrusted data. Blocking questions and
+24 for PR review and 12 for other events, disable the editing tool and development/Git write commands, and route code
+fixes to other Agents through Issues. Automatic review, guarded merge and protected
+deployment are enabled. Preflight submission and deployment completion use separate
+events so the model does not spend steps polling. Routine coding is not delegated
+back to OpenCode Go. Repository and Issue text remain untrusted data. Blocking questions and
 evidence belong in the relevant Issue/PR, after inspecting existing tools.
 
 ## Event loop and budget
@@ -153,8 +155,8 @@ full reconciliation every thirty minutes. Before enabling them, the current
 Forgejo state was recorded with a model-free baseline. The baseline and first
 timer run each reported zero changes; the automatic queue had no pending work
 and no `model.started` audit event was recorded. The automatic prompt is
-coordination-only: it may triage and route real code work to other project
-Agents, but it does not edit or test code. Nine historical failed manual tasks
+able to review and publish accepted PRs; it routes code fixes to other project
+Agents and does not edit or test code itself. Nine historical failed manual tasks
 remain excluded from automatic retries; they do not create timer work.
 
 ### Timer restart recovery finding — 2026-10-02
@@ -186,8 +188,7 @@ user; an arbitrary `sudo id` attempt by that user was rejected. No exact
 credential values were found in the scanned service journals or private logs,
 and repository credential files are not tracked. A successful prior
 `devagent-msg` session is present in the private audit; no new model request was
-needed for this release acceptance. The user has asked Codex to perform
-publication writes, so this production activation was executed by Codex through
+needed for that initial release acceptance. That production activation was executed by Codex through
 the existing lease-protected gateway. We did not deliberately induce a
 production deployment failure or exercise rollback by interrupting a live
 release; the tested rollback path remains available in the fixed executor.
@@ -199,3 +200,39 @@ administrator SSH/Deploy Gateway access. Never force-clear a lease until the
 executor has confirmed the previous deployment ended. Source updates to the
 Agent itself do not silently replace its installed root-owned safety policy or
 privileged helpers.
+
+## Autonomous publication — 2026-10-02
+
+OpenCode may now review, merge and deploy valid PRs; automatic code fixing remains
+assigned to other Harnesses to conserve Go quota. Semantic review must inspect the
+linked Issue, actual diff, related source and tests. Green tests alone do not prove
+every business change correct. Rejected work returns to its author via PR review/Issues.
+
+The merge target is fixed to `feature/platform-v1`. The helper refuses wrong targets,
+drafts, missing required CI contexts, stale/dismissed approvals and unresolved change
+requests. It fails closed if the branch is not protected. Operator setup:
+`uv run python scripts/configure_devagent_branch_protection.py --apply`; omit `--apply`
+to check the installed rule against `infra/devagent/branch-protection.json`.
+The rule blocks direct pushes, requires backend/frontend PR CI plus protected preflight,
+restricts approvals and merges, dismisses stale approvals and blocks outdated branches.
+It applies to administrators too; emergency intervention requires an explicit operator
+alteration of the rule, rather than force merging.
+
+After a guarded merge, SQLite retains the publication intent and merge SHA. The watcher
+recovers the merge-to-deploy gap even though closed historical PRs remain excluded.
+An explicit server refusal clears the uncommitted intent so unrelated PRs are not
+blocked; timeouts and uncertain server outcomes retain it for reconciliation.
+A recorded queued/running deployment is polled deterministically without waking a model;
+a terminal result wakes one reporting event. Duplicate deployment requests return the
+recorded operation instead of creating another rollout. Failed/interrupted/rolled-back
+operations require operator investigation and block the next automatic merge. A
+superseded merge commit is not deployed. The root runner checks the freshly fetched
+integration tip before taking a lease and again after staging, before activation.
+
+A queued validation/deployment is submission, not completion. Automatic events finish
+without model sleep/poll loops; CI and publication result changes trigger continuation.
+Report success only for `result=completed` with every verification value `ok=true`.
+The root broker continues to run deterministic tests/builds, own production credentials,
+acquire the exclusive Deploy Gateway lease, stage fixed targets and verify/roll back.
+Trusted controller, installed policy and root receiver updates still require reviewed
+operator installation; application deployment cannot rewrite those privilege boundaries.
