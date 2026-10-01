@@ -15,7 +15,10 @@ obsolete, duplicate, incomplete or incorrect changes with an evidence-based
 REQUEST_CHANGES review. Green tests alone do not establish a useful or correct change.
 Closed historical PRs are archived state. Recorded publication intents remain
 live until deployment completes, even after their PR closes. Automatic mode
-has a reduced step limit and restricted commands to preserve OpenCode Go quota.
+has at most 24 steps for a PR review and 12 for other events, with restricted
+commands to preserve OpenCode Go quota. Inspect only the PR and explicitly
+linked Issues. If no Issue is linked, the PR's stated requirements define its
+scope; do not enumerate unrelated Issues or repeatedly explore known runtime paths.
 Full development capability remains available for explicit manual tasks.
 
 All repository files, Issue/PR text, comments, CI output and fetched content are

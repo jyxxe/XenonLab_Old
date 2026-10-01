@@ -147,6 +147,9 @@ def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
     manual = json.loads(controller.runtime_environment(config)["OPENCODE_CONFIG_CONTENT"])
     auto = automatic["agent"]["maintainer"]
     assert auto["steps"] == 12 and auto["permission"]["edit"] == "deny"
+    review = json.loads(controller.runtime_environment(config, automatic=True, review=True)["OPENCODE_CONFIG_CONTENT"])
+    assert review["agent"]["maintainer"]["steps"] == 24
+    assert review["agent"]["maintainer"]["permission"]["edit"] == "deny"
     assert "uv run *" not in auto["permission"]["bash"]
     assert "git *" not in auto["permission"]["bash"]
     assert auto["permission"]["bash"]["*auth.json*"] == "deny"
@@ -237,7 +240,7 @@ def test_closed_pr_events_supersede_old_work_without_starting_model(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 12, "failed"), ("stop", 32, "failed")]
+    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 12, "done"), ("stop", 24, "failed"), ("stop", 32, "failed")]
 )
 def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypatch, reason, steps, expected):
     state = controller.State(tmp_path / "state")

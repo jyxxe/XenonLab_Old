@@ -37,7 +37,7 @@ Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
 the installed policy as inline configuration. Explicit manual tasks have 48 steps; automatic coordination tasks have at most
-12 per event, disable the editing tool and development/Git write commands, and route code
+24 for PR review and 12 for other events, disable the editing tool and development/Git write commands, and route code
 fixes to other Agents through Issues. Automatic review, guarded merge and protected
 deployment are enabled. Preflight submission and deployment completion use separate
 events so the model does not spend steps polling. Routine coding is not delegated

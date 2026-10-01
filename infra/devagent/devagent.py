@@ -246,12 +246,13 @@ def project_events(forgejo, config, reconcile=False):
             )
 
 
-def runtime_environment(config, automatic=False):
+def runtime_environment(config, automatic=False, review=False):
     # Operator config and project .opencode files cannot supply plugins or override policy.
     policy = json.loads(Path(config["policy_file"]).read_text())
     if automatic:
         agent = policy.setdefault("agent", {}).setdefault("maintainer", {})
-        agent["steps"] = min(agent.get("steps", 32), config.get("automatic_steps", 12))
+        limit = config.get("automatic_review_steps", 24) if review else config.get("automatic_steps", 12)
+        agent["steps"] = min(agent.get("steps", 32), limit)
         permission = agent.setdefault("permission", {})
         permission["edit"] = "deny"
         original = permission.get("bash", {})
@@ -312,6 +313,9 @@ def runtime_environment(config, automatic=False):
 
 def run_model(config, state, task, manual=False):
     title = "XeonoLab " + task["id"]
+    env = runtime_environment(config, automatic=not manual, review=task["resource"].startswith("pr:"))
+    policy = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    step_limit = policy.get("agent", {}).get("maintainer", {}).get("steps", 32)
     if manual:
         prompt = task["payload"]
     else:
@@ -320,7 +324,10 @@ def run_model(config, state, task, manual=False):
             "to other project Agents through Issues. Do not edit code or run development/test work "
             "in this automatic task. Read the actual diff and relevant source before approving; reject "
             "unrelated, obsolete, duplicate or incorrect changes with REQUEST_CHANGES and evidence. "
-            "Only target feature/platform-v1. Use at most 12 steps per event. Pending CI means comment "
+            f"Only target feature/platform-v1. Use at most {step_limit} steps for this event. "
+            "Inspect this PR and explicitly linked Issues only; when no Issue is linked, its stated "
+            "requirements define review scope. Do not enumerate unrelated Issues, history or runtime paths. "
+            "Pending CI means comment "
             "once and finish. Submit missing protected validation with devctl validate EXACT_HEAD, then finish. "
             "The status change wakes a fresh event. After CI and preflight succeed, approve the fresh head "
             "and merge with devctl merge N EXACT_HEAD; use the returned merge_commit_sha for devctl deploy "
@@ -346,9 +353,6 @@ def run_model(config, state, task, manual=False):
     session, cost, tokens, error = None, 0.0, {}, False
     finish_reason = None
     steps = 0
-    env = runtime_environment(config, automatic=not manual)
-    policy = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    step_limit = policy.get("agent", {}).get("maintainer", {}).get("steps", 32)
     log_path = logs / (task["id"] + ".jsonl")
     with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output:
         env["DEVAGENT_TASK"] = task["id"]
