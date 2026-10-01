@@ -202,7 +202,7 @@ export function Inspector({
           </div>
         )}
 
-        {errorInfo && <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.code} />}
+        {errorInfo && <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} />}
         {message && <p role="status" className="inspector-status">{message}</p>}
 
         {tab === 'overview' && (
@@ -372,7 +372,7 @@ export function Inspector({
             </dl>
             {canAdmin ? (
               aclError ? (
-                <ErrorState title="无法读取 ACL" message={describeError(aclError).message} onRetry={() => setTab('permissions')} />
+                <ErrorState title="无法读取 ACL" message={describeError(aclError).message} requestId={describeError(aclError).requestId} errorCode={describeError(aclError).code} onRetry={() => setTab('permissions')} />
               ) : acl ? (
                 <div className="acl-effective">
                   <h4>ACL 来源</h4>
@@ -402,6 +402,7 @@ export function Inspector({
             ) : jobsError ? (
               <ErrorState
                 title="索引状态不可用"
+                requestId={describeError(jobsError).requestId} errorCode={describeError(jobsError).code}
                 message={describeError(jobsError).message + '（普通用户无 xelibrary:admin 时无法读取索引任务。）'}
                 onRetry={onReloadJobs}
               />

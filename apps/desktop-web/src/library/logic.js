@@ -298,6 +298,7 @@ export function rowHasAttachment(row, columns = []) {
 export function describeError(error, context = '') {
   const status = typeof error?.status === 'number' ? error.status : null;
   const code = error?.code || '';
+  const requestId = typeof error?.requestId === 'string' ? error.requestId : undefined;
   const raw = String(error?.message || error || '');
   const known = {
     XL_FORBIDDEN: {title: '权限不足', message: '当前身份没有执行此操作的权限；数据没有被修改。', retryable: false},
@@ -330,17 +331,17 @@ export function describeError(error, context = '') {
     ATTACHMENT_NOT_FOUND: {title: '附件不存在', message: '该附件可能已被解除关联。', retryable: true},
     REVISION_NOT_FOUND: {title: 'revision 不存在', message: '请刷新历史记录。', retryable: true},
   };
-  if (known[code]) return {...known[code], code, status, raw};
-  if (status === 401) return {title: '会话已过期', message: '请重新登录后重试。', retryable: false, code, status, raw};
-  if (status === 403) return {title: '权限不足', message: '当前身份没有访问该资源的权限；权限不足不会伪装成“不存在”。', retryable: false, code, status, raw};
-  if (status === 404) return {title: '资源不存在', message: '该对象可能已被移动或删除。', retryable: true, code, status, raw};
-  if (status === 409) return {title: '状态冲突', message: '该操作与当前资源状态冲突，请刷新后重试。', retryable: true, code, status, raw};
-  if (status === 412) return {title: '数据已被他人修改', message: '本地 revision 已过期，本次修改未提交。', retryable: true, conflict: true, code, status, raw};
-  if (status === 413) return {title: '请求过大', message: '数据量超过服务端限制。', retryable: false, code, status, raw};
-  if (status === 422) return {title: '请求无效', message: '服务端拒绝了该请求的字段或取值。', retryable: false, code, status, raw};
-  if (status === 429) return {title: '请求过于频繁', message: '请稍候再试。', retryable: true, code, status, raw};
-  if (status === 503) return {title: '服务暂不可用', message: '依赖服务未就绪，请稍后重试。', retryable: true, code, status, raw};
-  return {title: context ? `${context}失败` : '操作失败', message: raw || '未知错误', retryable: true, code, status, raw};
+  if (known[code]) return {...known[code], code, status, raw, requestId};
+  if (status === 401) return {title: '会话已过期', message: '请重新登录后重试。', retryable: false, code, status, raw, requestId};
+  if (status === 403) return {title: '权限不足', message: '当前身份没有访问该资源的权限；权限不足不会伪装成“不存在”。', retryable: false, code, status, raw, requestId};
+  if (status === 404) return {title: '资源不存在', message: '该对象可能已被移动或删除。', retryable: true, code, status, raw, requestId};
+  if (status === 409) return {title: '状态冲突', message: '该操作与当前资源状态冲突，请刷新后重试。', retryable: true, code, status, raw, requestId};
+  if (status === 412) return {title: '数据已被他人修改', message: '本地 revision 已过期，本次修改未提交。', retryable: true, conflict: true, code, status, raw, requestId};
+  if (status === 413) return {title: '请求过大', message: '数据量超过服务端限制。', retryable: false, code, status, raw, requestId};
+  if (status === 422) return {title: '请求无效', message: '服务端拒绝了该请求的字段或取值。', retryable: false, code, status, raw, requestId};
+  if (status === 429) return {title: '请求过于频繁', message: '请稍候再试。', retryable: true, code, status, raw, requestId};
+  if (status === 503) return {title: '服务暂不可用', message: '依赖服务未就绪，请稍后重试。', retryable: true, code, status, raw, requestId};
+  return {title: context ? `${context}失败` : '操作失败', message: raw || '未知错误', retryable: true, code, status, raw, requestId};
 }
 
 export function isIndexActiveJob(job) {

@@ -193,7 +193,7 @@ export function TableView({
 
   if (error) {
     const info = describeError(error, '读取记录');
-    return <ErrorState title={info.title} message={info.message} requestId={info.code} onRetry={onRetry} />;
+    return <ErrorState title={info.title} message={info.message} requestId={info.requestId} errorCode={info.code} onRetry={onRetry} />;
   }
 
   return (

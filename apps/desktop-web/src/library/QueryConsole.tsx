@@ -109,7 +109,7 @@ export function QueryConsole({
       )}
 
       {errorInfo ? (
-        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.code} onRetry={() => onRun(expression)} />
+        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={() => onRun(expression)} />
       ) : running ? (
         <div className="library-result-skeleton" role="status" aria-label="正在执行查询">
           {Array.from({length: 5}, (_, index) => <Skeleton key={index} height={30} />)}

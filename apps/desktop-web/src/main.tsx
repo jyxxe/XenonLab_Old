@@ -10,7 +10,7 @@ import {emptyAccess, accessExpired, canReplayRequest, classifyFailure, DEFAULT_R
 import {ToastProvider} from './design-system/primitives';
 import {DesktopShell} from './shell/DesktopShell';
 import {Knowledge} from './Knowledge';
-import {APIRequestError} from './api-error.js';
+import {APIRequestError, apiErrorFromResponse} from './api-error.js';
 
 type APIPage<T = any> = {data: T; meta: {request_id?: string; next_cursor?: string | null; [key: string]: any}};
 type PendingRequest = {generation:number; replay:()=>Promise<unknown>; resolve:(value:unknown)=>void; reject:(reason:unknown)=>void};
@@ -229,10 +229,10 @@ function App() {
       if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
       if (!response.ok) {
         applyFailureState(response.status,response.headers,result?.error,generation);
-        throw new APIRequestError(result?.error?.message || `HTTP ${response.status}`, response.status, result?.error?.code);
+        throw apiErrorFromResponse(response, result);
       }
       if(!result||typeof result!=='object'){
-        const failure=new APIRequestError('服务返回了无法读取的数据',502,'INVALID_RESPONSE');
+        const failure=new APIRequestError('服务返回了无法读取的数据',502,'INVALID_RESPONSE',{requestId:response.headers.get('X-Request-ID')||undefined});
         applyFailureState(502,response.headers,{message:failure.message,code:failure.code},generation);
         throw failure;
       }
@@ -281,7 +281,7 @@ function App() {
         if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
         let result:any=null;try{result=raw?JSON.parse(raw):null}catch{}
         applyFailureState(response.status,response.headers,result?.error,generation);
-        throw new APIRequestError(result?.error?.message || result?.detail?.[0]?.msg || `HTTP ${response.status}`, response.status, result?.error?.code);
+        throw apiErrorFromResponse(response, result);
       }
       if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
       if(sessionStatusRef.current.phase==='retrying'&&pendingRequestsRef.current.length===0)transition({type:'restored'});

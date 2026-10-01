@@ -49,7 +49,7 @@ export function NewTableDialog({
         </>
       }
     >
-      {errorInfo && <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.code} />}
+      {errorInfo && <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} />}
       <p className="muted">创建后直接进入 Table View。`.xl` 表的实际字段由这里的 schema 决定；删除或改类型属于破坏性操作，保存 schema 时会单独确认。</p>
       <label>
         表名

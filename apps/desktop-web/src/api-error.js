@@ -1,10 +1,26 @@
 export class APIRequestError extends Error {
-  constructor(message, status, code) {
+  constructor(message, status, code, metadata = {}) {
     super(message);
     this.name = 'APIRequestError';
     this.status = status;
     this.code = code;
+    this.requestId = nonemptyString(metadata.requestId);
   }
+}
+
+function nonemptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/** Retain server correlation IDs for both JSON APIs and raw attachment requests. */
+export function apiErrorFromResponse(response, payload) {
+  const error = payload?.error;
+  return new APIRequestError(
+    nonemptyString(error?.message) || nonemptyString(payload?.detail?.[0]?.msg) || `HTTP ${response.status}`,
+    response.status,
+    nonemptyString(error?.code),
+    {requestId: nonemptyString(error?.request_id) || nonemptyString(response.headers.get('X-Request-ID'))},
+  );
 }
 
 export function isUnregisteredAccountError(error) {

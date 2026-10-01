@@ -436,7 +436,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
             <h2>XeLibrary</h2>
             <p>从左侧路径树打开一张知识表，或使用搜索与查询控制台。</p>
             {catalogueError ? (
-              <ErrorState title={catalogueError.title} message={catalogueError.message} requestId={catalogueError.code} onRetry={() => void catalogue.load()} />
+              <ErrorState title={catalogueError.title} message={catalogueError.message} requestId={catalogueError.requestId} errorCode={catalogueError.code} onRetry={() => void catalogue.load()} />
             ) : catalogue.loading ? (
               <p role="status"><Spinner label="正在加载知识表" /> 正在加载知识表目录…</p>
             ) : catalogue.tables.length ? (
@@ -533,7 +533,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
       <NewTableDialog open={dialog === 'new'} onClose={() => setDialog(null)} onCreate={createTable} />
 
       <Modal open={dialog === 'move'} title={`移动 ${table?.name || ''}`} onClose={() => setDialog(null)} footer={<><Button variant="ghost" onClick={() => setDialog(null)}>取消</Button><Button variant="primary" disabled={busy || !movePath.startsWith('/')} onClick={() => void moveTable()}>移动知识表</Button></>}>
-        {actionError ? <ErrorState title={describeError(actionError, '移动表').title} message={describeError(actionError, '移动表').message} /> : null}
+        {actionError ? <ErrorState title={describeError(actionError, '移动表').title} requestId={describeError(actionError).requestId} errorCode={describeError(actionError).code} message={describeError(actionError, '移动表').message} /> : null}
         <label>
           目标路径
           <Input value={movePath} onChange={event => setMovePath(event.target.value)} placeholder="/数学/分析" />
@@ -548,7 +548,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
         onClose={() => setDialog(null)}
         footer={<><Button variant="ghost" onClick={() => setDialog(null)}>取消</Button><Button variant="primary" disabled={busy} onClick={() => void saveSchema()}>保存字段定义</Button></>}
       >
-        {actionError ? <ErrorState title={describeError(actionError, '更新 schema').title} message={describeError(actionError, '更新 schema').message} /> : null}
+        {actionError ? <ErrorState title={describeError(actionError, '更新 schema').title} requestId={describeError(actionError).requestId} errorCode={describeError(actionError).code} message={describeError(actionError, '更新 schema').message} /> : null}
         {(() => {
           const change = classifySchemaChange(table?.columns || [], schemaDraft);
           return (
@@ -574,7 +574,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
       <Modal open={dialog === 'delete'} title={`删除 ${table?.name || ''}`} onClose={() => setDialog(null)} footer={<><Button variant="ghost" onClick={() => setDialog(null)}>取消</Button><Button variant="danger" disabled={busy} onClick={() => void deleteTable()}>删除空表</Button></>}>
         {actionError ? (
           <ErrorState
-            title={describeError(actionError, '删除表').title}
+            title={describeError(actionError, '删除表').title} requestId={describeError(actionError).requestId} errorCode={describeError(actionError).code}
             message={`${describeError(actionError, '删除表').message} 该表当前无法删除；可以先用「查看内容」确认剩余行、附件与向量引用。平台没有提供表级计数 API，因此这里不显示推测数字。`}
           />
         ) : (

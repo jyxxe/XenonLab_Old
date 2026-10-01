@@ -55,6 +55,7 @@ export type ErrorInfo = {
   retryable: boolean;
   conflict?: boolean;
   code?: string;
+  requestId?: string;
   status?: number | null;
   raw?: string;
 };

@@ -134,7 +134,7 @@ kbd{font-family:var(--font-mono);font-size:var(--font-size-xs);padding:1px 5px;b
 .ds-error div{flex:1;min-width:0}
 .ds-error strong{color:var(--text-primary)}
 .ds-error p{margin:2px 0 0;color:var(--text-secondary);font-size:var(--font-size-sm);overflow-wrap:anywhere}
-.ds-request-id{display:block;margin-top:4px;color:var(--text-muted);font-family:var(--font-mono)}
+.ds-error-code,.ds-request-id{display:block;margin-top:4px;color:var(--text-muted);font-family:var(--font-mono);overflow-wrap:anywhere}
 .ds-request-id:empty{display:none}
 
 /* Toasts */

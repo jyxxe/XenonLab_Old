@@ -582,12 +582,14 @@ export function ErrorState({
   title = '出错了',
   message,
   requestId,
+  errorCode,
   onRetry,
   retryLabel = '重试',
 }: {
   title?: string;
   message: React.ReactNode;
   requestId?: string | null;
+  errorCode?: string | null;
   onRetry?: () => void;
   retryLabel?: string;
 }) {
@@ -597,6 +599,7 @@ export function ErrorState({
       <div>
         <strong>{title}</strong>
         <p>{message}</p>
+        {errorCode ? <small className="ds-error-code">错误代码 {errorCode}</small> : null}
         {requestId ? <small className="ds-request-id">请求编号 {requestId}</small> : null}
       </div>
       {onRetry ? <Button onClick={onRetry}>{retryLabel}</Button> : null}

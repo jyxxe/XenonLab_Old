@@ -77,7 +77,7 @@ export function TheoremView({
       </div>
 
       {errorInfo ? (
-        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.code} onRetry={onLoad} />
+        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={onLoad} />
       ) : loading && !list.length ? (
         <div className="library-result-skeleton" role="status" aria-label="正在加载定理">
           {Array.from({length: 4}, (_, index) => <Skeleton key={index} height={54} />)}
@@ -136,7 +136,7 @@ export function TheoremView({
           {selected.formal_statement && <section><h4>Formal Statement</h4><pre>{selected.formal_statement}</pre></section>}
           {selected.lean_source && <section><h4>Lean Proof</h4><pre>{selected.lean_source}</pre></section>}
           {detailErrorInfo ? (
-            <ErrorState title={detailErrorInfo.title} message={detailErrorInfo.message} requestId={detailErrorInfo.code} onRetry={() => onOpen(selected.theorem_id)} />
+            <ErrorState title={detailErrorInfo.title} message={detailErrorInfo.message} requestId={detailErrorInfo.requestId} errorCode={detailErrorInfo.code} onRetry={() => onOpen(selected.theorem_id)} />
           ) : detailLoading ? (
             <p className="muted" role="status">正在读取 evidence 与定理关系…</p>
           ) : (

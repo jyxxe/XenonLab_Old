@@ -130,7 +130,7 @@ export function SearchView({
       )}
 
       {errorInfo ? (
-        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.code} onRetry={onRun} />
+        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={onRun} />
       ) : running ? (
         <div className="library-result-skeleton" role="status" aria-label="正在搜索">
           {Array.from({length: 5}, (_, index) => <Skeleton key={index} height={58} />)}
