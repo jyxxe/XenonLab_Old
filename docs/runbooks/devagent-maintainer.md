@@ -39,6 +39,9 @@ Closed PR fingerprints ignore moving historical branch references. A CLI exit
 code of zero only completes a model task if its last step finished with `stop`;
 permission-interrupted tool sessions remain failed. The wrapper sets the actual
 repository directory explicitly instead of inheriting a login shell's home.
+Hitting the configured step limit is also failed/incomplete, even when OpenCode
+returns a normal summary with `stop`. Investigation or a planned fix does not
+prove the requested code change, verification or publication was delivered.
 
 Baseline/repeated live checks have returned zero pending work without a model
 call. Failed automatic tasks have a thirty-minute cooldown and three attempts;

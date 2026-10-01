@@ -271,6 +271,9 @@ def run_model(config, state, task, manual=False):
     logs.mkdir(parents=True, exist_ok=True, mode=0o700)
     session, cost, tokens, error = None, 0.0, {}, False
     finish_reason = None
+    steps = 0
+    policy = json.loads(Path(config.get("policy_file", "/etc/devagent/opencode.json")).read_text())
+    step_limit = policy.get("agent", {}).get("maintainer", {}).get("steps", 32)
     log_path = logs / (task["id"] + ".jsonl")
     with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output:
         env = runtime_environment(config)
@@ -314,6 +317,7 @@ def run_model(config, state, task, manual=False):
         if event.get("type") == "error":
             error = True
         if event.get("type") == "step_finish":
+            steps += 1
             part = event.get("part") or {}
             finish_reason = part.get("reason")
             cost += part.get("cost", 0) or 0
@@ -324,7 +328,9 @@ def run_model(config, state, task, manual=False):
                     for ck, cv in v.items():
                         tokens[k + "." + ck] = tokens.get(k + "." + ck, 0) + cv
     status = (
-        "done" if result.returncode == 0 and not error and session and finish_reason == "stop" else "failed"
+        "done"
+        if result.returncode == 0 and not error and session and finish_reason == "stop" and steps < step_limit
+        else "failed"
     )
     with state.db:
         state.db.execute(
@@ -338,6 +344,8 @@ def run_model(config, state, task, manual=False):
         cost=cost,
         tokens=tokens,
         finish_reason=finish_reason,
+        steps=steps,
+        step_limit_reached=steps >= step_limit,
     )
     if manual and status == "done":
         texts = []
