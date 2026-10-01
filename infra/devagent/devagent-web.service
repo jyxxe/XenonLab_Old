@@ -1,0 +1,28 @@
+[Unit]
+Description=OpenCode Web for XeonoLab (LAN only)
+After=network-online.target devagent-web-firewall.service
+Wants=network-online.target
+Requires=devagent-web-firewall.service
+
+[Service]
+Type=simple
+User=devagent
+Group=devagent
+WorkingDirectory=/var/lib/devagent/web-checkout
+Environment=HOME=/var/lib/devagent
+ExecStart=/usr/local/bin/devagent-web
+Restart=on-failure
+RestartSec=5
+CPUQuota=200%
+MemoryHigh=5G
+MemoryMax=6G
+TasksMax=256
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/devagent /var/log/devagent /var/lib/devagent-privileged
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

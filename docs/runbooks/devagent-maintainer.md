@@ -17,7 +17,15 @@ Use existing management SSH, then `sudo -iu devagent`. Run `devagent` for an
 interactive TUI, or `devagent-msg "检查 PR #123"` for an independent manual
 session. An actual SSH PTY opened the Maintainer / DeepSeek V4.1 Flash TUI and exited cleanly. No wrapper uses `--continue`. Automatic and manual work share a kernel
 `flock` protecting the checkout. The runtime uses ephemeral CLI sessions; a
-persistent, publicly listening OpenCode server is unnecessary.
+persistent public OpenCode server is unnecessary. At the user's request,
+`devagent-web.service` serves the native Web UI without a password at
+`http://192.168.0.111:4096`. It binds only the VM's LAN address; a separate atomic
+nft filter accepts loopback/LAN `192.168.0.0/24` and rejects all other sources.
+No Cloudflare/Caddy route is added. Its default working directory is the
+independent `devagent/web-manual` worktree `/var/lib/devagent/web-checkout`;
+the shared OpenCode session store lets the operator inspect existing CLI sessions.
+The Web service does not hold the automatic checkout lock. Do not manually
+switch a Web editing session to the automatic checkout while a cycle is active.
 
 Before the first service-mode run, create a root-owned
 `/etc/devagent/opencode/.gitignore` containing OpenCode startup exclusions
@@ -28,8 +36,10 @@ startup initially failed without this file, unlike manual mode.
 Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
-the installed policy as inline configuration. The maintainer has 48 steps per
-task. Repository and Issue text remain untrusted data. Blocking questions and
+the installed policy as inline configuration. Explicit manual tasks have 48 steps; automatic coordination tasks have at most
+12, disable the editing tool and development/Git write commands, and route code
+fixes to other Agents through Issues. This is the user's 2026-10-01 quota-saving
+steering; routine coding is not delegated back to OpenCode Go. Repository and Issue text remain untrusted data. Blocking questions and
 evidence belong in the relevant Issue/PR, after inspecting existing tools.
 
 ## Event loop and budget
@@ -45,7 +55,9 @@ Closed PR fingerprints ignore moving historical branch references. New project
 events supersede older pending/failed retries for the same resource; a completed
 new head must not be followed by a retry of an obsolete event. A CLI exit
 code of zero only completes a model task if its last step finished with `stop`;
-permission-interrupted tool sessions remain failed. The wrapper sets the actual
+permission-interrupted tool sessions remain failed. Pending CI is reported once and the event ends; repeated sleep/poll loops were
+observed in acceptance and stopped. A new CI state triggers the next cycle.
+The wrapper sets the actual
 repository directory explicitly instead of inheriting a login shell's home.
 Hitting the configured step limit is also failed/incomplete, even when OpenCode
 returns a normal summary with `stop`. Investigation or a planned fix does not
@@ -97,7 +109,10 @@ real browser checks, and a frontend build as `devagent` in bounded transient
 units. Project code never builds as root. The deployment runner preserves current
 versions, checks PVE/target health, registers/approves an artifact digest, takes
 the existing exclusive Deploy Gateway lease, stages fixed targets and invokes
-the existing activation executor. Its readiness failure path restores the
+the existing activation executor. Frontend archive timestamps/ownership are normalized before hashing, so a
+repeat validation of identical compiled bytes does not change the immutable
+release digest or collide with an already staged exact SHA.
+Its readiness failure path restores the
 previous immutable release. Protected audits record task, SHA, artifact, lease,
 previous versions, result and verification.
 
