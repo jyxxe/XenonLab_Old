@@ -34,6 +34,10 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+class ForgejoRejected(RuntimeError):
+    """An explicit server refusal, rather than an unknown mutation outcome."""
+
+
 class Forgejo:
     def __init__(self, config):
         self.config = config
@@ -66,6 +70,8 @@ class Forgejo:
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as error:
             # Never include response bodies/headers or URLs with credentials in logs.
+            if error.code in (400, 401, 403, 404, 405, 409, 412, 422):
+                raise ForgejoRejected(f"Forgejo {method} {path}: HTTP {error.code}") from None
             raise RuntimeError(f"Forgejo {method} {path}: HTTP {error.code}") from None
 
     def pages(self, path):
@@ -660,15 +666,26 @@ def devctl(config, argv):
             with state.db:
                 state.db.execute("INSERT OR REPLACE INTO publications(number,head) VALUES(?,?)", (number, sha))
             # Forgejo validates head_commit_id server-side, closing GET -> merge race.
-            result = forgejo.api(
-                "POST",
-                f"/pulls/{number}/merge",
-                {
-                    "Do": "merge",
-                    "head_commit_id": sha,
-                    "delete_branch_after_merge": False,
-                },
-            )
+            try:
+                result = forgejo.api(
+                    "POST",
+                    f"/pulls/{number}/merge",
+                    {
+                        "Do": "merge",
+                        "head_commit_id": sha,
+                        "delete_branch_after_merge": False,
+                    },
+                )
+            except ForgejoRejected:
+                # A rejected merge produced no publication. Unknown network/server outcomes
+                # retain their intent so the watcher can recover an already completed merge.
+                with state.db:
+                    state.db.execute(
+                        "DELETE FROM publications WHERE number=? AND head=? AND commit_sha IS NULL "
+                        "AND operation_id IS NULL", (number, sha)
+                    )
+                state.audit("forgejo.merge_rejected", number=number, head=sha)
+                raise
             merged = forgejo.api("GET", f"/pulls/{number}")
             if not merged.get("merged") or merged["head"]["sha"] != sha:
                 raise RuntimeError("merge outcome unresolved; watcher will reconcile the recorded intent")

@@ -220,6 +220,8 @@ alteration of the rule, rather than force merging.
 
 After a guarded merge, SQLite retains the publication intent and merge SHA. The watcher
 recovers the merge-to-deploy gap even though closed historical PRs remain excluded.
+An explicit server refusal clears the uncommitted intent so unrelated PRs are not
+blocked; timeouts and uncertain server outcomes retain it for reconciliation.
 A recorded queued/running deployment is polled deterministically without waking a model;
 a terminal result wakes one reporting event. Duplicate deployment requests return the
 recorded operation instead of creating another rollout. Failed/interrupted/rolled-back

@@ -74,7 +74,8 @@ def test_exact_commit_is_mandatory(sha):
         controller.head_sha(sha)
 
 
-def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypatch):
+@pytest.mark.parametrize("outcome", ["success", "rejected", "uncertain"])
+def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypatch, outcome):
     sha = "a" * 40
     state = controller.State(tmp_path)
     state.db.execute("INSERT INTO reviews VALUES(1,?,0)", (sha,))
@@ -90,6 +91,10 @@ def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypat
         def api(self, method, path, body=None):
             calls.append((method, path, body))
             if method == "POST" and path.endswith("/merge"):
+                if outcome == "rejected":
+                    raise controller.ForgejoRejected("HTTP 409")
+                if outcome == "uncertain":
+                    raise TimeoutError("unknown merge outcome")
                 self.merged = True
                 return {}
             if path == "/pulls/1":
@@ -116,6 +121,17 @@ def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypat
 
     monkeypatch.setattr(controller, "Forgejo", Fake)
     config = {"state_dir": str(tmp_path), "identity": "devagent-maintainer"}
+    if outcome != "success":
+        expected = controller.ForgejoRejected if outcome == "rejected" else TimeoutError
+        with pytest.raises(expected):
+            controller.devctl(config, ["merge", "1", sha])
+        publication = state.db.execute("SELECT * FROM publications").fetchone()
+        if outcome == "rejected":
+            assert publication is None  # Refusal must not block unrelated PRs forever.
+            assert state.db.execute("SELECT event FROM audit").fetchone()[0] == "forgejo.merge_rejected"
+        else:
+            assert publication["head"] == sha and publication["commit_sha"] is None
+        return
     controller.devctl(config, ["merge", "1", sha])
     merged_call = next(c for c in calls if c[0] == "POST")
     assert merged_call[2]["head_commit_id"] == sha
@@ -125,6 +141,22 @@ def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypat
 
     with pytest.raises(RuntimeError, match="exact head"):
         controller.devctl({"state_dir": str(tmp_path)}, ["merge", "1", "b" * 40])
+
+
+@pytest.mark.parametrize("code,rejected", [(403, True), (409, True), (422, True), (408, False), (500, False)])
+def test_forgejo_distinguishes_refusal_from_unknown_outcome(code, rejected):
+    class Opener:
+        def open(self, request, timeout):
+            raise controller.urllib.error.HTTPError(request.full_url, code, "private response", {}, None)
+
+    forgejo = controller.Forgejo.__new__(controller.Forgejo)
+    forgejo.base = "https://forgejo.invalid/api/v1/repos/example/repo"
+    forgejo.token = "test-token"
+    forgejo.opener = Opener()
+    with pytest.raises(RuntimeError) as caught:
+        forgejo.api("POST", "/pulls/1/merge", {})
+    assert isinstance(caught.value, controller.ForgejoRejected) == rejected
+    assert "private response" not in str(caught.value) and "test-token" not in str(caught.value)
 
 
 def test_project_config_cannot_override_installed_policy(tmp_path, monkeypatch):
