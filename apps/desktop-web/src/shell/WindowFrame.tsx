@@ -103,7 +103,18 @@ export function WindowFrame({
       onFocusCapture={onFocus}
       aria-label={`${win.title} 窗口`}
     >
-      <header className="bar" onPointerDown={drag} onDoubleClick={event => !(event.target as HTMLElement).closest('button') && onToggleMaximize()}>
+      <header className="bar" tabIndex={0} role="group"
+        aria-label={`${win.title} 窗口布局：方向键移动，Shift 加方向键调整大小`}
+        onKeyDown={event => {
+          if (event.target !== event.currentTarget || win.maximized || innerWidth < 1024) return;
+          const direction: Record<string, [number, number]> = {ArrowLeft: [-10, 0], ArrowRight: [10, 0], ArrowUp: [0, -10], ArrowDown: [0, 10]};
+          const delta = direction[event.key];
+          if (!delta) return;
+          event.preventDefault();
+          if (event.shiftKey) onResize(resizeRect(win, {width: app.minSize[0], height: app.minSize[1]}, 'se', delta[0], delta[1], {width: innerWidth, height: innerHeight}));
+          else onMove({...win, x: win.x + delta[0], y: win.y + delta[1]});
+        }}
+        onPointerDown={drag} onDoubleClick={event => !(event.target as HTMLElement).closest('button') && onToggleMaximize()}>
         <div className="traffic">
           <button className="close" aria-label={`关闭 ${win.title}`} title="关闭" onClick={onClose} />
           <button className="min" aria-label={`最小化 ${win.title}`} title="最小化" onClick={onMinimize} />

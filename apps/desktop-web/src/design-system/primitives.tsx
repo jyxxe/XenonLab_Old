@@ -231,7 +231,7 @@ function MenuList({
   const typed = useRef({value: '', at: 0});
 
   useEffect(() => {
-    if (active >= 0) listRef.current?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"],button[role="menuitemcheckbox"]')[active]?.focus();
+    if (active >= 0) listRef.current?.querySelector<HTMLButtonElement>(`button[data-menu-index="${active}"]`)?.focus();
   }, [active]);
 
   const move = (direction: number) => {
@@ -284,8 +284,9 @@ function MenuList({
           <button
             key={item.id ?? index}
             type="button"
-            role="menuitemcheckbox"
-            aria-checked={item.checked ?? false}
+            role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"}
+            data-menu-index={index}
+            aria-checked={item.checked}
             disabled={item.disabled}
             className={cx('ds-menu-item', item.danger && 'ds-danger', item.checked && 'ds-checked')}
             tabIndex={index === active ? 0 : -1}
@@ -309,18 +310,20 @@ export function Popover({
   children,
   className,
   style,
+  anchorRef,
 }: {
   open: boolean;
   onClose: () => void;
   children: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onPointer = (event: PointerEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose();
+      if (ref.current && !ref.current.contains(event.target as Node) && !anchorRef?.current?.contains(event.target as Node)) onClose();
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
@@ -331,7 +334,7 @@ export function Popover({
       removeEventListener('pointerdown', onPointer, true);
       removeEventListener('keydown', onKey);
     };
-  }, [open, onClose]);
+  }, [open, onClose, anchorRef]);
   if (!open) return null;
   return (
     <div ref={ref} className={cx('ds-popover', className)} style={style} role="presentation">
@@ -354,19 +357,23 @@ export function MenuButton({
   align?: 'left' | 'right';
 }) {
   const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => {setOpen(false); trigger.current?.focus()}, []);
   return (
     <div className={cx('ds-menu-button', className)}>
       <button
         type="button"
+        ref={trigger}
         className={cx('ds-menubar-item', (open || active) && 'ds-active')}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
+        onKeyDown={event => {if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {event.preventDefault();setOpen(true)}}}
       >
         {label}
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} className={cx('ds-menu-popover', align === 'right' && 'ds-align-right')}>
-        <MenuList items={items} onClose={() => setOpen(false)} autoFocus ariaLabel={typeof label === 'string' ? label : undefined} />
+      <Popover anchorRef={trigger} open={open} onClose={close} className={cx('ds-menu-popover', align === 'right' && 'ds-align-right')}>
+        <MenuList items={items} onClose={close} autoFocus ariaLabel={typeof label === 'string' ? label : undefined} />
       </Popover>
     </div>
   );
@@ -393,13 +400,13 @@ export function ContextMenu({
   }, [x, y, items.length]);
   useEffect(() => {
     const close = () => onClose();
-    addEventListener('pointerdown', close, true);
+    const previous = document.activeElement as HTMLElement | null;
     addEventListener('blur', close);
     return () => {
-      removeEventListener('pointerdown', close, true);
       removeEventListener('blur', close);
+      if (previous?.isConnected) previous.focus();
     };
-  }, [onClose]);
+  }, []);
   return (
     <Popover open onClose={onClose} className="ds-context-menu" style={style}>
       <div onPointerDown={event => event.stopPropagation()}>
@@ -411,6 +418,8 @@ export function ContextMenu({
 
 export function useFocusTrap(active: boolean, onEscape?: () => void) {
   const ref = useRef<HTMLDivElement>(null);
+  const escape = useRef(onEscape);
+  escape.current = onEscape;
   useEffect(() => {
     if (!active) return;
     const root = ref.current;
@@ -424,16 +433,20 @@ export function useFocusTrap(active: boolean, onEscape?: () => void) {
     focusables()[0]?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         event.stopPropagation();
-        onEscape?.();
+        escape.current?.();
         return;
       }
       if (event.key !== 'Tab') return;
       const list = focusables();
-      if (!list.length) return;
+      if (!list.length) {event.preventDefault();return}
       const first = list[0];
       const last = list[list.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (!root?.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -446,7 +459,7 @@ export function useFocusTrap(active: boolean, onEscape?: () => void) {
       removeEventListener('keydown', onKey, true);
       previous?.focus?.();
     };
-  }, [active, onEscape]);
+  }, [active]);
   return ref;
 }
 
@@ -495,13 +508,27 @@ export function Tabs({
   ariaLabel?: string;
 }) {
   return (
-    <div className={cx('ds-tabs', className)} role="tablist" aria-label={ariaLabel}>
+    <div className={cx('ds-tabs', className)} role="tablist" aria-label={ariaLabel} onKeyDown={event => {
+      const enabled = tabs.filter(tab => !tab.disabled);
+      const index = enabled.findIndex(tab => tab.id === value);
+      let next = index;
+      if (event.key === 'ArrowRight') next = (index + 1) % enabled.length;
+      else if (event.key === 'ArrowLeft') next = (index - 1 + enabled.length) % enabled.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = enabled.length - 1;
+      else return;
+      if (!enabled[next]) return;
+      event.preventDefault();
+      onChange(enabled[next].id);
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not([disabled])')[next]?.focus();
+    }}>
       {tabs.map(tab => (
         <button
           key={tab.id}
           type="button"
           role="tab"
           aria-selected={value === tab.id}
+          tabIndex={value === tab.id ? 0 : -1}
           aria-pressed={value === tab.id}
           disabled={tab.disabled}
           className={cx('ds-tab', value === tab.id && 'ds-active')}

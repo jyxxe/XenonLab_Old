@@ -187,7 +187,7 @@ a.job-table:hover{text-decoration:underline}
 .dev-lines{display:flex;flex-direction:column;gap:var(--spacing-2)}
 .dev-list{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
 .dev-list li{display:flex;align-items:center;gap:var(--spacing-2);font-size:var(--font-size-sm);min-width:0}
-.dev-list li>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.dev-list li>span:not(.ds-badge){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 .dev-list small{color:var(--text-muted);white-space:nowrap}
 .issues-toolbar{display:flex;align-items:center;gap:var(--spacing-3);flex-wrap:wrap}
 .issues-toolbar .ds-input{flex:1;min-width:200px;max-width:340px}
@@ -207,3 +207,10 @@ a.job-table:hover{text-decoration:underline}
   .knowledge-sidebar{width:200px}
   .knowledge-create .schema-field{grid-template-columns:1fr 1fr}
 }
+
+/* Settings content uses the same inset as the shared Panel header. */
+.preference-form .ds-panel > label,.preference-form .ds-panel > p,.preference-form .ds-panel > fieldset,.preference-form .ds-panel > .preference-switch{margin-left:var(--spacing-4);margin-right:var(--spacing-4)}
+.preference-form .ds-panel > .ds-button{align-self:flex-start;margin:var(--spacing-2) var(--spacing-4) var(--spacing-4)}
+.pinned-apps{list-style:none;padding:var(--spacing-3) var(--spacing-4);margin:0;display:flex;flex-direction:column;gap:var(--spacing-2)}
+.pinned-apps li{display:flex;align-items:center;gap:var(--spacing-2)}
+.preference-form .pinned-apps li label{display:flex;align-items:center;gap:var(--spacing-2);flex:1;min-width:0;margin:0}

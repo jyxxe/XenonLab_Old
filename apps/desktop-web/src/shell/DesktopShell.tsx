@@ -20,7 +20,7 @@ import {
   toggleMaximize,
   workArea,
 } from './window-manager.js';
-import type {API, APIPage, APIRaw, DesktopApp, RegistryApp, UserPreferences, WindowState} from './types';
+import type {API, APIPage, APIRaw, AppIntent, DesktopApp, RegistryApp, UserPreferences, WindowState} from './types';
 
 const RECENT_KEY = 'xeonolab.recent-apps';
 
@@ -71,7 +71,7 @@ export function DesktopShell({
   const [launchpadOpen, setLaunchpadOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>(loadRecent);
-  const [badges, setBadges] = useState<Record<string, number>>({});
+  const [badges, setBadges] = useState<Record<string, number | null>>({});
   const storedWindows = useRef<Array<Record<string,unknown>>>([]);
   const windowsEdited = useRef(false);
   const editWindows = useCallback((update: React.SetStateAction<WindowState[]>) => {windowsEdited.current = true;setWindows(update)}, []);
@@ -79,6 +79,8 @@ export function DesktopShell({
   const preferenceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const preferenceVersion = useRef(0);
   const viewport = useRef({width: innerWidth, height: innerHeight});
+
+  const [appIntents, setAppIntents] = useState<Record<string, AppIntent>>({});
 
   const activeId = activeWindow(windows)?.id ?? null;
   const activeApp = useMemo(() => {
@@ -167,9 +169,10 @@ export function DesktopShell({
   }, [apps]);
 
   const openApp = useCallback(
-    (id: string) => {
+    (id: string, intent?: Omit<AppIntent, 'id'>) => {
       const app = apps.find(item => item.id === id);
       if (!app) return;
+      if (intent) setAppIntents(current => ({...current, [id]: {...intent, id: crypto.randomUUID()}}));
       setLaunchpadOpen(false);
       setPaletteOpen(false);
       setRecent(current => {
@@ -262,7 +265,8 @@ export function DesktopShell({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
-      if (!mod) return;
+      if (!mod || event.defaultPrevented) return;
+      if ((event.target as HTMLElement)?.closest?.('[aria-modal="true"]') && event.key.toLowerCase() !== 'k') return;
       const key = event.key.toLowerCase();
       if (key === 'k') {
         event.preventDefault();
@@ -298,9 +302,9 @@ export function DesktopShell({
         .then(page => {
           const data = page.data as Array<{status: string; claim_active?: boolean}>;
           const active = data.filter(item => item.status === 'queued' || item.status === 'claimed').length;
-          setBadges(current => ({...current, issues: active, development: active}));
+          setBadges(current => ({...current, issues: page.meta.next_cursor ? null : active, development: page.meta.next_cursor ? null : active}));
         })
-        .catch(() => undefined);
+        .catch(() => setBadges(current => ({...current, issues: null, development: null})));
     };
     onFocusRefresh();
     const timer = setInterval(onFocusRefresh, 60000);
@@ -410,6 +414,15 @@ export function DesktopShell({
               }),
             );
         },
+      },
+      {
+        id: 'xelibrary',
+        group: '知识库',
+        provide: query => apps.some(app => app.id === 'knowledge') ? [{
+          id: 'knowledge-search', title: query.trim() ? `搜索 XeLibrary：${query.trim()}` : '搜索 XeLibrary',
+          subtitle: '在知识库中编辑搜索条件并运行', group: '知识库', icon: '⌕',
+          run: () => openApp('knowledge', {action: 'search', query: query.trim()}),
+        }] : [],
       },
       {
         id: 'system',
@@ -552,10 +565,20 @@ export function DesktopShell({
                   app={app}
                   apps={apps}
                   openApp={openApp}
+                  dockIds={dockIds}
+                  togglePin={id => setDockIds(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id])}
+                  movePinned={(id, direction) => setDockIds(current => {
+                    const from = current.indexOf(id), to = from + direction;
+                    if (from < 0 || to < 0 || to >= current.length) return current;
+                    const next = [...current];
+                    [next[from], next[to]] = [next[to], next[from]];
+                    return next;
+                  })}
                   preferences={preferences}
                   applyPreferences={applyPreferences}
                   notify={push}
                   windowId={win.id}
+                  intent={appIntents[app.id]}
                 />
               ) : (
                 <ErrorState title="应用不可用" message={`${app.title} 没有可用的前端实现。`} />
@@ -588,9 +611,9 @@ export function DesktopShell({
         }
         onReorder={(source, target) =>
           setDockIds(current => {
+            const index = current.indexOf(target);
+            if (index < 0 || !current.includes(source)) return current;
             const next = current.filter(id => id !== source);
-            const index = next.indexOf(target);
-            if (index < 0) return [...next, source];
             next.splice(index, 0, source);
             return next;
           })

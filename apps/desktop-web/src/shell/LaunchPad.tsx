@@ -33,6 +33,10 @@ export function LaunchPad({
   }, [query]);
 
   useEffect(() => {
+    trap.current?.querySelector(`[data-app-index="${active}"]`)?.scrollIntoView({block: 'nearest'});
+  }, [active]);
+
+  useEffect(() => {
     searchRef.current?.focus();
   }, []);
 
@@ -54,6 +58,10 @@ export function LaunchPad({
         ref={searchRef}
         className="launchpad-search"
         type="search"
+        role="combobox"
+        aria-expanded="true"
+        aria-controls="launchpad-apps"
+        aria-activedescendant={ordered[active] ? `launchpad-app-${ordered[active].id}` : undefined}
         aria-label="搜索应用"
         placeholder="搜索应用"
         value={query}
@@ -72,10 +80,12 @@ export function LaunchPad({
         }}
       />
       {ordered.length ? (
-        <div className="launchpad-grid" role="listbox" aria-label="应用程序列表">
+        <div id="launchpad-apps" className="launchpad-grid" role="listbox" aria-label="应用程序列表">
           {ordered.map((app, index) => (
             <button
               key={app.id}
+              id={`launchpad-app-${app.id}`}
+              data-app-index={index}
               type="button"
               role="option"
               aria-selected={index === active}

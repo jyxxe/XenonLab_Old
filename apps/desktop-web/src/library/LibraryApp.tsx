@@ -1,7 +1,7 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
-import type {API, APIPage, APIRaw} from '../shell/types';
+import type {API, APIPage, APIRaw, AppIntent} from '../shell/types';
 import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
 import {TableView, type SortState} from './TableView';
@@ -14,7 +14,7 @@ import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useS
 import {ancestorPaths, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, Table} from './types';
 
-export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; apiRaw: APIRaw}) {
+export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: APIPage; apiRaw: APIRaw; intent?: AppIntent}) {
   const {scopes, subject} = useScopes(api);
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
@@ -304,6 +304,25 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!intent) return;
+    if (intent.action === 'refresh') {
+      void catalogue.load();
+      if (session.table) void session.refresh();
+      return;
+    }
+    selectView(intent.action === 'query' ? 'query' : intent.action === 'theorems' ? 'theorems' : 'search');
+    if (intent.action === 'search') {
+      search.reset();
+      search.setMode('fast');
+      if (intent.query !== undefined) search.setQuery(intent.query);
+      // User reviews the query before execution; providers never perform hidden
+      // model/API requests while the command palette is being typed into.
+      const timer = setTimeout(() => document.querySelector<HTMLInputElement>('.library-search input[type="search"]')?.focus(), 0);
+      return () => clearTimeout(timer);
+    }
+  }, [intent]);
 
   const catalogueError = catalogue.error ? describeError(catalogue.error, '读取目录') : null;
 

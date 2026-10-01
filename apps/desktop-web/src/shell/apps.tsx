@@ -35,6 +35,12 @@ export function builtinApps(): DesktopApp[] {
       singleton: true,
       dock: true,
       description: 'XeLibrary 数据表、检索与定理区',
+      menu: [
+        {id: 'search', label: '搜索知识库…', intent: {action: 'search'}},
+        {id: 'query', label: 'Query Console…', intent: {action: 'query'}},
+        {id: 'theorems', label: '定理区', intent: {action: 'theorems'}},
+        {id: 'refresh', label: '刷新知识库', intent: {action: 'refresh'}},
+      ],
       component: Knowledge as React.ComponentType<any>,
     },
     {
@@ -52,6 +58,7 @@ export function builtinApps(): DesktopApp[] {
       singleton: true,
       dock: true,
       description: 'OpenWebUI 对话工作区',
+      menu: [{id: 'reload', label: '重新加载对话', action: 'reload'}, {id: 'external', label: '在浏览器中打开', action: 'external'}],
     },
     {
       id: 'development',
@@ -64,6 +71,7 @@ export function builtinApps(): DesktopApp[] {
       singleton: true,
       dock: true,
       description: '仓库、任务与发布入口',
+      menu: [{id: 'refresh', label: '刷新任务', action: 'refresh'}],
       component: Development as React.ComponentType<any>,
     },
     {
@@ -77,6 +85,7 @@ export function builtinApps(): DesktopApp[] {
       singleton: true,
       dock: true,
       description: 'Harness 任务与 Issue 状态',
+      menu: [{id: 'refresh', label: '刷新任务', action: 'refresh'}],
       component: Issues as React.ComponentType<any>,
     },
     {
@@ -128,7 +137,7 @@ export function toDesktopApp(entry: RegistryApp): DesktopApp {
 
 export function mergeApps(registry: RegistryApp[], scopes: string[]): DesktopApp[] {
   const configuredChat = registry.find(entry => ['chat', 'openwebui'].includes(entry.id) && (entry.permissions || []).every(scope => scopes.includes(scope)));
-  const builtins = builtinApps().map(app => app.id === 'chat' && configuredChat ? {...toDesktopApp(configuredChat), id: 'chat', title: app.title, dock: true} : app).filter(app => app.permissions.every(scope => scopes.includes(scope)));
+  const builtins = builtinApps().map(app => app.id === 'chat' && configuredChat ? {...toDesktopApp(configuredChat), id: 'chat', title: app.title, dock: true, menu: app.menu} : app).filter(app => app.permissions.every(scope => scopes.includes(scope)));
   const builtinIds = new Set(builtins.map(app => app.id));
   const external = registry
     .filter(entry => !builtinIds.has(entry.id) && entry !== configuredChat)

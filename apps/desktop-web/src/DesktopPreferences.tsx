@@ -1,6 +1,6 @@
 import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
-import type {UserPreferences} from './shell/types';
+import type {DesktopApp, UserPreferences} from './shell/types';
 
 export type Preferences = UserPreferences;
 export const defaultPreferences: UserPreferences = {
@@ -25,7 +25,12 @@ export function DesktopPreferences({
   preferences,
   apply,
   saveLayout,
+  apps, dockIds, togglePin, movePinned,
 }: {
+  apps: DesktopApp[];
+  dockIds: string[];
+  togglePin: (id: string) => void;
+  movePinned: (id: string, direction: number) => void;
   api: (path: string, init?: RequestInit) => Promise<any>;
   preferences: UserPreferences;
   apply: (preferences: Partial<UserPreferences>) => Promise<void>;
@@ -153,7 +158,17 @@ export function DesktopPreferences({
           </span>
           <Switch checked={preferences.dock_autohide} label="Dock 自动隐藏" onChange={checked => update({dock_autohide: checked})} />
         </div>
-        <p className="muted">固定项目与顺序由 Dock 右键菜单管理，并随窗口布局一起保存。</p>
+        <p className="muted">固定项目与顺序随窗口布局一起保存；也可在 Dock 按 Shift+F10 打开菜单。</p>
+        <ul className="pinned-apps" aria-label="Dock 固定应用">
+          {[...dockIds.map(id => apps.find(app => app.id === id)).filter((app): app is DesktopApp => Boolean(app)), ...apps.filter(app => !dockIds.includes(app.id))].map(app => {
+            const index = dockIds.indexOf(app.id);
+            return <li key={app.id}>
+              <label><input type="checkbox" checked={index >= 0} onChange={() => togglePin(app.id)} />{app.title}</label>
+              <Button size="sm" aria-label={`向前移动 ${app.title}`} disabled={index <= 0} onClick={() => movePinned(app.id, -1)}>↑</Button>
+              <Button size="sm" aria-label={`向后移动 ${app.title}`} disabled={index < 0 || index === dockIds.length - 1} onClick={() => movePinned(app.id, 1)}>↓</Button>
+            </li>;
+          })}
+        </ul>
       </Panel>
 
       <div className="preference-actions">

@@ -1,6 +1,7 @@
 import React from 'react';
 import {MenuButton, type MenuItem} from '../design-system/primitives';
-import type {DesktopApp, UserPreferences, WindowState} from './types';
+import {appEntryUrl, forgejoBase} from './apps';
+import type {AppIntent, DesktopApp, UserPreferences, WindowState} from './types';
 
 export function MenuBar({
   userLabel,
@@ -26,7 +27,7 @@ export function MenuBar({
   windows: WindowState[];
   activeWindowId: string | null;
   preferences: UserPreferences;
-  onOpenApp: (id: string) => void;
+  onOpenApp: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
   onOpenLaunchPad: () => void;
   onOpenPalette: () => void;
   onRestoreWindow: (id: string) => void;
@@ -79,30 +80,21 @@ export function MenuBar({
     {id: 'zoom', label: active?.maximized ? '还原当前窗口' : '缩放当前窗口', disabled: !active, onSelect: () => active && onToggleMaximize(active.id)},
   ];
 
-  const appMenu: MenuItem[] = (() => {
-    switch (activeApp?.id) {
-      case 'knowledge':
-        return [
-          {id: 'knowledge-refresh', label: '刷新知识库', onSelect: () => window.dispatchEvent(new CustomEvent('xeonolab.app.refresh'))},
-          {id: 'knowledge-settings', label: '知识库设置…', onSelect: () => onOpenApp('settings')},
-        ];
-      case 'chat':
-        return [
-          {id: 'chat-reload', label: '重新加载对话', onSelect: () => window.dispatchEvent(new CustomEvent('xeonolab.app.reload'))},
-          {id: 'chat-external', label: '在浏览器中打开', onSelect: () => activeApp?.origin && window.open(activeApp.origin, '_blank', 'noopener')},
-        ];
-      case 'development':
-      case 'issues':
-        return [{id: 'dev-refresh', label: '刷新任务', onSelect: () => window.dispatchEvent(new CustomEvent('xeonolab.app.refresh'))}];
-      default:
-        return [{id: 'app-placeholder', label: '此应用没有额外菜单', disabled: true}];
-    }
-  })();
+  const appMenu: MenuItem[] = activeApp?.menu?.map(entry => ({
+    id: entry.id,
+    label: entry.label,
+    disabled: (entry.action === 'external' || entry.action === 'reload') && !activeApp.origin,
+    onSelect: () => {
+      if (entry.intent) onOpenApp(activeApp.id, entry.intent);
+      else if (entry.action === 'external') window.open(appEntryUrl(activeApp), '_blank', 'noopener');
+      else window.dispatchEvent(new CustomEvent(`xeonolab.app.${entry.action}`, {detail: {windowId: activeWindowId}}));
+    },
+  })) ?? [{id: 'app-placeholder', label: '此应用没有额外菜单', disabled: true}];
 
   const helpMenu: MenuItem[] = [
     {id: 'shortcuts', label: '快捷键：⌘K 命令面板 · ⌘W 关闭 · ⌘M 最小化 · ⌘` 切换窗口', disabled: true},
     {separator: true},
-    {id: 'issues', label: '打开 Forgejo Issues', onSelect: () => window.open('https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues', '_blank', 'noopener')},
+    {id: 'issues', label: '打开 Forgejo Issues', onSelect: () => window.open(`${forgejoBase()}/xenon-admin/XeonoLab/issues`, '_blank', 'noopener')},
   ];
 
   return (
@@ -114,6 +106,11 @@ export function MenuBar({
       <MenuButton label="窗口" items={windowMenu} />
       <MenuButton label="帮助" items={helpMenu} />
       <span className="menubar-spacer" />
+      <div className="menubar-mobile-switcher"><MenuButton label="切换应用" items={[
+        ...windows.map(win => ({id: `mobile-${win.id}`, label: `${win.title}${win.minimized ? '（最小化）' : ''}`, checked: win.id === activeWindowId, onSelect: () => onRestoreWindow(win.id)})),
+        ...(windows.length ? [{separator: true} as MenuItem] : []),
+        {id: 'mobile-launchpad', label: '打开 LaunchPad', onSelect: onOpenLaunchPad},
+      ]} align="right" /></div>
       {status ? <span className="menubar-status menubar-secondary">{status}</span> : null}
       <button type="button" className="menubar-icon" aria-label="命令面板" title="命令面板 (⌘K)" onClick={onOpenPalette}>⌕</button>
       <span className="menubar-clock">{clock}</span>

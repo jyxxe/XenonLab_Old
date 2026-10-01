@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './design-system/tokens.css';
 import './design-system/primitives.css';
@@ -159,7 +159,16 @@ function App() {
     transition({type: 'user-logout'});
   }
 
-  if (libraryView) return <Knowledge api={api} apiPage={apiPage} apiRaw={apiRaw} />;
+  // Session renewal and status banners re-render App. Preserve the API boundary
+  // identity so child effects do not reconnect/reset an active workspace.
+  // Requests still use the latest session/auth implementation.
+  const transport = useRef({api, apiPage, apiRaw});
+  transport.current = {api, apiPage, apiRaw};
+  const stableApi = useCallback((path: string, init?: RequestInit) => transport.current.api(path, init), []);
+  const stableApiPage = useCallback((path: string, init?: RequestInit) => transport.current.apiPage(path, init), []);
+  const stableApiRaw = useCallback((path: string, init?: RequestInit) => transport.current.apiRaw(path, init), []);
+
+  if (libraryView) return <Knowledge api={stableApi} apiPage={stableApiPage} apiRaw={stableApiRaw} />;
 
   const sessionBanner =
     connected && (sessionStatus.phase === 'retrying' || sessionStatus.phase === 'reauthorize') ? (
@@ -279,7 +288,7 @@ function App() {
 
   return (
     <ToastProvider>
-      <DesktopShell api={api} apiPage={apiPage} apiRaw={apiRaw} token={token} onLogout={handleLogout} />
+      <DesktopShell api={stableApi} apiPage={stableApiPage} apiRaw={stableApiRaw} token={token} onLogout={handleLogout} />
       <output hidden data-testid="session-status" data-phase={sessionStatus.phase} />
       {sessionBanner}
     </ToastProvider>

@@ -25,7 +25,7 @@ export function Dock({
   dockIds: string[];
   autoHide: boolean;
   size: DockSize;
-  badges: Record<string, number>;
+  badges: Record<string, number | null>;
   onLaunch: (id: string) => void;
   onRestore: (windowId: string) => void;
   onToggleLaunchPad: () => void;
@@ -125,6 +125,13 @@ export function Dock({
                 if (dragging && dragging !== id) onReorder(dragging, id);
                 setDragging(null);
               }}
+              onKeyDown={event => {
+                if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+                  event.preventDefault();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setContext({x: rect.left, y: rect.top, appId: id});
+                }
+              }}
               onClick={() => onLaunch(id)}
               onContextMenu={event => {
                 event.preventDefault();
@@ -133,7 +140,7 @@ export function Dock({
             >
               <span className="dock-icon" aria-hidden="true">{app.icon}</span>
               <span className="dock-label">{app.title}</span>
-              {badge ? <span className="dock-badge">{badge > 99 ? '99+' : badge}</span> : null}
+              {badge === null ? <span className="dock-badge" title="队列数量尚未完整确认" aria-label="队列数量尚未完整确认">?</span> : badge ? <span className="dock-badge">{badge > 99 ? '99+' : badge}</span> : null}
             </button>
           );
         })}

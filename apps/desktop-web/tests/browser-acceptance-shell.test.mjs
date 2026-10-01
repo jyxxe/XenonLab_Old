@@ -103,7 +103,7 @@ class CDP {
   }
   async evaluate(expression) {
     const response = await this.call('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
-    if (response.exceptionDetails) throw new Error(response.exceptionDetails.text || 'Browser evaluation failed');
+    if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text || 'Browser evaluation failed');
     return response.result?.value;
   }
   async drag(from, to) {
@@ -210,6 +210,37 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     assert.ok(chromeState.menubar.includes('窗口'), 'window menu is present');
     for (const title of ['LaunchPad', '知识库', '系统设置']) assert.ok(chromeState.dock.includes(title), `dock contains ${title}`);
 
+    // Real pointer events exercise outside-click capture, separators and focus restoration.
+    const click = async selector => {
+      const point = await centerOf(cdp, selector);
+      await cdp.call('Input.dispatchMouseEvent', {type: 'mousePressed', ...point, button: 'left', buttons: 1, clickCount: 1});
+      await cdp.call('Input.dispatchMouseEvent', {type: 'mouseReleased', ...point, button: 'left', buttons: 0, clickCount: 1});
+    };
+    await click('.menubar-app-menu > button');
+    await waitFor(() => cdp.evaluate("document.activeElement?.innerText.includes('关于 XeonoLab')"), 'menu initial focus');
+    await cdp.key('ArrowDown', 'ArrowDown');
+    assert.ok(await cdp.evaluate("document.activeElement?.innerText.includes('系统设置')"), 'ArrowDown skips the separator and focuses the intended entry');
+    await cdp.key('Escape', 'Escape');
+    assert.equal(await cdp.evaluate("document.activeElement===document.querySelector('.menubar-app-menu > button')"), true, 'Escape restores trigger focus');
+    await click('.menubar-app-menu > button');
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-menu-popover'))"), 'menu reopened');
+    await click('.menubar-app-menu > button');
+    await waitFor(() => cdp.evaluate("!document.querySelector('.ds-menu-popover')"), 'trigger toggles an already open menu closed');
+
+    const pinnedTitles = () => cdp.evaluate("[...document.querySelectorAll('nav.dock .ds-pinned')].map(button=>button.title)");
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
+    await cdp.key('F10', 'F10', 8 /* Shift */);
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'keyboard Dock menu');
+    await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向右移动')).setAttribute('data-test','right')");
+    await click('.ds-context-menu [data-test=right]');
+    await waitFor(async () => (await pinnedTitles())[1] === '知识库', 'Dock moves right with real pointer click');
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
+    await cdp.key('F10', 'F10', 8);
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'Dock menu again');
+    await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向左移动')).setAttribute('data-test','left')");
+    await click('.ds-context-menu [data-test=left]');
+    await waitFor(async () => (await pinnedTitles())[0] === '知识库', 'Dock moves left');
+
     // LaunchPad: search, keyboard selection, Enter to launch.
     await cdp.evaluate("document.querySelector('button[title=\"LaunchPad\"]').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), 'LaunchPad open');
@@ -217,6 +248,27 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("document.querySelector('.launchpad-grid')?.innerText.includes('知识库')"), 'LaunchPad search result');
     await cdp.key('Enter', 'Enter');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge] .knowledge-sidebar'))"), 'knowledge window');
+
+    // Knowledge provider carries a query into the existing native app, without hidden API work.
+    await cdp.key('k', 'KeyK', 2);
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.command-input'))"), 'knowledge command palette');
+    await cdp.evaluate(`(() => {const input=document.querySelector('.command-input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'D100M');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await waitFor(() => cdp.evaluate("document.querySelector('.command-item[aria-selected=true]')?.innerText.includes('搜索 XeLibrary：D100M')"), 'knowledge provider query command');
+    await cdp.key('Enter', 'Enter');
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-search input[type=search]')?.value==='D100M'"), 'query handed to Library search');
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path.startsWith('/search/'))"), false, 'palette never starts model searches while typing');
+    await cdp.evaluate("[...document.querySelectorAll('.menubar > .ds-menu-button > button')].find(button=>button.innerText==='知识库').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-menu-popover'))"), 'registry app menu');
+    await cdp.evaluate("[...document.querySelectorAll('.ds-menu-popover button')].find(button=>button.innerText.includes('Query Console')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-query'))"), 'menu intent opens Query Console');
+
+    const keyboardBefore = await rectOf(cdp, '.window[data-app-id=knowledge]');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar').focus()");
+    await cdp.key('ArrowRight', 'ArrowRight');
+    await cdp.key('ArrowDown', 'ArrowDown', 8);
+    const keyboardAfter = await rectOf(cdp, '.window[data-app-id=knowledge]');
+    assert.equal(keyboardAfter.x, keyboardBefore.x + 10, 'focused titlebar supports keyboard moving');
+    assert.equal(keyboardAfter.h, keyboardBefore.h + 10, 'Shift+ArrowDown supports keyboard resizing');
 
     // Window: move by dragging the titlebar.
     const beforeDrag = await rectOf(cdp, '.window[data-app-id=knowledge]');
@@ -269,7 +321,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(
       () =>
         cdp.evaluate(
-          "(()=>{const items=[...document.querySelectorAll('.command-item')];const selected=document.querySelector('.command-item[aria-selected=\"true\"]');return Boolean(selected&&selected.innerText.includes('任务')&&items.length===1)})()",
+          "(()=>{const items=[...document.querySelectorAll('.command-item')];const selected=document.querySelector('.command-item[aria-selected=\"true\"]');return Boolean(selected&&selected.innerText.includes('任务')&&items.length===2)})()",
         ),
       'palette keyboard selection',
     );
@@ -295,6 +347,14 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.animations==='on' && !document.querySelector('nav.dock').classList.contains('ds-autohide')"), 'desktop options restored');
     const preferenceCalls = await cdp.evaluate("window.shellFixture.calls.filter(call=>call.path==='/users/me/preferences'&&call.method==='PATCH').map(call=>call.body)");
     assert.ok(preferenceCalls.some(body => body.reduced_motion === true), 'preference patch recorded');
+
+    // Settings exposes pin/unpin and order as keyboard-accessible controls.
+    await cdp.evaluate("[...document.querySelectorAll('.pinned-apps li')].find(item=>item.innerText.includes('开发')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("!document.querySelector('nav.dock button[title=\"开发\"]')"), 'unpin from Settings');
+    await cdp.evaluate("[...document.querySelectorAll('.pinned-apps li')].find(item=>item.innerText.includes('开发')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('nav.dock .ds-pinned:last-of-type')?.title==='开发'"), 'pin from Settings');
+    await cdp.evaluate("document.querySelector('.pinned-apps button[aria-label=\"向前移动 开发\"]').click()");
+    await waitFor(async () => (await pinnedTitles()).at(-2) === '开发', 'reorder from Settings');
 
     // Settings receives working callbacks for explicit layout saving.
     const savedBefore=await cdp.evaluate("window.shellFixture.calls.filter(call=>call.method==='PUT').length");
@@ -367,6 +427,37 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     })()`);
     assert.ok(iframeError.actions.includes('重新加载'), 'iframe error offers reload');
     assert.ok(iframeError.actions.includes('在浏览器中打开'), 'iframe error offers external open');
+    // Only the registered origin and this exact frame may report application status.
+    const phase = () => cdp.evaluate("document.querySelector('.iframe-toolbar').innerText");
+    await cdp.evaluate(`(() => {const frame=document.querySelector('.iframe-app iframe');window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'https://untrusted.invalid',data:{type:'app.ready'}}))})()`);
+    assert.ok((await phase()).includes('连接失败'), 'wrong-origin ready message ignored');
+    await cdp.evaluate(`window.dispatchEvent(new MessageEvent('message',{source:window,origin:'http://127.0.0.1:${stalledPort}',data:{type:'app.ready'}}))`);
+    assert.ok((await phase()).includes('连接失败'), 'wrong-frame ready message ignored');
+    await cdp.evaluate(`(() => {const frame=document.querySelector('.iframe-app iframe');window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'http://127.0.0.1:${stalledPort}',data:{type:'app.status',status:'auth-error'}}))})()`);
+    await waitFor(() => cdp.evaluate("document.querySelector('.iframe-app-status')?.innerText.includes('需要重新授权')"), 'trusted iframe auth failure');
+    await cdp.evaluate(`(() => {const frame=document.querySelector('.iframe-app iframe');window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'http://127.0.0.1:${stalledPort}',data:{type:'app.status',status:'network-error'}}))})()`);
+    await waitFor(() => cdp.evaluate("document.querySelector('.iframe-app-status')?.innerText.includes('网络连接失败')"), 'trusted iframe network failure');
+    await cdp.evaluate(`(() => {const frame=document.querySelector('.iframe-app iframe');window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'http://127.0.0.1:${stalledPort}',data:{type:'app.ready'}}))})()`);
+    await waitFor(() => cdp.evaluate("document.querySelector('.iframe-toolbar')?.innerText.includes('应用已连接')"), 'trusted iframe ready');
+    assert.equal(await cdp.evaluate("document.querySelector('.iframe-app iframe').getAttribute('sandbox')"), 'allow-same-origin allow-scripts allow-forms', 'sandbox restrictions retained');
+    const frameId=await cdp.evaluate("document.querySelector('.iframe-app iframe').id");
+    await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .min').click()");
+    assert.equal(await cdp.evaluate("Boolean(document.getElementById('"+frameId+"'))"), true, 'minimize retains connected iframe');
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"AI 对话\"]').click()");
+
+
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR,{recursive:true});
+      const snapshot=async name => {const shot=await cdp.call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,name+'.png'),Buffer.from(shot.data,'base64'));};
+      await cdp.evaluate("document.querySelector('nav.dock button[title=\"开发\"]').click()");
+      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.development-app'))"), 'Development dashboard');
+      await snapshot('development-dark-1440x900');
+      await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统设置\"]').click()");
+      await snapshot('settings-dark-1440x900');
+      await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').click()");
+      await snapshot('knowledge-query-dark-1440x900');
+      await cdp.evaluate("document.querySelector('nav.dock button[title=\"AI 对话\"]').click()");
+    }
 
     // Layout autosave records window geometry and dock order.
     await waitFor(async () => {
@@ -415,6 +506,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
       ['1440x900', 1440, 900],
       ['1366x768', 1366, 768],
       ['1024x768', 1024, 768],
+      ['820x1180-tablet', 820, 1180],
       ['390x844-mobile', 390, 844],
     ];
     for (const [label, width, height] of viewports) {
@@ -425,6 +517,14 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
       assert.equal(await cdp.evaluate("Boolean(document.querySelector('.menubar') && document.querySelector('nav.dock'))"), true, `shell chrome visible at ${label}`);
       await capture(`desktop-dark-${label}`);
     }
+    // Phone switcher restores minimized windows without relying on the horizontally scrolling Dock.
+    await cdp.evaluate("document.querySelector('.window[data-app-id=issues] .bar .min').click()");
+    await click('.menubar-mobile-switcher button');
+    await waitFor(() => cdp.evaluate("document.querySelector('.menubar-mobile-switcher .ds-menu')?.innerText.includes('任务（最小化）')"), 'mobile minimized window menu');
+    await cdp.evaluate("[...document.querySelectorAll('.menubar-mobile-switcher .ds-menu button')].find(button=>button.innerText.includes('任务')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.window[data-window-active=true]')?.dataset.appId==='issues'"), 'mobile window restored');
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.window')].filter(win=>getComputedStyle(win).visibility==='visible').length"), 1, 'phone shows one active app');
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统设置\"]').click()");
     await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 900, deviceScaleFactor: 1, mobile: false});
     await cdp.evaluate(`(() => {const select=document.querySelector('.preference-form select');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(select,'light');select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.theme==='light'"), 'light theme applied');
@@ -455,6 +555,63 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("sessionStorage.setItem('shell-fixture:layout',JSON.stringify({dock:[],windows:[],dock_initialized:true}))");
     await cdp.call('Page.reload');
     await waitFor(()=>cdp.evaluate("document.querySelectorAll('nav.dock .dock-item').length===1"),'explicitly empty Dock restored');
+
+    // Exercise the real App/auth/session boundary with a synthetic server session.
+    // Every refresh rotates its bearer token, reproducing production parent renders.
+    await cdp.call('Page.addScriptToEvaluateOnNewDocument', {source: `(() => {
+      const realFetch=window.fetch.bind(window);
+      const state=window.sessionFixture={mode:'good',renewals:0,logoutCalls:0,userReads:0};
+      const preferences={theme:'dark',accent:'blue',wallpaper:'silver',timezone:'UTC',widgets:[],restore_windows:true,dock_autohide:false,dock_size:'medium',animations:true,reduced_motion:false};
+      window.fetch=async (input,init={}) => {
+        const url=new URL(String(input),location.origin);
+        const path=url.pathname;
+        const response=(data,status=200) => new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
+        if(path==='/api/v1/auth/session/token') {
+          state.renewals++;
+          if(state.mode==='temporary')return response({error:{code:'PROVIDER_UNAVAILABLE',message:'Synthetic identity provider unavailable'}},503);
+          if(state.mode==='revoked')return response({error:{code:'SESSION_REVOKED',message:'Synthetic session revoked'}},401);
+          return response({token:'synthetic-token-'+state.renewals,expires:9999999999});
+        }
+        if(path==='/api/v1/auth/session/logout'){state.logoutCalls++;return response({});}
+        if(path==='/health/ready')return response({service:'desktop-web'});
+        if(!path.startsWith('/api/v1/'))return realFetch(input,init);
+        let data=[],meta={};
+        if(path==='/api/v1/users/me'){state.userReads++;data={subject:'synthetic-session-user',kind:'human',scopes:['desktop:read','xelibrary:read','dev:read']};}
+        else if(path==='/api/v1/users/me/preferences'){if(init.method==='PATCH')Object.assign(preferences,JSON.parse(init.body));data={...preferences};}
+        else if(path==='/api/v1/users/me/layout')data={windows:[],dock:[],dock_initialized:false};
+        else if(path==='/api/v1/jobs')meta={counts:{queued:0,running:0,completed:0,failed:0}};
+        return response({data,meta});
+      };
+    })()`});
+    await cdp.call('Page.navigate', {url: `http://127.0.0.1:${portNumber}/index.html`});
+    await waitFor(() => cdp.evaluate('Boolean(window.sessionFixture)'), 'synthetic session interception installed');
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('nav.dock button[title=\"系统设置\"]'))"), 'real App restores synthetic session');
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统设置\"]').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.preference-form input[list=timezones]'))"), 'real settings window');
+    await cdp.evaluate(`(() => {
+      const input=document.querySelector('.preference-form input[list=timezones]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'unsaved-session-draft');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      window.sessionFixture.node=document.querySelector('.window[data-app-id=settings]');
+      window.sessionFixture.userReadsBefore=window.sessionFixture.userReads;
+    })()`);
+    const renewalsBefore=await cdp.evaluate('window.sessionFixture.renewals');
+    await cdp.evaluate("document.dispatchEvent(new Event('visibilitychange'))");
+    await waitFor(() => cdp.evaluate(`window.sessionFixture.renewals>${renewalsBefore}`), 'session token rotation');
+    await sleep(200);
+    assert.equal(await cdp.evaluate("document.querySelector('.window[data-app-id=settings]')===window.sessionFixture.node && document.querySelector('input[list=timezones]').value==='unsaved-session-draft'"), true, 'token rotation preserves window node and local draft');
+    assert.equal(await cdp.evaluate('window.sessionFixture.userReads'), await cdp.evaluate('window.sessionFixture.userReadsBefore'), 'session renewal does not reload the desktop');
+    await cdp.evaluate("window.sessionFixture.mode='temporary';document.dispatchEvent(new Event('visibilitychange'))");
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=session-status-banner]')?.dataset.phase==='retrying'"), 'temporary session failure banner');
+    assert.equal(await cdp.evaluate("document.querySelector('.window[data-app-id=settings]')===window.sessionFixture.node"), true, 'temporary auth outage retains workspace');
+    await cdp.evaluate("window.sessionFixture.mode='revoked';document.dispatchEvent(new Event('visibilitychange'))");
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=session-status-banner]')?.dataset.phase==='reauthorize'"), 'revoked session banner');
+    assert.equal(await cdp.evaluate("document.querySelector('.window[data-app-id=settings]')===window.sessionFixture.node"), true, 'revocation retains workspace pending user action');
+    assert.equal(await cdp.evaluate('window.sessionFixture.logoutCalls'), 0, 'no automatic logout on rotation, temporary outage or revoked auth');
+    await cdp.evaluate("window.sessionFixture.mode='good';document.dispatchEvent(new Event('visibilitychange'))");
+    await waitFor(() => cdp.evaluate("!document.querySelector('[data-testid=session-status-banner]')"), 'session reconnected');
+    assert.equal(await cdp.evaluate("document.querySelector('.window[data-app-id=settings]')===window.sessionFixture.node"), true, 'reconnection retains local workspace');
+
   } finally {
     cdp?.socket.close();
     try {

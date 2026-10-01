@@ -49,6 +49,9 @@ export type RegistryApp = {
   revision?: number;
 };
 
+export type AppIntent = {id: string; action: 'search' | 'query' | 'theorems' | 'refresh'; query?: string};
+export type AppMenuEntry = {id: string; label: string; intent?: Omit<AppIntent, 'id'>; action?: 'refresh' | 'reload' | 'external'};
+
 export type DesktopApp = {
   id: string;
   title: string;
@@ -63,6 +66,7 @@ export type DesktopApp = {
   singleton: boolean;
   dock: boolean;
   description?: string;
+  menu?: AppMenuEntry[];
   component?: React.ComponentType<AppViewProps>;
 };
 
@@ -72,7 +76,11 @@ export type AppViewProps = {
   apiRaw: APIRaw;
   app: DesktopApp;
   apps: DesktopApp[];
-  openApp: (id: string) => void;
+  openApp: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
+  intent?: AppIntent;
+  dockIds: string[];
+  togglePin: (id: string) => void;
+  movePinned: (id: string, direction: number) => void;
   preferences: UserPreferences;
   applyPreferences: (preferences: Partial<UserPreferences>) => void;
   notify: (toast: Omit<Toast, 'id'>) => void;

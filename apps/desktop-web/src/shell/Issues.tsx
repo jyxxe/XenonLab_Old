@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {Badge, Button, EmptyState, ErrorState, Input, Skeleton, StatusDot, Tabs} from '../design-system/primitives';
+import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton, StatusDot, Tabs} from '../design-system/primitives';
 import {forgejoBase} from './apps';
 import type {AppViewProps} from './types';
 
@@ -37,10 +37,11 @@ function issueUrl(repository: string, issueId: number): string | null {
   return `${forgejoBase()}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueId}`;
 }
 
-export function Issues({apiPage, notify}: AppViewProps) {
+export function Issues({apiPage, notify, windowId}: AppViewProps) {
   const [items, setItems] = useState<WorkItem[]>([]);
   const [filter, setFilter] = useState('active');
   const [query, setQuery] = useState('');
+  const [sort, setSort] = useState('status');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -86,7 +87,7 @@ export function Issues({apiPage, notify}: AppViewProps) {
 
   useEffect(() => {
     void refresh();
-    const refreshListener = () => void refresh();
+    const refreshListener = (event: Event) => {if (!(event as CustomEvent).detail?.windowId || (event as CustomEvent).detail.windowId === windowId) void refresh()};
     addEventListener('xeonolab.app.refresh', refreshListener);
     return () => {generation.current += 1; removeEventListener('xeonolab.app.refresh', refreshListener)};
   }, []);
@@ -102,9 +103,12 @@ export function Issues({apiPage, notify}: AppViewProps) {
       .filter(item => !needle || `${item.issue_id} ${item.title} ${item.repository} ${item.holder || ''}`.toLowerCase().includes(needle))
       .sort((a, b) => {
         const rank = (item: WorkItem) => (item.status === 'claimed' ? 0 : item.status === 'queued' ? 1 : item.status === 'blocked' ? 2 : 3);
+        if (sort === 'newest') return b.issue_id - a.issue_id;
+        if (sort === 'title') return a.title.localeCompare(b.title, 'zh-CN') || a.issue_id - b.issue_id;
+        if (sort === 'issue') return a.issue_id - b.issue_id;
         return rank(a) - rank(b) || a.issue_id - b.issue_id;
       });
-  }, [items, filter, query]);
+  }, [items, filter, query, sort]);
 
   const counts = useMemo(() => {
     const result: Record<string, number> = {active: 0, queued: 0, completed: 0, blocked: 0, all: items.length};
@@ -144,7 +148,11 @@ export function Issues({apiPage, notify}: AppViewProps) {
           value={query}
           onChange={event => setQuery(event.target.value)}
         />
+        <Select aria-label="任务排序" value={sort} onChange={event => setSort(event.target.value)}>
+          <option value="status">状态优先</option><option value="issue">编号升序</option><option value="newest">编号降序</option><option value="title">标题排序</option>
+        </Select>
       </div>
+      {cursor && <p className="muted" role="status">已加载 {items.length} 项；搜索、筛选与排序仅覆盖这些任务，加载更多后会更新结果。</p>}
 
       {message && <ErrorState title="无法读取任务" message={message} onRetry={() => void refresh()} />}
 

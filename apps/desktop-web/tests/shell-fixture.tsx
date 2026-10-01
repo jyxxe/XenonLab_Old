@@ -81,7 +81,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     return {data: work.slice(0, 3), meta: {next_cursor: 'page-2'}};
   }
   if (path === '/jobs?limit=50') return {data: [], meta: {counts: {queued: 0, running: 0, completed: 0, failed: 0}}};
-  if (path === '/tables?limit=1000') return {data: [], meta: {next_cursor: null}};
+  if (path.startsWith('/tables?')) return {data: [], meta: {next_cursor: null}};
   throw new Error(`unexpected fixture request ${method} ${path}`);
 }
 

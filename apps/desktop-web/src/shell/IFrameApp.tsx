@@ -3,7 +3,7 @@ import {Button, Spinner} from '../design-system/primitives';
 import {appEntryUrl, sandboxValue} from './apps';
 import type {DesktopApp} from './types';
 
-type FramePhase = 'loading' | 'loaded' | 'ready' | 'timeout';
+type FramePhase = 'loading' | 'loaded' | 'ready' | 'timeout' | 'auth-error' | 'network-error';
 
 /**
  * Wraps every external application in consistent loading / timeout / failure states.
@@ -43,9 +43,11 @@ export function IFrameApp({
   useEffect(() => {
     const handle = (event: MessageEvent) => {
       const frame = document.getElementById(`frame-${windowId}`) as HTMLIFrameElement | null;
-      if (event.source === frame?.contentWindow && event.origin === app.origin && event.data?.type === 'app.ready') setPhase('ready');
+      if (event.source !== frame?.contentWindow || event.origin !== app.origin || !event.data || typeof event.data !== 'object') return;
+      if (event.data.type === 'app.ready') setPhase('ready');
+      if (event.data.type === 'app.status' && ['auth-error', 'network-error'].includes(event.data.status)) setPhase(event.data.status);
     };
-    const reload = () => {if (active) setAttempt(value => value+1)};
+    const reload = (event: Event) => {if (active && (!(event as CustomEvent).detail?.windowId || (event as CustomEvent).detail.windowId === windowId)) setAttempt(value => value+1)};
     addEventListener('message',handle);
     addEventListener('xeonolab.app.reload',reload);
     return () => {removeEventListener('message',handle);removeEventListener('xeonolab.app.reload',reload)};
@@ -64,13 +66,13 @@ export function IFrameApp({
         src={frameUrl.href}
         sandbox={sandboxValue(app)}
         referrerPolicy="no-referrer"
-        onError={() => setPhase('timeout')}
+        onError={() => setPhase('network-error')}
         onLoad={() => {
           if (timer.current) window.clearTimeout(timer.current);
-          setPhase(current => current === 'ready' ? 'ready' : 'loaded');
+          setPhase(current => ['ready', 'auth-error', 'network-error'].includes(current) ? current : 'loaded');
         }}
       />
-      <div className="iframe-toolbar" role="status"><span>{phase === 'ready' ? '应用已连接' : phase === 'loaded' ? '页面已载入；如页面空白或提示登录失败，请在浏览器打开。' : '正在连接外部应用'}</span><Button size="sm" onClick={() => setAttempt(value => value+1)}>重新加载</Button><Button size="sm" onClick={() => window.open(url,'_blank','noopener')}>在浏览器中打开</Button></div>
+      <div className="iframe-toolbar" role="status"><span>{phase === 'ready' ? '应用已连接' : phase === 'loaded' ? '页面已载入；认证和业务连接尚未确认。' : phase === 'auth-error' ? '应用需要登录或重新授权' : phase === 'network-error' || phase === 'timeout' ? '应用连接失败' : '正在连接外部应用'}</span><Button size="sm" onClick={() => setAttempt(value => value+1)}>重新加载</Button><Button size="sm" onClick={() => window.open(url,'_blank','noopener')}>在浏览器中打开</Button></div>
       {phase === 'loading' && (
         <div className="iframe-app-status" role="status">
           <Spinner size="lg" label={`正在连接 ${app.title}`} />
@@ -78,13 +80,12 @@ export function IFrameApp({
           <p>{app.origin}</p>
         </div>
       )}
-      {phase === 'timeout' && (
+      {['timeout', 'auth-error', 'network-error'].includes(phase) && (
         <div className="iframe-app-status" role="alert">
           <b aria-hidden="true">⚠</b>
-          <strong>{app.title} 无法加载</strong>
+          <strong>{app.title}{phase === 'auth-error' ? ' 需要重新授权' : ' 无法加载'}</strong>
           <p>
-            在 {timeoutMs / 1000} 秒内没有收到应用响应。可能是服务未启动、网络不可达，或认证尚未完成。
-            当前窗口会保留打开状态。
+            {phase === 'auth-error' ? '应用报告登录失效或没有访问权限。请在浏览器中登录，然后重新加载；桌面窗口和平台登录保持不变。' : phase === 'network-error' ? '应用报告网络连接失败。请检查服务与网络后重试；当前窗口会保留打开状态。' : `在 ${timeoutMs / 1000} 秒内页面没有完成载入。可能是服务未启动、网络不可达，或 frame policy 阻止访问；当前窗口会保留打开状态。`}
           </p>
           <div className="ds-button-row">
             <Button onClick={() => setAttempt(value => value + 1)}>重新加载</Button>

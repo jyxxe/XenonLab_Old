@@ -23,7 +23,7 @@ const statusTones: Record<string, 'neutral' | 'accent' | 'success' | 'danger' | 
   blocked: 'danger',
 };
 
-export function Development({apiPage, openApp, notify}: AppViewProps) {
+export function Development({apiPage, openApp, notify, windowId}: AppViewProps) {
   const base = forgejoBase();
   const [work, setWork] = useState<WorkItem[] | null>(null);
   const [workError, setWorkError] = useState('');
@@ -52,7 +52,7 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
     };
   }, [tick, apiPage]);
 
-  useEffect(() => {const refresh = () => setTick(value => value+1); addEventListener('xeonolab.app.refresh',refresh); return () => removeEventListener('xeonolab.app.refresh',refresh)},[]);
+  useEffect(() => {const refresh = (event: Event) => {if (!(event as CustomEvent).detail?.windowId || (event as CustomEvent).detail.windowId === windowId) setTick(value => value+1)}; addEventListener('xeonolab.app.refresh',refresh); return () => removeEventListener('xeonolab.app.refresh',refresh)},[]);
 
   const activeWork = work?.filter(item => item.status === 'queued' || item.status === 'claimed') ?? [];
   const recent = [...(work ?? [])].sort((a,b) => b.issue_id-a.issue_id).slice(0, 6);
@@ -103,7 +103,7 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
           ) : (
             <EmptyState icon="✓" title="队列为空" description="当前没有排队或进行中的 Harness 任务。" />
           )}
-          {truncated && <p className="muted">状态仅覆盖已载入的 1000 项；完整列表请打开任务中心。</p>}
+          {truncated && <p className="muted">状态仅覆盖已载入的 {work?.length ?? 0} 项；完整列表请打开任务中心。</p>}
           <Button size="sm" onClick={() => openApp('issues')}>打开任务中心</Button>
         </Panel>
 

@@ -51,6 +51,7 @@ export function CommandPalette({
     if (!open) return;
     const current = ++generation.current;
     setLoading(true);
+    setCommands([]);
     Promise.allSettled(providers.map(provider => Promise.resolve().then(() => provider.provide(query))))
       .then(results => {
         if (current !== generation.current) return;
@@ -66,6 +67,10 @@ export function CommandPalette({
   useEffect(() => {
     if (active >= commands.length) setActive(Math.max(0, commands.length - 1));
   }, [commands.length, active]);
+
+  useEffect(() => {
+    trap.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({block: 'nearest'});
+  }, [active]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Command[]>();
@@ -106,7 +111,7 @@ export function CommandPalette({
             } else if (event.key === 'ArrowUp') {
               event.preventDefault();
               setActive(value => Math.max(value - 1, 0));
-            } else if (event.key === 'Enter' && commands[active]) {
+            } else if (event.key === 'Enter' && !loading && commands[active]) {
               event.preventDefault();
               run(commands[active]);
             } else if (event.key === 'Escape') {
@@ -128,6 +133,7 @@ export function CommandPalette({
                     type="button"
                     role="option"
                     aria-selected={index === active}
+                    disabled={loading}
                     className={`command-item${index === active ? ' ds-active' : ''}`}
                     onMouseEnter={() => setActive(index)}
                     onClick={() => run(command)}

@@ -86,3 +86,75 @@ Development 使用可达的 Forgejo 外链，不再启动不存在的内置 Forg
 - 生产 commit `44e5d1a2b2875b122f70eb27daa9afbe6d83361f`；Deploy Gateway release `85b605ea-46ba-4a26-bcd5-26d1caa79d75`；deployment `33a0af38-94e2-4a60-8d1a-3b6248c281e4` completed，租约已释放。
 - 235 项后端测试、38 项前端测试、TypeScript/Vite build、OpenAPI 导出与 diff check 通过。LAN 五个入口 readiness 为 200，桌面 JS/CSS 哈希与构建一致，未认证 Work API 返回 401。
 - 此验收没有使用真实登录态浏览器，不能替代完整桌面视觉和跨服务用户流程；Issue #71 仍开放。
+
+## Sol 完成后续前端阶段（基线 ce2ba01）
+
+已从公开 Forgejo API 读取 #71 完整描述和全部两条评论；独立分支 `sol/issue-71-takeover` 从干净的 `5a33d93` 快进到 `ce2ba01` 后实施。本轮只改桌面前端与测试，不更改认证语义、后端契约或生产配置；#72 Library、#73 DevAgent 保留已有实现。
+
+本轮实现：
+
+- 修复 Menu/ContextMenu 的分隔符焦点索引、真实 pointerdown 提前关闭导致点击失效、点击已打开的菜单反而重开；Escape 返回触发控件，菜单支持方向键开启，Tabs 支持方向键/Home/End。
+- Dock 支持 Shift+F10/ContextMenu 键打开管理菜单；修复向右移动无效。Settings 新增完整固定应用清单、pin/unpin、前后排序，复用既有布局保存。未完整确认的队列计数显示 `?`，避免把已加载第一页当总量。
+- 增加手机 Menu Bar 的窗口切换器，可以恢复最小化窗口；标题栏可聚焦，桌面方向键移动、Shift+方向键调整大小。小屏仍按单个活跃窗口显示；平板使用既有近全屏策略。
+- App Registry 的原生应用条目声明应用菜单，Menu Bar 不再按 app id switch；知识库菜单连接 Search / Query Console / Theorems / Refresh。命令面板的 XeLibrary provider 将搜索词交给知识库，用户确认后才执行检索，不在输入命令时调用模型/API。
+- iframe 仅接受已注册 origin 和精确 contentWindow 的 `app.ready` / `app.status`。可信 `app.status` 可报告 `auth-error`、`network-error`，显示重试/外开；无法观察跨域 HTTP 状态时只显示“页面已载入；认证和业务连接尚未确认”。重载可按窗口定向。最小化保留 iframe 与 sandbox。
+- 修复 `main.tsx` 的 API 回调身份随会话续期变化导致 DesktopShell 重新 connect、清空/恢复窗口的问题。稳定的 API 边界仍使用最新 session/token；临时失败和撤销会话只显示已有提示，保留窗口和本地编辑，只有显式退出才调用 logout。
+- Focus trap 不因 onClose 回调重建而重置输入焦点；LaunchPad 补充 combobox/active-descendant 语义；减少动态效果/关闭动画实际停止无限动画，OS reduced-motion 也生效。视觉检查修正开发任务徽章被旧 CSS 拉伸、设置面板内容内距。
+
+### 原始 §34 的 30 项 checkbox 映射
+
+“本地通过”指当前实现与合成 API 的真实 Chrome 浏览器证据；不等于本轮已完成生产验收。原始 checkbox 和 Forgejo 状态未被本轮修改。
+
+| # | 原始项目 | 当前证据与边界 |
+|---|---|---|
+| 1 | MenuBar 可用 | 本地通过：真实 pointer 点击、分隔符键盘导航、关闭/焦点恢复、Registry app menu；Shell CDP |
+| 2 | Dock 可用 | 本地通过：固定/运行/最小化、双向排序、Shift+F10、Settings pin/unpin、自动隐藏/持久化 |
+| 3 | LaunchPad 可用 | 本地通过：搜索、权限过滤、Enter/ESC、最近应用；CDP + Playwright |
+| 4 | Window focus 正常 | 本地通过：鼠标、Menu Bar、命令面板、移动 switcher；活跃窗口跟随 |
+| 5 | Move / resize 正常 | 本地通过：拖动/resize/min size；新增标题栏键盘 move/resize |
+| 6 | Minimize / restore 正常 | 本地通过：Dock 与手机 switcher 恢复；iframe DOM 保留 |
+| 7 | Maximize / restore 正常 | 本地通过：避让 Menu Bar/Dock、双击、恢复几何；window-manager 单测 |
+| 8 | Window state 恢复正常 | 本地通过：服务器布局刷新恢复、关闭恢复仍保存 Dock、空 Dock；会话重绘不重置窗口 |
+| 9 | 多窗口不会产生明显 z-index 错误 | 本地通过：数组顺序 focus 单测、多个应用切换与窗口截图；完整生产长时间使用待测 |
+| 10 | 核心组件已经统一 | 已有 tokens/primitives 被 Shell、Settings、Library 使用；本轮修复 Menu/Modal/Tabs 行为；通用组件全集见下方限制 |
+| 11 | 不再存在明显的多个相互冲突 UI 风格 | 明/暗 Shell、Settings、Development、Library 截图检查；修复 Badge/CSS 冲突；非核心旧管理表单未做全状态逐页审计 |
+| 12 | Light / Dark 均可用 | 本地通过：设置切换和刷新恢复、明/暗截图；Shell CDP + Playwright |
+| 13 | Loading / Empty / Error 状态统一 | 当前共享 Skeleton/EmptyState/ErrorState，System 错误重试与 iframe 明确状态已测；请求编号限制见下方 |
+| 14 | Library navigation 达到可日常使用水平 | #72 的路径树、Favorites/Recent、Theorems；Library 浏览器回归；本轮增加 Menu/Palette 入口 |
+| 15 | Table View 可用 | #72：sticky header、列宽、排序、过滤、多选、游标、虚拟窗口、编辑冲突；Library 浏览器回归 |
+| 16 | Search 可用 | #72 Fast/Keyword/Structured 与 partial/approximate 提示；本轮命令 provider；Quality Qwen 未部署，明确 unavailable |
+| 17 | Query UI 可用 | #72 editor/run/validate/results/duration/count/copy/分页；本轮 Registry 菜单入口；Library 浏览器回归 |
+| 18 | Inspector 可用 | #72 metadata/schema/attachments/history/ACL/index，权限/冲突提示；Library 浏览器回归 |
+| 19 | 大量数据不会导致明显 UI 崩坏 | Library virtualWindow 单测和浏览器有限 DOM 行数检查；尚未模拟真实超大目录/全天多 iframe 压力 |
+| 20 | OpenWebUI 能可靠启动 | **未满足**：生产服务/注册入口未提供；显示“AI 对话尚未配置”；Playwright 验证该真实边界 |
+| 21 | iframe 加载失败有明确状态 | 本地通过：超时、可信 auth/network error、reload/external、错误 origin/source 忽略、minimize 保留 sandbox |
+| 22 | Development 能可靠访问 | 原生小版 Dashboard 与 Forgejo 外链；本地入口和视觉可用；真实登录态 Forgejo/PR/Actions 转换待 root 验收 |
+| 23 | Settings 能可靠持久化 | 本地通过：主题/偏好/布局/Dock；失败可见并能恢复；显式保存与刷新恢复；CDP + Playwright |
+| 24 | Desktop viewport 通过视觉验收 | 本地 Chrome 1920×1080、1440×900、1366×768、1024×768 明/暗和多窗口；本轮有截图逐图检查 |
+| 25 | Tablet 基本可用 | 本地 Chrome 820×1180，近全屏窗口且无文档横向溢出；触屏生产路径未测 |
+| 26 | Mobile 不出现完全不可操作状态 | 本地 Chrome/Playwright 390×844 单活跃应用、switcher、最小化恢复、设置与 Dock/Launcher 可达 |
+| 27 | Keyboard 基础操作可用 | Menu/Tabs、LaunchPad/Palette、窗口 move/resize、Dock 管理、ESC/focus trap；CDP + Playwright |
+| 28 | 无明显 accessibility blocker | 本地基础焦点/标签/状态/单窗口/reduced-motion 检查通过；未做专业读屏器/全页面 axe 审计，不声称全面认证 |
+| 29 | E2E 核心路径通过 | CDP Shell/Library/Work + 新 Playwright 登录 UI→真实 PKCE callback 代码→桌面→知识库/设置→刷新；后端和身份响应为合成数据；生产账号流程待 root |
+| 30 | Production build 通过 | TypeScript/Vite production build 通过 |
+
+### 本轮实际验证
+
+- `uv run pytest`：279 passed，19 个既有 FastAPI/httpx 弃用及 pytest 临时目录清理警告。
+- `npm test`：39 passed，0 skipped；包括新增 Playwright usability E2E（系统 Chrome，不下载测试浏览器）与扩展 CDP Shell、既有 Library/Work 浏览器回归。
+- `npm run build`：TypeScript + Vite production build 通过。
+- `uv run python scripts/export_openapi.py`：重新生成，OpenAPI 无 diff；本轮无后端 API 变更。
+- `git diff --check`：通过。
+- 本机截图目录：`runtime/verification/issue-71-completion/`。Shell 合成截图包括 Desktop 明/暗、1920/1440/1366/1024/820/390、LaunchPad、Command Palette、Settings、Development、Knowledge Query；#72 的 Library 表格/Inspector/Search/错误/大表证据见 `xelibrary-2026-10-01.md`，本轮再次回归。
+- 两套浏览器测试验证了真实 App 中 rotating token、session 503、session 401 和重连保留同一个窗口 DOM/local draft，且 logout 请求数为 0。Playwright 的 OIDC issuer/API 为测试 route，不代表真实 Keycloak、cookie/tunnel 或生产登录已验收。
+
+### 尚未满足原始完整 DoD 的事项
+
+1. OpenWebUI 服务部署、正式入口注册、真实认证和生命周期；本轮实现 unavailable 与统一 frame 状态，不伪造 Connected。跨域应用没有发 `app.status` 时无法可靠区分 HTTP auth/network error，浏览器 iframe load 本身不能证明业务就绪。
+2. 原生 Forgejo labels/severity/component/updated_at、PR/Actions/Recent Activity 需要受控平台只读代理；现有 `/work` 不含这些字段，本轮未扩大后端。建议 root 以独立 Issue 明确受控 origin、scope、分页、错误与源更新时间，再接原生页面；本轮未创建或修改 Forgejo Issue。
+3. System Storage/HF Cache/deployment history/Tunnel 观测仍缺桌面受控数据 API；当前展示未接入，不编造系统状态。Production Quality worker、全链路多模态等生产依赖不由本轮 UI 提供。
+4. §4 建议的 Table/Tree/List/Tooltip/Dialog/Sheet 尚未全部导出为通用 primitive；现有 Library table/tree/list、native title tooltip、Modal/Inspector 使用统一样式与局部实现。§17 所选记录的 AI 动作仍无 Library UI extension API；本轮搜索跨 app intent 不能替代该点。
+5. Error UX 尚未对全部 API 错误贯穿真实 request_id：Library 的既有错误展示有将 error code 用作“请求编号”的位置；本轮未扩大到该独立传输/错误格式修复。大表/多窗口性能有有限本地回归，未进行全天真实数据压力、完整对比度/读屏器审计。
+6. root 仍需部署后使用真实用户/账号完成完整核心路径、Forgejo 外链、跨服务权限和公网/LAN 登录、真实浏览器视觉与人工作业验收；缺这些证据前不能关闭 #71。
+
+未推送、未合并发布分支、未 stage release、未部署、未创建 release/lease、未修改 Forgejo Issue 状态或评论；生产变更与最终验收由 root 执行。

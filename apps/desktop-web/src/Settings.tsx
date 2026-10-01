@@ -4,7 +4,7 @@ import {Permissions} from './Permissions';
 import {AppRegistry} from './AppRegistry';
 import {DesktopPreferences} from './DesktopPreferences';
 import {ACLManager} from './ACLManager';
-import type {UserPreferences} from './shell/types';
+import type {DesktopApp, UserPreferences} from './shell/types';
 
 type API = (path: string, init?: RequestInit) => Promise<any>;
 
@@ -14,8 +14,13 @@ export function Settings({
   preferences,
   applyPreferences,
   refreshApps,
+  apps, dockIds, togglePin, movePinned,
 }: {
   api: API;
+  apps: DesktopApp[];
+  dockIds: string[];
+  togglePin: (id: string) => void;
+  movePinned: (id: string, direction: number) => void;
   saveLayout: () => Promise<void>;
   preferences: UserPreferences;
   applyPreferences: (preferences: Partial<UserPreferences>) => Promise<void>;
@@ -48,7 +53,7 @@ export function Settings({
         ) : tab === 'apps' ? (
           <AppRegistry api={api} changed={refreshApps} />
         ) : (
-          <DesktopPreferences api={api} preferences={preferences} apply={applyPreferences} saveLayout={saveLayout} />
+          <DesktopPreferences apps={apps} dockIds={dockIds} togglePin={togglePin} movePinned={movePinned} api={api} preferences={preferences} apply={applyPreferences} saveLayout={saveLayout} />
         )}
       </div>
     </div>
