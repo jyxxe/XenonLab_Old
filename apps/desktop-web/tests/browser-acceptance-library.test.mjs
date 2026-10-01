@@ -193,6 +193,20 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('索引')).click()");
     await waitFor(() => cdp.evaluate("document.querySelector('.inspector-index')?.innerText.includes('job-9')"), 'table-scoped index job');
 
+    // A rejected index mutation must preserve correlation metadata in its toast.
+    await cdp.evaluate("window.libraryFixture.state.reindexFailure='correlated'; [...document.querySelectorAll('.inspector-index button')].find(button=>button.innerText.includes('重建 Embedding 索引')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-toast-danger .ds-request-id')?.innerText==='请求编号 req-reindex-failed'"), 'reindex failure correlation');
+    assert.equal(await cdp.evaluate("document.querySelector('.library-toast-danger .ds-error-code').innerText"), '错误代码 EMBEDDING_UNAVAILABLE');
+    await capture('xelibrary-reindex-error-dark-1440x900');
+    assert.ok(!(await cdp.evaluate("document.querySelector('.library-toast-danger').innerText")).includes('已排队'), 'failed reindex never reports a queued task');
+    assert.equal((await cdp.evaluate("window.libraryFixture.calls.filter(call=>call.path==='/index/reindex').at(-1)")).body.table_id, 't1', 'failure came from the selected table index request');
+
+    await cdp.evaluate("window.libraryFixture.state.reindexFailure='missing'; [...document.querySelectorAll('.inspector-index button')].find(button=>button.innerText.includes('重建 Embedding 索引')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-toast-danger .ds-error-code')) && !document.querySelector('.library-toast-danger .ds-request-id')"), 'reindex missing ID is not invented');
+    await cdp.evaluate("window.libraryFixture.state.reindexFailure=''; [...document.querySelectorAll('.inspector-index button')].find(button=>button.innerText.includes('重建 Embedding 索引')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-toast-success')?.innerText.includes('已排队')"), 'reindex recovery notice');
+    assert.equal(await cdp.evaluate("document.querySelectorAll('.library-toast .ds-request-id,.library-toast .ds-error-code').length"), 0, 'success notice does not retain previous failure metadata');
+
     // Field editing saves through If-Match.
     await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('字段')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.inspector-fields input'))"), 'field editor');

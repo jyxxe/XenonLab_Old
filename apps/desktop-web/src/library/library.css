@@ -49,6 +49,8 @@
 .library-table-head h2{margin:0;font-size:var(--font-size-xl)}
 .library-table-actions{display:flex;gap:var(--spacing-2);flex-wrap:wrap}
 .library-toast{display:flex;align-items:center;gap:var(--spacing-2);padding:var(--spacing-2) var(--spacing-3);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius-panel);background:var(--surface-elevated);font-size:var(--font-size-sm)}
+.library-toast-content{flex:1;min-width:0;overflow-wrap:anywhere}
+.library-toast>button{flex-shrink:0}
 .library-toast-success{border-left-color:var(--success)}
 .library-toast-danger{border-left-color:var(--danger)}
 .library-inline-error{color:var(--danger);font-size:var(--font-size-sm)}

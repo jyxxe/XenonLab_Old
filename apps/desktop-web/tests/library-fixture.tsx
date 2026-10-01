@@ -41,6 +41,7 @@ const state = {
   conflict: false,
   slow: false,
   denied: false,
+  reindexFailure: '',
   delayTheoremId: '',
   denyTheoremRelations: false,
   delayJobsTable: '',
@@ -198,6 +199,7 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     return {data: [{theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', revision: 2}], meta: {partial: false}};
   }
   if (clean === '/index/reindex') {
+    if (state.reindexFailure) throw new APIRequestError('embedding worker unreachable', 503, 'EMBEDDING_UNAVAILABLE', {requestId: state.reindexFailure === 'correlated' ? 'req-reindex-failed' : undefined});
     return {data: {job_id: 'job-10'}, meta: {}};
   }
   throw new Error(`unexpected fixture request ${method} ${path}`);

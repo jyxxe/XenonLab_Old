@@ -26,3 +26,11 @@ Issue §23 要求错误展示 request id。已有服务在 `error.request_id` �
 这是一项错误 UX 修复，不代表 #71 的完整 DoD。OpenWebUI 正式服务/注册/认证、原生 Forgejo Dashboard 受控数据源、System 观测 API、通用组件完整化和真实生产核心路径/人工验收仍需完成。其他旧页面以纯字符串保存错误（例如 Dashboard notes、部分附件/账号表单），尚未全面迁移为结构化诊断；本轮只保证共享 API 元数据和上述知识库 ErrorState。
 
 无数据迁移。回滚此增量的前端提交即可恢复旧 UI；后端契约没有变化。提交是否发布及发布后真实账号验收由协调器决定；#71 应保持开放。
+
+## Review 后补充：重建索引错误提示
+
+独立审阅发现 `/index/reindex` 失败被转换为只有 message 的危险提示，未使用上述 ErrorState。现已保留 notice 的真实 code/requestId，分别显示错误代码与请求编号；增加内容列和换行，关闭按钮保持可用。编号缺失不显示编号，后续成功提示不残留之前的错误元数据。
+
+Library Chrome 回归通过实际点击当前表的重建按钮，注入带编号的 EMBEDDING_UNAVAILABLE 503、缺失编号的同类失败，再执行成功请求；验证请求携带当前 table_id、失败未报告排队、代码与编号分开、编号不伪造、成功清除错误信息。截图 `runtime/verification/issue-71-request-id/xelibrary-reindex-error-dark-1440x900.png`。该测试使用合成 API，不代表生产索引服务已验收。
+
+补充修复后重新执行 `npm test`：52 passed、0 skipped；TypeScript/Vite production build 和全分支 diff check 通过。新增索引失败截图已查看，错误消息、代码、编号各自可读，关闭入口保持可用。

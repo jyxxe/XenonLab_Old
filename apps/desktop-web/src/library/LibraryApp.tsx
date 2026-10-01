@@ -32,7 +32,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1023);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
-  const [notice, setNotice] = useState<{tone: 'info' | 'danger' | 'success'; message: string} | null>(null);
+  const [notice, setNotice] = useState<{tone: 'info' | 'danger' | 'success'; message: string; code?: string; requestId?: string} | null>(null);
   const [dialog, setDialog] = useState<null | 'new' | 'move' | 'schema' | 'delete'>(null);
   const [schemaDraft, setSchemaDraft] = useState<Column[]>([]);
   const [destructiveConfirmed, setDestructiveConfirmed] = useState(false);
@@ -299,7 +299,8 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
       setNotice({tone: 'success', message: '索引任务已排队，等待 Embedding worker。'});
       await reloadJobs();
     } catch (cause) {
-      setNotice({tone: 'danger', message: describeError(cause, '重建索引').message});
+      const info = describeError(cause, '重建索引');
+      setNotice({tone: 'danger', message: info.message, code: info.code, requestId: info.requestId});
     } finally {
       setBusy(false);
     }
@@ -360,7 +361,11 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
       <main className="knowledge-content" aria-label="知识库主区域">
         {notice && (
           <div className={`library-toast library-toast-${notice.tone}`} role={notice.tone === 'danger' ? 'alert' : 'status'}>
-            {notice.message}
+            <div className="library-toast-content">
+              {notice.message}
+              {notice.code && <small className="ds-error-code">错误代码 {notice.code}</small>}
+              {notice.requestId && <small className="ds-request-id">请求编号 {notice.requestId}</small>}
+            </div>
             <button type="button" className="library-link" onClick={() => setNotice(null)}>关闭</button>
           </div>
         )}
