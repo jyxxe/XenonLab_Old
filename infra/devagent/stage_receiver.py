@@ -102,6 +102,7 @@ def main():
             return
         raise ValueError("existing release cannot be overwritten")
     staging = Path(tempfile.mkdtemp(prefix="devagent-stage-", dir="/var/tmp"))
+    created_target = False
     try:
         bundle = staging / "release.tar"
         remaining = length
@@ -120,6 +121,7 @@ def main():
             archive.extractall(extracted, members=safe_members(archive), filter="data")
         # Rename before uv sync: editable install paths must refer to the final immutable path.
         os.rename(extracted, target)
+        created_target = True
         subprocess.run(["/usr/bin/chown", "-R", "xeonolab:xeonolab", str(target)], check=True)
         argv = [
             "/usr/bin/sudo",
@@ -147,7 +149,7 @@ def main():
         print(json.dumps({"staged": sha, "digest": digest}))
     except Exception:
         # No activation occurred. Remove only the new staging target created by this receiver.
-        if target.exists():
+        if created_target and target.exists():
             shutil.rmtree(target)
         raise
     finally:

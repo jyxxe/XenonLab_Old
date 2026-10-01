@@ -101,8 +101,7 @@ def main():
             if request["action"] == "infrastructure":
                 result = pve(config, request)
             else:
-                # A root-owned installer adds the reviewed deployment implementation here.
-                # Fail closed until the real mechanics have been installed and verified.
+                # Execute installed trusted mechanics; project code runs in unprivileged validation units.
                 runner = "/usr/local/libexec/devagent-deploy"
                 completed = subprocess.run(
                     [runner], input=json.dumps(request), text=True, capture_output=True, timeout=3600
