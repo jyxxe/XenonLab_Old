@@ -211,6 +211,35 @@ def test_claim_setup_failures_are_safe_api_errors_and_release_claim(settings, mo
         assert current["status"] == "queued" and current["holder"] is None and current["epoch"] == 2
 
 
+def test_claim_does_not_return_success_if_fenced_during_forgejo_sync(settings, monkeypatch):
+    import time
+
+    from xeonolab import work
+    from xeonolab.common import transaction
+
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    api = TestClient(create_app("dev-agent", settings))
+    item = api.post(
+        "/api/v1/work", headers=auth(),
+        json={"repository": "xenon-admin/XeonoLab", "issue_id": 73, "title": "Harness claims"},
+    ).json()["data"]
+
+    def concurrent_reclaim(claimed, actor, current_settings):
+        with transaction(current_settings.data_dir / "work.sqlite") as db:
+            db.execute(
+                "UPDATE work SET status='claimed',holder=?,expires=?,epoch=? WHERE id=?",
+                ("contender", time.time() + 300, claimed["epoch"] + 1, claimed["id"]),
+            )
+
+    monkeypatch.setattr(work, "sync_forgejo_claim", concurrent_reclaim)
+    result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth("alice"), json={})
+
+    assert result.status_code == 409
+    assert result.json()["error"]["code"] == "STALE_CLAIM"
+    current = next(row for row in api.get("/api/v1/work", headers=auth()).json()["data"] if row["id"] == item["id"])
+    assert current["status"] == "claimed" and current["holder"] == "contender" and current["epoch"] == 2
+
+
 def test_expired_claim_cannot_complete_reassigned_task(settings, monkeypatch):
     from xeonolab import work
 

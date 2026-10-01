@@ -236,7 +236,7 @@
             }
           },
           "409": {
-            "description": "Work is already claimed/completed, source is blocked, or Forgejo Issue is closed."
+            "description": "Work is already claimed/completed, source is blocked, Forgejo Issue is closed, or the claim was fenced during synchronization."
           },
           "503": {
             "description": "Forgejo claim synchronization is not configured or failed; local claim is rolled back."

@@ -328,7 +328,9 @@ def install(app):
     @app.post(
         "/api/v1/work/{work_id}/claim",
         responses={
-            409: {"description": "Work is already claimed/completed, source is blocked, or Forgejo Issue is closed."},
+            409: {
+                "description": "Work is already claimed/completed, source is blocked, Forgejo Issue is closed, or the claim was fenced during synchronization."
+            },
             503: {"description": "Forgejo claim synchronization is not configured or failed; local claim is rolled back."},
         },
         description=(
@@ -367,7 +369,16 @@ def install(app):
                 current = load(db, work_id)
                 audit(db, actor, "work.claim_sync_failed", work_id, current["epoch"])
             raise
-        return response(request, claimed)
+        with transaction(database) as db:
+            current = load(db, work_id)
+            if (
+                current["status"] != "claimed"
+                or current["holder"] != actor.sub
+                or current["epoch"] != epoch
+                or current["expires"] <= time.time()
+            ):
+                raise APIError(409, "STALE_CLAIM", "claim changed while Forgejo synchronization was in progress")
+            return response(request, current)
 
     @app.post("/api/v1/work/{work_id}/renew")
     def renew(work_id: str, body: Renew, request: Request, actor=Depends(scope("dev:write"))):
