@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw} from '../shell/types';
@@ -15,13 +15,13 @@ import {ancestorPaths, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, Table} from './types';
 
 export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; apiRaw: APIRaw}) {
-  const {scopes} = useScopes(api);
+  const {scopes, subject} = useScopes(api);
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
   const search = useSearch(apiPage);
   const query = useQueryConsole(apiPage);
   const theorems = useTheorems(apiPage);
-  const prefs = useLibraryPrefs();
+  const prefs = useLibraryPrefs(subject);
 
   const [view, setView] = useState<LibraryViewKind>('library');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -39,6 +39,7 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
   const [movePath, setMovePath] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
+  const rowNavigation = useRef(0);
 
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
@@ -67,6 +68,7 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
   }, [notice]);
 
   function openTable(next: Table) {
+    ++rowNavigation.current;
     setView('library');
     setSelection(new Set());
     setActiveRowId(null);
@@ -80,19 +82,24 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
   }
 
   function selectView(next: LibraryViewKind) {
+    ++rowNavigation.current;
     setView(next);
     if (next === 'theorems' && !theorems.items.length && !theorems.loading) void theorems.load();
   }
 
   async function openRow(tableId: string, rowId: string, remember = true) {
+    const request = ++rowNavigation.current;
     const known = catalogue.tables.find(item => item.id === tableId) || (await api(`/tables/${tableId}`).catch(() => null));
+    if (request !== rowNavigation.current) return;
     if (!known) {
       setNotice({tone: 'danger', message: '无法定位该记录所属的知识表。'});
       return;
     }
     setView('library');
     await session.open(known, true);
+    if (request !== rowNavigation.current) return;
     const row: Row | null = await api(`/tables/${tableId}/rows/${rowId}`).catch(() => null);
+    if (request !== rowNavigation.current) return;
     if (!row) {
       setNotice({tone: 'danger', message: '记录不存在，或当前身份没有读取权限。'});
       return;
@@ -119,12 +126,14 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
       const [tableId, rowId] = entry.id.split(':');
       void openRow(tableId, rowId);
     } else if (entry.kind === 'theorem') {
+      ++rowNavigation.current;
       setView('theorems');
       void theorems.open(entry.id);
     }
   }
 
   function onSelectRow(rowId: string, event: React.MouseEvent) {
+    ++rowNavigation.current;
     setActiveRowId(rowId);
     setInspectorOpen(true);
     setSelection(current => {
@@ -355,7 +364,7 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
             running={search.running}
             ran={search.ran}
             onRun={() => void search.run()}
-            onStructured={() => setView('query')}
+            onStructured={() => selectView('query')}
             onOpenHit={hit => void openHit(hit)}
             tableName={tableName}
           />
@@ -370,6 +379,7 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
             plan={query.plan}
             error={query.error}
             running={query.running}
+            validating={query.validating}
             duration={query.duration}
             onRun={text => void query.run(text)}
             onValidate={text => void query.validate(text)}
@@ -384,6 +394,8 @@ export function LibraryApp({api, apiPage, apiRaw}: {api: API; apiPage: APIPage; 
             searchResults={theorems.searchResults}
             selected={theorems.selected}
             relations={theorems.relations}
+            detailLoading={theorems.detailLoading}
+            detailError={theorems.detailError}
             loading={theorems.loading}
             loadingMore={theorems.loadingMore}
             error={theorems.error}

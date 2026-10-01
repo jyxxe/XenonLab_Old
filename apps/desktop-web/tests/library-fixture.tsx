@@ -41,6 +41,10 @@ const state = {
   conflict: false,
   slow: false,
   denied: false,
+  delayTheoremId: '',
+  denyTheoremRelations: false,
+  delayJobsTable: '',
+  slowRowLookup: false,
   rows: ROWS.map(row => ({...row})),
   calls,
   saved: [] as Array<{rowId: string; values: Record<string, any>; revision: number}>,
@@ -84,6 +88,9 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     const list = state.rows.filter(row => includeDeleted || !row._deleted_at);
     return {data: list.slice(0, 100), meta: {next_cursor: 'rows-page-2'}};
   }
+  if (clean === '/tables/t2/rows' && method === 'GET') {
+    return {data: [{_row_id: 't2-row-1', _revision: 1, _created_at: '2026-09-01T00:00:00Z', _updated_at: '2026-09-01T00:00:00Z', _deleted_at: null, values: {note: '另一张表的记录'}}], meta: {next_cursor: null}};
+  }
   if (clean === '/tables/t1/rows' && method === 'POST') {
     const created = {_row_id: 'row-new', _revision: 1, _created_at: '2026-10-01T00:00:00Z', _updated_at: '2026-10-01T00:00:00Z', _deleted_at: null, values: body.values};
     state.rows = [created, ...state.rows];
@@ -115,6 +122,7 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   }
   if (clean.startsWith('/tables/t1/rows/') && method === 'GET') {
     const rowId = clean.split('/')[4];
+    if (state.slowRowLookup && rowId === 'row-001') await new Promise(resolve => setTimeout(resolve, 450));
     const row = state.rows.find(item => item._row_id === rowId);
     if (!row) throw new APIRequestError('row not found', 404, 'XL_ROW_NOT_FOUND');
     return {data: {...row}, meta: {}};
@@ -130,7 +138,9 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     return {data: {schema_revision: 3, table_revision: 13}, meta: {}};
   }
   if (clean === '/jobs') {
-    return {data: [{job_id: 'job-9', owner: 'fixture-user', table_id: 't1', status: 'completed', created_at: '2026-09-30T00:00:00Z', updated_at: '2026-09-30T00:05:00Z'}], meta: {counts: {completed: 1}}};
+    const jobTableId = url.searchParams.get('table_id') || 't1';
+    if (state.delayJobsTable === jobTableId) await new Promise(resolve => setTimeout(resolve, 450));
+    return {data: [{job_id: jobTableId === 't2' ? 'job-t2' : 'job-9', owner: 'fixture-user', table_id: jobTableId, status: 'completed', created_at: '2026-09-30T00:00:00Z', updated_at: '2026-09-30T00:05:00Z'}], meta: {counts: {completed: 1}}};
   }
   if (clean === '/acl/table/t1' || clean.startsWith('/acl/path/') || clean.startsWith('/acl/row/')) {
     return {data: {resource_type: 'table', resource_id: 't1', explicit: clean.startsWith('/acl/path/') ? false : true, grants: clean.startsWith('/acl/path/') ? {} : {'role:reader': ['read']}, revision: 1}, meta: {}};
@@ -156,16 +166,33 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     return {data: [{table_id: 't1', path: '/数学/分析', _row_id: 'row-001', _revision: 3, values: {title: '一致收敛定义', type: 'theorem'}}], meta: {approximate: false}};
   }
   if (clean === '/theorems') {
-    return {data: [{theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', confidence: {evidence_score: 0.5, source_score: 0.4, consistency_score: 0.6}, revision: 2, updated_at: '2026-09-25T00:00:00Z'}], meta: {next_cursor: null}};
+    return {data: [
+      {theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', confidence: {evidence_score: 0.5, source_score: 0.4, consistency_score: 0.6}, revision: 2, updated_at: '2026-09-25T00:00:00Z'},
+      {theorem_id: 'thm-2', path: '/theorems/analysis/uniqueness', title: '极限唯一性定理', statement_natural: '收敛序列的极限唯一。', formal_status: 'none', review_status: 'proposed', revision: 1, updated_at: '2026-09-26T00:00:00Z'},
+    ], meta: {next_cursor: null}};
   }
   if (clean === '/theorems/thm-1') {
+    if (state.delayTheoremId === 'thm-1') await new Promise(resolve => setTimeout(resolve, 450));
     return {data: {theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', assumptions: ['f_n 连续'], proof_natural: '取 N 为一致收敛的阈值。', formal_status: 'none', review_status: 'proposed', confidence: {evidence_score: 0.5, source_score: 0.4, consistency_score: 0.6}, revision: 2, updated_at: '2026-09-25T00:00:00Z'}, meta: {}};
   }
+  if (clean === '/theorems/thm-2') {
+    return {data: {theorem_id: 'thm-2', path: '/theorems/analysis/uniqueness', title: '极限唯一性定理', statement_natural: '收敛序列的极限唯一。', formal_status: 'none', review_status: 'proposed', revision: 1, updated_at: '2026-09-26T00:00:00Z'}, meta: {}};
+  }
   if (clean === '/theorems/thm-1/dependencies' || clean === '/theorems/thm-1/dependents') {
+    if (state.denyTheoremRelations) throw new APIRequestError('theorem relation permission denied', 403, 'XL_FORBIDDEN');
+    return {data: [], meta: {}};
+  }
+  if (clean === '/theorems/thm-2/dependencies' || clean === '/theorems/thm-2/dependents') {
+    if (state.denyTheoremRelations) throw new APIRequestError('theorem relation permission denied', 403, 'XL_FORBIDDEN');
     return {data: [], meta: {}};
   }
   if (clean === '/theorems/thm-1/evidence') {
+    if (state.denyTheoremRelations) throw new APIRequestError('theorem relation permission denied', 403, 'XL_FORBIDDEN');
     return {data: {evidence_refs: ['row-001'], revision: 2}, meta: {}};
+  }
+  if (clean === '/theorems/thm-2/evidence') {
+    if (state.denyTheoremRelations) throw new APIRequestError('theorem relation permission denied', 403, 'XL_FORBIDDEN');
+    return {data: {evidence_refs: [], revision: 1}, meta: {}};
   }
   if (clean === '/theorems/search') {
     return {data: [{theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', revision: 2}], meta: {partial: false}};

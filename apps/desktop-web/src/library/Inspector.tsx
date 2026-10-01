@@ -364,11 +364,11 @@ export function Inspector({
           <div className="inspector-permissions">
             <h4>当前身份能力</h4>
             <dl className="inspector-meta">
-              <div><dt>读取</dt><dd><StatusDot tone="success" />{scopes.includes('xelibrary:read') ? '允许（xelibrary:read）' : '未知'}</dd></div>
-              <div><dt>写入</dt><dd>{canWrite ? <><StatusDot tone="success" />允许（xelibrary:write）</> : <><StatusDot tone="neutral" />不允许</>}</dd></div>
-              <div><dt>查询</dt><dd>{scopes.includes('xelibrary:query') ? '允许（xelibrary:query）' : '不允许'}</dd></div>
-              <div><dt>附件</dt><dd>{canAttach ? '允许（xelibrary:attach）' : '不允许（xelibrary:attach）'}</dd></div>
-              <div><dt>表管理</dt><dd>{canAdmin ? '允许（xelibrary:admin）' : '不允许（xelibrary:admin）'}</dd></div>
+              <div><dt>读取 scope</dt><dd><StatusDot tone={scopes.includes('xelibrary:read') ? 'success' : 'neutral'} />{scopes.includes('xelibrary:read') ? '身份具备 xelibrary:read' : '身份未声明 xelibrary:read'}</dd></div>
+              <div><dt>写入 scope</dt><dd>{canWrite ? '身份具备 xelibrary:write' : '身份未声明 xelibrary:write'}</dd></div>
+              <div><dt>查询 scope</dt><dd>{scopes.includes('xelibrary:query') ? '身份具备 xelibrary:query' : '身份未声明 xelibrary:query'}</dd></div>
+              <div><dt>附件 scope</dt><dd>{canAttach ? '身份具备 xelibrary:attach' : '身份未声明 xelibrary:attach'}</dd></div>
+              <div><dt>管理 scope</dt><dd>{canAdmin ? '身份具备 xelibrary:admin' : '身份未声明 xelibrary:admin'}</dd></div>
             </dl>
             {canAdmin ? (
               aclError ? (
@@ -386,7 +386,7 @@ export function Inspector({
               )
             ) : (
               <p className="muted">
-                原始 ACL 规则只有 xelibrary:admin 身份可以读取。当前显示的是由登录 scopes 推导的能力；实际生效权限由服务端在每次请求时复核。
+                这里显示登录身份的 scopes，不代表某张表、某条路径或某行一定可访问。资源 ACL 与身份 scope 会由服务端在每次请求时共同复核；403 表示该资源操作仍被拒绝。
               </p>
             )}
           </div>

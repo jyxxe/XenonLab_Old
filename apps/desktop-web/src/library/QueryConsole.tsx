@@ -1,6 +1,6 @@
 import React, {useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Skeleton, Textarea} from '../design-system/primitives';
-import {describeError, formatNumber} from './logic.js';
+import {describeError, formatNumber, withQueryPagination} from './logic.js';
 import type {QueryExplain} from './types';
 
 const KNOWN_UNSUPPORTED = [
@@ -19,6 +19,7 @@ export function QueryConsole({
   plan,
   error,
   running,
+  validating,
   duration,
   onRun,
   onValidate,
@@ -32,6 +33,7 @@ export function QueryConsole({
   plan: QueryExplain | null;
   error: unknown;
   running: boolean;
+  validating: boolean;
   duration: number | null;
   onRun: (expression: string) => void;
   onValidate: (expression: string) => Promise<boolean> | void;
@@ -43,11 +45,7 @@ export function QueryConsole({
   const [offset, setOffset] = useState(0);
   const errorInfo = error ? describeError(error, '执行查询') : null;
 
-  const page = () => {
-    const limit = plan?.limit || 100;
-    return expression.replace(/\bLIMIT\s+\d+/i, `LIMIT ${limit}`).replace(/\bOFFSET\s+\d+/i, '');
-  };
-  const withOffset = (next: number) => `${page().trim()} OFFSET ${next}`;
+  const pageQuery = (nextOffset: number) => withQueryPagination(expression, plan?.limit ?? 100, nextOffset);
 
   return (
     <div className="library-query">
@@ -64,7 +62,7 @@ export function QueryConsole({
         aria-label="查询表达式"
         spellCheck={false}
         value={expression}
-        onChange={event => onExpression(event.target.value)}
+        onChange={event => { setOffset(0); onExpression(event.target.value); }}
         onKeyDown={event => {
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') onRun(expression);
         }}
@@ -72,7 +70,7 @@ export function QueryConsole({
 
       <div className="library-query-toolbar">
         <Button variant="primary" onClick={() => onRun(expression)} disabled={running}>{running ? '执行中…' : '运行'}</Button>
-        <Button onClick={() => void onValidate(expression)} disabled={running}>校验语法</Button>
+        <Button onClick={() => void onValidate(expression)} disabled={running || validating}>{validating ? '校验中…' : '校验语法'}</Button>
         <Button
           onClick={async () => {
             try {
@@ -138,14 +136,14 @@ export function QueryConsole({
             </table>
           </div>
           <div className="library-query-pagination">
-            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit || 100)); setOffset(next); onRun(withOffset(next)); }}>
+            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); setOffset(next); onRun(pageQuery(next)); }}>
               上一页
             </Button>
             <span className="muted">OFFSET {offset}</span>
             <Button
               size="sm"
-              disabled={rows.length < (plan?.limit || 100) || running}
-              onClick={() => { const next = offset + (plan?.limit || 100); setOffset(next); onRun(withOffset(next)); }}
+              disabled={rows.length < (plan?.limit ?? 100) || running}
+              onClick={() => { const next = offset + (plan?.limit ?? 100); setOffset(next); onRun(pageQuery(next)); }}
             >
               下一页
             </Button>

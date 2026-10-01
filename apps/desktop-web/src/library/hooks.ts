@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage} from '../shell/types';
-import {mergeRecent, parseFieldFilters, toggleFavorite} from './logic.js';
+import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, toggleFavorite} from './logic.js';
 import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
 export const SEARCH_LIMIT = 25;
@@ -8,6 +8,7 @@ export const DEFAULT_QUERY = 'FROM "/**" LIMIT 100';
 
 export function useScopes(api: API) {
   const [scopes, setScopes] = useState<string[]>([]);
+  const [subject, setSubject] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     let active = true;
@@ -15,6 +16,7 @@ export function useScopes(api: API) {
       .then(me => {
         if (active) {
           setScopes(me.scopes || []);
+          setSubject(typeof me.subject === 'string' ? me.subject : null);
           setLoaded(true);
         }
       })
@@ -23,7 +25,7 @@ export function useScopes(api: API) {
       active = false;
     };
   }, [api]);
-  return {scopes, loaded};
+  return {scopes, subject, loaded};
 }
 
 export function useCatalogue(apiPage: APIPage) {
@@ -39,6 +41,7 @@ export function useCatalogue(apiPage: APIPage) {
     const current = ++generation.current;
     loadingRef.current = true;
     setLoading(true);
+    setLoadingMore(false);
     setError(null);
     try {
       const page = await apiPage('/tables?limit=100');
@@ -69,10 +72,12 @@ export function useCatalogue(apiPage: APIPage) {
       });
       setCursor((page.meta.next_cursor as string) || null);
     } catch (cause) {
-      setError(cause);
+      if (current === generation.current) setError(cause);
     } finally {
-      loadingRef.current = false;
-      setLoadingMore(false);
+      if (current === generation.current) {
+        loadingRef.current = false;
+        setLoadingMore(false);
+      }
     }
   }, [apiPage, cursor]);
 
@@ -115,6 +120,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
       setLoading(true);
       setLoadingMore(false);
       ++rowsRequest.current;
+      loadingMoreRef.current = false;
       setIncludeDeleted(showDeleted);
       try {
         const [page, schema] = await Promise.all([fetchRows(next.id, '', showDeleted), api(`/tables/${next.id}/schema`)]);
@@ -136,7 +142,10 @@ export function useTableSession(api: API, apiPage: APIPage) {
       if (!table) return;
       const tableId = table.id;
       const request = ++view.current;
+      ++rowsRequest.current;
+      loadingMoreRef.current = false;
       setLoading(true);
+      setLoadingMore(false);
       setError(null);
       try {
         const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted), api(`/tables/${tableId}/schema`)]);
@@ -169,10 +178,12 @@ export function useTableSession(api: API, apiPage: APIPage) {
       });
       setCursor((page.meta.next_cursor as string) || null);
     } catch (cause) {
-      if (view.current === viewRequest) setError(cause);
+      if (view.current === viewRequest && rowsRequest.current === request) setError(cause);
     } finally {
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
+      if (view.current === viewRequest && rowsRequest.current === request) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
   }, [cursor, fetchRows, includeDeleted, table]);
 
@@ -192,6 +203,8 @@ export function useTableSession(api: API, apiPage: APIPage) {
   const clear = useCallback(() => {
     ++view.current;
     ++rowsRequest.current;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
     setTable(null);
     setRows([]);
     setCursor(null);
@@ -242,7 +255,8 @@ export function useSearch(apiPage: APIPage) {
       setError(null);
       setRan(true);
       try {
-        const endpoint = (overrides.kind ?? kind) === 'keyword' ? '/search/text' : '/search/semantic';
+        const keywordOnly = mode === 'fast' && (overrides.kind ?? kind) === 'keyword';
+        const endpoint = keywordOnly ? '/search/text' : '/search/semantic';
         const parsed = parseFieldFilters(filterText);
         const body: Record<string, unknown> = {
           query: text,
@@ -265,39 +279,74 @@ export function useSearch(apiPage: APIPage) {
         if (request === generation.current) setRunning(false);
       }
     },
-    [apiPage, kind, mode, path, query],
+    [apiPage, filterText, kind, mode, path, query],
   );
 
-  const reset = useCallback(() => {
+  const changeMode = useCallback((next: SearchMode) => {
+    setMode(next);
+    if (next === 'quality') setKind('semantic');
     ++generation.current;
+    setRunning(false);
     setHits([]);
     setMeta({});
     setError(null);
     setRan(false);
   }, []);
 
-  return {mode, setMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, hits, meta, error, running, ran, run, reset};
+  const reset = useCallback(() => {
+    ++generation.current;
+    setRunning(false);
+    setHits([]);
+    setMeta({});
+    setError(null);
+    setRan(false);
+  }, []);
+
+  return {mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, hits, meta, error, running, ran, run, reset};
 }
 
 export function useQueryConsole(apiPage: APIPage) {
-  const [expression, setExpression] = useState(DEFAULT_QUERY);
+  const [expression, setExpressionState] = useState(DEFAULT_QUERY);
   const [rows, setRows] = useState<any[]>([]);
   const [meta, setMeta] = useState<Record<string, any>>({});
   const [plan, setPlan] = useState<QueryExplain | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [duration, setDuration] = useState<number | null>(null);
   const generation = useRef(0);
+  const validationGeneration = useRef(0);
+
+  const setExpression = useCallback((value: string) => {
+    ++generation.current;
+    ++validationGeneration.current;
+    setExpressionState(value);
+    setRows([]);
+    setMeta({});
+    setPlan(null);
+    setError(null);
+    setRunning(false);
+    setValidating(false);
+    setDuration(null);
+  }, []);
 
   const validate = useCallback(
     async (text: string) => {
+      const request = ++validationGeneration.current;
+      setValidating(true);
+      setError(null);
       try {
         const page = await apiPage('/query/validate', {method: 'POST', body: JSON.stringify({expression: text})});
-        setPlan(page.data as QueryExplain);
+        if (request === validationGeneration.current) setPlan(page.data as QueryExplain);
         return true;
-      } catch {
-        setPlan(null);
+      } catch (cause) {
+        if (request === validationGeneration.current) {
+          setPlan(null);
+          setError(cause);
+        }
         return false;
+      } finally {
+        if (request === validationGeneration.current) setValidating(false);
       }
     },
     [apiPage],
@@ -310,7 +359,7 @@ export function useQueryConsole(apiPage: APIPage) {
       setError(null);
       const started = performance.now();
       try {
-        await validate(text);
+        if (!(await validate(text)) || request !== generation.current) return;
         const page = await apiPage('/query', {method: 'POST', body: JSON.stringify({expression: text})});
         if (request !== generation.current) return;
         setRows(Array.isArray(page.data) ? page.data : []);
@@ -331,7 +380,7 @@ export function useQueryConsole(apiPage: APIPage) {
     [apiPage, validate],
   );
 
-  return {expression, setExpression, rows, meta, plan, error, running, duration, run, validate};
+  return {expression, setExpression, rows, meta, plan, error, running, validating, duration, run, validate};
 }
 
 export function useTheorems(apiPage: APIPage) {
@@ -343,49 +392,59 @@ export function useTheorems(apiPage: APIPage) {
   const [searchResults, setSearchResults] = useState<Theorem[] | null>(null);
   const [selected, setSelected] = useState<Theorem | null>(null);
   const [relations, setRelations] = useState<{dependencies: any[]; dependents: any[]; evidence: any[]} | null>(null);
-  const generation = useRef(0);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<unknown>(null);
+  const listGeneration = useRef(0);
+  const detailGeneration = useRef(0);
 
   const load = useCallback(async () => {
-    const request = ++generation.current;
+    const request = ++listGeneration.current;
     setLoading(true);
+    setLoadingMore(false);
     setError(null);
     try {
       const page = await apiPage('/theorems?limit=50');
-      if (request !== generation.current) return;
+      if (request !== listGeneration.current) return;
+      setSearchResults(null);
       setItems(page.data as Theorem[]);
       setCursor((page.meta.next_cursor as string) || null);
     } catch (cause) {
-      if (request === generation.current) setError(cause);
+      if (request === listGeneration.current) setError(cause);
     } finally {
-      if (request === generation.current) setLoading(false);
+      if (request === listGeneration.current) setLoading(false);
     }
   }, [apiPage]);
 
   const loadMore = useCallback(async () => {
     if (!cursor) return;
+    const request = ++listGeneration.current;
     setLoadingMore(true);
     try {
       const page = await apiPage(`/theorems?limit=50&cursor=${encodeURIComponent(cursor)}`);
+      if (request !== listGeneration.current) return;
       setItems(old => [...old, ...(page.data as Theorem[])]);
       setCursor((page.meta.next_cursor as string) || null);
     } catch (cause) {
-      setError(cause);
+      if (request === listGeneration.current) setError(cause);
     } finally {
-      setLoadingMore(false);
+      if (request === listGeneration.current) setLoadingMore(false);
     }
   }, [apiPage, cursor]);
 
   const search = useCallback(
     async (query: string) => {
+      const request = ++listGeneration.current;
       setLoading(true);
+      setLoadingMore(false);
       setError(null);
       try {
         const page = await apiPage('/theorems/search', {method: 'POST', body: JSON.stringify({query, limit: 50})});
+        if (request !== listGeneration.current) return;
         setSearchResults(page.data as Theorem[]);
       } catch (cause) {
-        setError(cause);
+        if (request === listGeneration.current) setError(cause);
       } finally {
-        setLoading(false);
+        if (request === listGeneration.current) setLoading(false);
       }
     },
     [apiPage],
@@ -393,28 +452,55 @@ export function useTheorems(apiPage: APIPage) {
 
   const open = useCallback(
     async (id: string) => {
-      setError(null);
+      const request = ++detailGeneration.current;
+      const listed = items.find(item => item.theorem_id === id);
+      setSelected(listed || null);
+      setRelations(null);
+      setDetailError(null);
+      setDetailLoading(true);
       try {
         const theorem = (await apiPage(`/theorems/${id}`)).data as Theorem;
+        if (request !== detailGeneration.current) return;
         setSelected(theorem);
         const [dependencies, dependents, evidence] = await Promise.all([
-          apiPage(`/theorems/${id}/dependencies`).then(page => page.data).catch(() => []),
-          apiPage(`/theorems/${id}/dependents`).then(page => page.data).catch(() => []),
-          apiPage(`/theorems/${id}/evidence`).then(page => page.data).catch(() => null),
+          apiPage(`/theorems/${id}/dependencies`).then(page => page.data),
+          apiPage(`/theorems/${id}/dependents`).then(page => page.data),
+          apiPage(`/theorems/${id}/evidence`).then(page => page.data),
         ]);
+        if (request !== detailGeneration.current) return;
         setRelations({dependencies, dependents, evidence: evidence?.evidence_refs || []});
       } catch (cause) {
-        setError(cause);
+        if (request === detailGeneration.current) setDetailError(cause);
+      } finally {
+        if (request === detailGeneration.current) setDetailLoading(false);
       }
     },
-    [apiPage],
+    [apiPage, items],
   );
+
+  const clearSearch = useCallback(() => {
+    ++listGeneration.current;
+    setSearchResults(null);
+    setError(null);
+    setLoading(false);
+    setLoadingMore(false);
+  }, []);
+
+  const close = useCallback(() => {
+    ++detailGeneration.current;
+    setSelected(null);
+    setRelations(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  }, []);
 
   return {
     items,
     searchResults,
     selected,
     relations,
+    detailLoading,
+    detailError,
     cursor,
     loading,
     loadingMore,
@@ -422,34 +508,45 @@ export function useTheorems(apiPage: APIPage) {
     load,
     loadMore,
     search,
-    clearSearch: () => setSearchResults(null),
+    clearSearch,
     open,
-    close: () => {
-      setSelected(null);
-      setRelations(null);
-    },
+    close,
   };
 }
 
-export function useLibraryPrefs() {
-  const [recent, setRecent] = useState<RecentEntry[]>(() => read('xeonolab.library.recent'));
-  const [favorites, setFavorites] = useState<RecentEntry[]>(() => read('xeonolab.library.favorites'));
+export function useLibraryPrefs(subject: string | null | undefined) {
+  const owner = subject || null;
+  const recentKey = libraryPrefsStorageKey(owner, 'recent');
+  const favoritesKey = libraryPrefsStorageKey(owner, 'favorites');
+  const [cache, setCache] = useState(() => ({
+    owner: owner || 'anonymous',
+    recent: read(recentKey),
+    favorites: read(favoritesKey),
+  }));
+  const cacheOwner = owner || 'anonymous';
+  if (cache.owner !== cacheOwner) {
+    setCache({owner: cacheOwner, recent: read(recentKey), favorites: read(favoritesKey)});
+  }
+  const recent = cache.owner === cacheOwner ? cache.recent : read(recentKey);
+  const favorites = cache.owner === cacheOwner ? cache.favorites : read(favoritesKey);
 
   const remember = useCallback((entry: RecentEntry) => {
-    setRecent(current => {
-      const next = mergeRecent(current, entry);
-      write('xeonolab.library.recent', next);
-      return next;
+    setCache(current => {
+      const previous = current.owner === cacheOwner ? current.recent : read(recentKey);
+      const next = mergeRecent(previous, entry);
+      write(recentKey, next);
+      return {owner: cacheOwner, recent: next, favorites: current.owner === cacheOwner ? current.favorites : read(favoritesKey)};
     });
-  }, []);
+  }, [cacheOwner, favoritesKey, recentKey]);
 
   const toggle = useCallback((entry: RecentEntry) => {
-    setFavorites(current => {
-      const next = toggleFavorite(current, entry);
-      write('xeonolab.library.favorites', next);
-      return next;
+    setCache(current => {
+      const previous = current.owner === cacheOwner ? current.favorites : read(favoritesKey);
+      const next = toggleFavorite(previous, entry);
+      write(favoritesKey, next);
+      return {owner: cacheOwner, recent: current.owner === cacheOwner ? current.recent : read(recentKey), favorites: next};
     });
-  }, []);
+  }, [cacheOwner, favoritesKey, recentKey]);
 
   return {recent, favorites, remember, toggle};
 }
@@ -473,24 +570,49 @@ function write(key: string, value: RecentEntry[]) {
 
 export function useJobs(apiPage: APIPage, tableId: string, enabled: boolean) {
   const [jobs, setJobs] = useState<Job[] | null>(null);
+  const [jobsTableId, setJobsTableId] = useState('');
   const [error, setError] = useState<unknown>(null);
+  const [errorTableId, setErrorTableId] = useState('');
   const generation = useRef(0);
   const load = useCallback(async () => {
-    if (!enabled || !tableId) return;
+    if (!enabled || !tableId) {
+      generation.current += 1;
+      setJobs(null);
+      setJobsTableId(tableId);
+      setError(null);
+      setErrorTableId(tableId);
+      return;
+    }
     const request = ++generation.current;
     setError(null);
     try {
       const page = await apiPage(`/jobs?table_id=${encodeURIComponent(tableId)}&limit=20`);
-      if (request === generation.current) setJobs(page.data as Job[]);
+      if (request === generation.current) {
+        setJobs(page.data as Job[]);
+        setJobsTableId(tableId);
+      }
     } catch (cause) {
       if (request === generation.current) {
         setJobs(null);
+        setJobsTableId(tableId);
         setError(cause);
+        setErrorTableId(tableId);
       }
     }
   }, [apiPage, enabled, tableId]);
   useEffect(() => {
+    setJobs(null);
+    setJobsTableId('');
+    setError(null);
+    setErrorTableId('');
     void load();
+    return () => {
+      generation.current += 1;
+    };
   }, [load]);
-  return {jobs, error, reload: load};
+  return {
+    jobs: enabled && jobsTableId === tableId ? jobs : null,
+    error: enabled && errorTableId === tableId ? error : null,
+    reload: load,
+  };
 }

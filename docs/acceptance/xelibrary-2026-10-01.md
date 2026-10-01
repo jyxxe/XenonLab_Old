@@ -1,10 +1,10 @@
 # XeLibrary 产品化增量验收 — Issue #72（2026-10-01）
 
-本记录只覆盖本轮本地实现与合成数据验收，**不是生产验收**：未连接生产后端、未使用真实账号、未部署。所有数据来自 `tests/library-fixture.html` 的合成 API。
+本记录覆盖集成到 `feature/platform-v1` 后的本地实现与合成数据验收。浏览器夹具使用合成 API；生产发布后的只读检查单独列在文末。
 
 ## 范围
 
-- 分支：`opencode/issue-72-xelibrary`（基于 #71 的 `opencode/issue-71-desktop-ui`，worktree `runtime/agent-worktrees/issue-72-xelibrary`）
+- 集成分支：`feature/platform-v1`；XeLibrary 初始交付来自 `opencode/issue-72-xelibrary`，本轮 coordinator 修复在同一分支完成。
 - 交付：
   - `apps/desktop-web/src/library/`：`LibraryApp`、`Sidebar`（路径树/最近/收藏）、`TableView`、`Inspector`、`SearchView`、`QueryConsole`、`TheoremView`、`NewTableDialog`、`hooks.ts`、`logic.js`、`library.css`
   - `apps/desktop-web/src/Knowledge.tsx` 改为渲染 `LibraryApp`（保留原导出，桌面 shell 与 library origin 页面不变）
@@ -39,19 +39,21 @@
 | §21 Error Handling | 已实现 | `describeError` 覆盖 401/403/404/409/412/413/422/429/500/503 与业务 code；权限错误不会伪装成不存在 |
 | §22 Optimistic Concurrency | 已实现 | PATCH/DELETE/restore 使用 If-Match；412 STALE_REVISION 显示冲突横幅（本地/服务端 revision + 重新加载），不自动覆盖 |
 | §23/§24/§25 Empty/Loading/大规模数据 | 已实现 | 统一 EmptyState/ErrorState/Skeleton；cursor 分页、虚拟化、请求代次丢弃陈旧响应、受控窗口大小 |
-| §28 测试 | 已实现（前端） | 12 项纯函数测试 + 1 项浏览器验收；后端 211 项回归通过 |
+| §28 测试 | 已实现（前端） | 逻辑与浏览器验收均有回归；后端 235 项回归通过 |
 | §29 Browser Acceptance | 已实现 | 4 个桌面视口 + 移动端无横向溢出；Light/Dark 截图；慢 API 与 403 权限丢失状态 |
 
 ## 验证结果（实际运行）
 
 | 命令 | 结果 |
 |---|---|
-| `cd apps/desktop-web && npm test` | 37 passed（含 12 项 library 逻辑、桌面 shell、XeLibrary 浏览器验收） |
+| `cd apps/desktop-web && npm test` | 38 passed（含 Library 逻辑、桌面 shell、XeLibrary 与 Work 浏览器验收） |
 | `cd apps/desktop-web && npm run build` | `tsc --noEmit` + Vite production build 通过 |
-| `uv run pytest -q` | 211 passed |
+| `uv run pytest -q` | 235 passed；19 个现有临时目录清理警告 |
 | `uv run python scripts/export_openapi.py` | 无 diff（本轮没有后端改动） |
+| `git diff --check` | 通过 |
+| `uv run ruff check` | 全仓库检查有 11 个未改动 `infra/` lint 问题；本轮无 Python 文件变更 |
 
-浏览器验收覆盖：路径树与表打开、虚拟化（100 行仅渲染窗口内行）、排序、选择、Inspector（附件、保存 If-Match、字段编辑）、412 冲突横幅、统一搜索（Fast 结果 + 完整性告警 + 精确定位 row）、Quality 不可用、Query Console（成功/语法错误/未实现语法）、定理浏览与不可用说明、破坏性 schema 提示、移动表、删除被阻止的解释、慢 API 加载条、403 权限丢失（不伪装为不存在）、明暗主题与多视口无横向溢出、无未捕获异常。
+浏览器验收覆盖：路径树与表打开、虚拟化（100 行仅渲染窗口内行）、排序、选择、Inspector（附件、保存 If-Match、字段编辑）、412 冲突横幅、过滤条件随 Fast 请求提交、从关键词 Fast 切换到 Quality 仍调用 Quality API、Query Console（成功/显式语法校验/无效查询不执行/分页/未实现语法）、定理详情陈旧响应丢弃与关联 403 显示、延迟的搜索结果请求不会把旧表行写入当前表、不同知识表切换时不显示上一表索引任务、破坏性 schema 提示、移动表、删除被阻止的解释、慢 API 加载条、403 权限丢失（不伪装为不存在）、明暗主题与多视口无横向溢出、无未捕获异常。
 
 截图：`runtime/verification/issue-72-xelibrary/`（`xelibrary-table-dark-1440x900`、`xelibrary-table-light-1440x900`、`xelibrary-inspector-dark-1440x900`、`xelibrary-search-dark-1440x900`、`xelibrary-query-dark-1440x900`、`xelibrary-table-dark-390x844` 等）。
 
@@ -62,7 +64,7 @@
 - **搜索过滤器有限**：后端只支持 path glob 与行值精确匹配；tags/has-attachment/updated range/confidence 未实现，未在 UI 伪造。
 - **Recents/Favorites 仅本地**：跨设备持久化需要小 API。
 - **Attachment 拖拽上传**未实现（保留文件选择与分片续传）。
-- **Qdrant/Quality/Library Agent/Lean** 未接入，相关 UI 显示不可用。
+- **Quality / Library Agent / Lean** 未接入，相关 UI 显示不可用。Fast semantic API 已接入生产 Qdrant；登录态生产搜索本轮没有作为验收项。
 - 行级右键的 “Ask AI about this row” 仅为占位（禁用）。
 - 未做后端表级计数 API，删除 UX 不显示行/附件/向量数量。
 
@@ -72,3 +74,7 @@
 2. XeLibrary Consistency Scanner + 附件对象垃圾回收。
 3. Large Table Lifecycle（Archive / 后台 purge / 安全删除）。
 4. （可选）Recent/Favorites 服务端持久化小 API。
+
+## coordinator 回归修复
+
+本轮修复了实测发现的虚拟窗口越界、nullable 改为必填未标记为破坏性变更、分页改写引号内 `LIMIT/OFFSET`、编辑查询后 offset 未重置、Query DSL 校验错误未显示、搜索使用旧过滤条件、Quality 模式沿用关键词 endpoint、定理详情响应竞争及关联 API 错误被吞掉、慢搜索结果写入已切换的另一张表、不同 Harness 最近/收藏共用、跨表索引任务短暂串显，以及权限说明把 scopes 描述成单独资源授权等问题。单元与浏览器回归已覆盖这些行为。

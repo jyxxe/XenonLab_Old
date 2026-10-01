@@ -11,6 +11,7 @@ import {
   flattenTree,
   formatBytes,
   indexStatusFromJobs,
+  libraryPrefsStorageKey,
   mergeRecent,
   parseFieldFilters,
   rowHasAttachment,
@@ -19,6 +20,7 @@ import {
   toggleFavorite,
   virtualWindow,
   withOffset,
+  withQueryPagination,
 } from '../src/library/logic.js';
 
 const tables = [
@@ -76,6 +78,8 @@ test('virtualWindow keeps a bounded render window with padding', () => {
   assert.equal(window.padTop, window.start * 34);
   assert.equal(window.padTop + (window.end - window.start) * 34 + window.padBottom, window.totalHeight);
   assert.deepEqual(virtualWindow(0, 400, 3), {start: 0, end: 3, padTop: 0, padBottom: 0, totalHeight: 102});
+  const filtered = virtualWindow(3400, 400, 2, 34, 8);
+  assert.deepEqual(filtered, {start: 0, end: 2, padTop: 0, padBottom: 0, totalHeight: 68});
 });
 
 test('classifySchemaChange separates safe additions from destructive edits', () => {
@@ -95,6 +99,13 @@ test('classifySchemaChange separates safe additions from destructive edits', () 
   assert.deepEqual(destructive.removed.map(column => column.name), ['body']);
   assert.deepEqual(destructive.typeChanged.map(column => column.name), ['title']);
   assert.deepEqual(destructive.requiredAdded.map(column => column.name), ['extra']);
+  const tightened = classifySchemaChange(
+    [{name: 'optional', type: 'string', nullable: true, default_value: null}],
+    [{name: 'optional', type: 'string', nullable: false, default_value: null}],
+  );
+  assert.equal(tightened.risk, 'destructive');
+  assert.deepEqual(tightened.nullableRestricted.map(column => column.name), ['optional']);
+  assert.match(tightened.summary.join(' '), /现有空值/);
   assert.equal(destructive.summary.length, 4);
   assert.ok(destructive.summary.some(item => item.includes('类型变更')));
 });
@@ -149,6 +160,8 @@ test('recent/favorites helpers stay bounded and deduplicate', () => {
   const favorites = toggleFavorite([], {kind: 'table', id: 'a', title: 'A', at: 1});
   assert.equal(favorites.length, 1);
   assert.deepEqual(toggleFavorite(favorites, {kind: 'table', id: 'a', title: 'A', at: 1}), []);
+  assert.notEqual(libraryPrefsStorageKey('subject:one', 'recent'), libraryPrefsStorageKey('subject:two', 'recent'));
+  assert.equal(libraryPrefsStorageKey(null, 'favorites'), 'xeonolab.library.anonymous.favorites');
 });
 
 test('changedFields, rowHasAttachment, withOffset, and formatters behave', () => {
@@ -157,6 +170,15 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
   assert.equal(rowHasAttachment({values: {files: []}}, [{name: 'files', type: 'attachment_list'}]), false);
   assert.equal(withOffset('FROM "/**" LIMIT 10', 20), 'FROM "/**" LIMIT 10 OFFSET 20');
   assert.equal(withOffset('FROM "/**" LIMIT 10 OFFSET 5', 25), 'FROM "/**" LIMIT 10 OFFSET 25');
+  assert.equal(
+    withOffset('FROM "/**" WHERE title = "OFFSET 10" LIMIT 25', 25),
+    'FROM "/**" WHERE title = "OFFSET 10" LIMIT 25 OFFSET 25',
+  );
+  assert.equal(
+    withQueryPagination('FROM "/**" WHERE note = "LIMIT 10 OFFSET 5" LIMIT 25 OFFSET 50', 10, 0),
+    'FROM "/**" WHERE note = "LIMIT 10 OFFSET 5" LIMIT 10 OFFSET 0',
+  );
+  assert.equal(withQueryPagination('FROM "/**"', 100, 20), 'FROM "/**" LIMIT 100 OFFSET 20');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(-1), '—');
 });

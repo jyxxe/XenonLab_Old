@@ -149,16 +149,20 @@ export function ancestorPaths(path) {
  * bounds and the padding needed to preserve scroll height.
  */
 export function virtualWindow(scrollTop, viewportHeight, total, rowHeight = 34, overscan = 8) {
-  const height = Math.max(rowHeight, viewportHeight);
-  const visible = Math.ceil(height / rowHeight);
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const end = Math.min(total, start + visible + overscan * 2);
+  const size = Number.isFinite(rowHeight) && rowHeight > 0 ? rowHeight : 34;
+  const count = Number.isFinite(total) ? Math.max(0, Math.floor(total)) : 0;
+  const height = Math.max(size, Number.isFinite(viewportHeight) ? viewportHeight : size);
+  const visible = Math.ceil(height / size);
+  const requestedStart = Math.max(0, Math.floor(Math.max(0, scrollTop) / size) - overscan);
+  const lastStart = Math.max(0, count - visible - overscan * 2);
+  const start = Math.min(count, Math.min(requestedStart, lastStart));
+  const end = Math.min(count, start + visible + overscan * 2);
   return {
     start,
     end,
-    padTop: start * rowHeight,
-    padBottom: Math.max(0, (total - end) * rowHeight),
-    totalHeight: total * rowHeight,
+    padTop: start * size,
+    padBottom: Math.max(0, (count - end) * size),
+    totalHeight: count * size,
   };
 }
 
@@ -172,18 +176,24 @@ export function classifySchemaChange(current = [], draft = []) {
     const before = currentByName.get(column.name);
     return before && before.type !== column.type;
   });
+  const nullableRestricted = draft.filter(column => {
+    const before = currentByName.get(column.name);
+    return before && before.nullable !== false && column.nullable === false;
+  });
   const requiredAdded = added.filter(column => column.nullable === false && (column.default_value === null || column.default_value === undefined));
-  const risk = removed.length || typeChanged.length || requiredAdded.length ? 'destructive' : 'safe';
+  const risk = removed.length || typeChanged.length || requiredAdded.length || nullableRestricted.length ? 'destructive' : 'safe';
   return {
     added,
     removed,
     typeChanged,
+    nullableRestricted,
     requiredAdded,
     risk,
     summary: [
       added.length ? `新增 ${added.length} 个字段` : '',
       removed.length ? `删除 ${removed.length} 个字段及其中数据` : '',
       typeChanged.length ? `${typeChanged.length} 个字段类型变更` : '',
+      nullableRestricted.length ? `${nullableRestricted.length} 个字段从可空改为必填，现有空值可能无法通过校验` : '',
       requiredAdded.length ? `${requiredAdded.length} 个必填字段没有默认值` : '',
     ].filter(Boolean),
   };
@@ -262,6 +272,11 @@ export function toggleFavorite(list, entry) {
   return [...list, entry].slice(0, 50);
 }
 
+export function libraryPrefsStorageKey(subject, section) {
+  const owner = subject ? encodeURIComponent(subject) : 'anonymous';
+  return `xeonolab.library.${owner}.${section}`;
+}
+
 export function isFavorite(list, entry) {
   return list.some(item => item.kind === entry.kind && item.id === entry.id);
 }
@@ -332,10 +347,58 @@ export function isIndexActiveJob(job) {
   return job && (job.status === 'queued' || job.status === 'running');
 }
 
-/** Rewrite (or append) the OFFSET clause of a Query DSL expression for pagination. */
+function numericClauseSpans(expression) {
+  const spans = [];
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < expression.length;) {
+    const character = expression[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+      index += 1;
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+      index += 1;
+      continue;
+    }
+    if (!/[A-Za-z_]/.test(character)) {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    while (index < expression.length && /[A-Za-z_]/.test(expression[index])) index += 1;
+    const keyword = expression.slice(start, index).toUpperCase();
+    if (keyword !== 'LIMIT' && keyword !== 'OFFSET') continue;
+    let numberStart = index;
+    while (numberStart < expression.length && /\s/.test(expression[numberStart])) numberStart += 1;
+    let end = numberStart;
+    while (end < expression.length && /\d/.test(expression[end])) end += 1;
+    if (end > numberStart) spans.push({keyword, start, numberStart, end});
+  }
+  return spans;
+}
+
+/** Replace or append LIMIT/OFFSET clauses without rewriting quoted values. */
 export function withOffset(expression, offset) {
   const text = String(expression || '').trim();
-  const value = Math.max(0, Math.floor(offset));
-  if (/\bOFFSET\b/i.test(text)) return text.replace(/\bOFFSET\s+\d+/i, `OFFSET ${value}`);
-  return /;\s*$/.test(text) ? text.replace(/;\s*$/, ` OFFSET ${value}`) : `${text} OFFSET ${value}`;
+  const value = Math.max(0, Math.floor(Number(offset) || 0));
+  const existing = numericClauseSpans(text).filter(clause => clause.keyword === 'OFFSET').at(-1);
+  if (existing) return text.slice(0, existing.numberStart) + value + text.slice(existing.end);
+  return /;\s*$/.test(text) ? text.replace(/;\s*$/, ` OFFSET ${value};`) : `${text} OFFSET ${value}`;
+}
+
+/** Build a deterministic page query, using the server's default limit when absent. */
+export function withQueryPagination(expression, limit, offset) {
+  const text = String(expression || '').trim();
+  const safeLimit = Math.max(1, Math.min(1000, Math.floor(Number(limit) || 100)));
+  const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+  const spans = numericClauseSpans(text).sort((left, right) => right.start - left.start);
+  let base = text;
+  for (const span of spans) base = base.slice(0, span.start) + base.slice(span.end);
+  base = base.replace(/;\s*$/, '').trim();
+  return `${base} LIMIT ${safeLimit} OFFSET ${safeOffset}`;
 }

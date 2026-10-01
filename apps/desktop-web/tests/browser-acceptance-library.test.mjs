@@ -190,6 +190,8 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.record-editor'))"), 'record editor');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.attachment-panel li'))"), 'attachment list');
     await capture('xelibrary-inspector-dark-1440x900');
+    await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('索引')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.inspector-index')?.innerText.includes('job-9')"), 'table-scoped index job');
 
     // Field editing saves through If-Match.
     await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('字段')).click()");
@@ -215,9 +217,13 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     // Unified search: Fast semantic results, completeness warnings, exact-row navigation.
     await cdp.evaluate("[...document.querySelectorAll('.library-nav button')].find(button=>button.innerText.includes('搜索')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-search'))"), 'search view');
+    await cdp.evaluate("document.querySelector('.library-search-filters .library-link').click()");
+    await cdp.evaluate(`(${setValue})('.library-search-filter-body textarea', 'type = theorem')`);
     await cdp.evaluate(`(${setValue})('.library-search-bar input', '一致收敛')`);
     await cdp.evaluate("[...document.querySelectorAll('.library-search-bar button')].find(button=>button.innerText.trim()==='搜索').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-results li'))"), 'search results');
+    const filteredRequest = await cdp.evaluate("window.libraryFixture.calls.filter(call=>call.path==='/search/semantic').at(-1)");
+    assert.equal(filteredRequest.body.filters.type, 'theorem', 'the latest field filter is included in the search request');
     const warningText = await cdp.evaluate("document.querySelector('.library-warning')?.innerText || ''");
     assert.match(warningText, /2,341|2341/, 'missing embeddings are surfaced');
     await capture('xelibrary-search-dark-1440x900');
@@ -226,13 +232,29 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     const activeRow = await cdp.evaluate("document.querySelector('.table-scroll tbody tr.is-active-row')?.dataset.rowId");
     assert.equal(activeRow, 'row-001');
 
+    // A delayed search-result lookup cannot inject a row into a different active table.
+    await cdp.evaluate("[...document.querySelectorAll('.library-nav button')].find(button=>button.innerText.includes('搜索')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-results li button'))"), 'search results before navigation race');
+    await cdp.evaluate("window.libraryFixture.state.slowRowLookup=true; document.querySelector('.library-results li button').click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path==='/tables/t1/rows/row-001')"), 'delayed result lookup started');
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('notes')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.table-scroll tbody tr')?.dataset.rowId==='t2-row-1'"), 'different table opened during result lookup');
+    await sleep(600);
+    const rowsAfterRace = await cdp.evaluate("({rows:[...document.querySelectorAll('.table-scroll tbody tr')].map(row=>row.dataset.rowId), active:document.querySelector('.table-scroll tbody tr.is-active-row')?.dataset.rowId})");
+    assert.deepEqual(rowsAfterRace.rows, ['t2-row-1'], 'the stale row is not appended to the newly selected table');
+    assert.equal(rowsAfterRace.active, undefined, 'the stale lookup cannot select a row in the new table');
+    await cdp.evaluate('window.libraryFixture.state.slowRowLookup=false');
+
     // Quality is unavailable and shown as such, not faked.
     await cdp.evaluate("[...document.querySelectorAll('.library-nav button')].find(button=>button.innerText.includes('搜索')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-search'))"), 'search view again');
+    await cdp.evaluate("(()=>{const box=document.querySelector('.library-search-kind input');box.checked=true;box.dispatchEvent(new Event('change',{bubbles:true}));})()");
     await cdp.evaluate("[...document.querySelectorAll('.library-search .ds-tab')].find(tab=>tab.innerText.includes('Quality')).click()");
     await cdp.evaluate(`(${setValue})('.library-search-bar input', '任意查询')`);
     await cdp.evaluate("[...document.querySelectorAll('.library-search-bar button')].find(button=>button.innerText.trim()==='搜索').click()");
     await waitFor(() => cdp.evaluate("document.querySelector('.ds-error')?.innerText.includes('Quality 搜索不可用')"), 'quality unavailable state');
+    const qualityRequest = await cdp.evaluate("window.libraryFixture.calls.filter(call=>call.path==='/search/semantic').at(-1)");
+    assert.equal(qualityRequest.body.mode, 'quality', 'switching from keyword Fast mode still calls the Quality backend');
 
     // Query console: valid run, syntax error, known unsupported features.
     await cdp.evaluate("[...document.querySelectorAll('.library-nav button')].find(button=>button.innerText.includes('查询控制台')).click()");
@@ -241,6 +263,10 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await waitFor(() => cdp.evaluate("document.querySelectorAll('.library-query-results tbody tr').length===1"), 'query results');
     await capture('xelibrary-query-dark-1440x900');
     await cdp.evaluate(`(${setValue})('.library-query-editor', 'FROM "/**" BOGUS')`);
+    const queryCountBeforeValidation = await cdp.evaluate("window.libraryFixture.calls.filter(call=>call.path==='/query').length");
+    await cdp.evaluate("[...document.querySelectorAll('.library-query-toolbar button')].find(button=>button.innerText.includes('校验语法')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-query .ds-error')?.innerText.includes('查询语法错误')"), 'explicit query validation error');
+    assert.equal(await cdp.evaluate("window.libraryFixture.calls.filter(call=>call.path==='/query').length"), queryCountBeforeValidation, 'validation never executes an invalid query');
     await cdp.evaluate("[...document.querySelectorAll('.library-query-toolbar button')].find(button=>button.innerText.trim()==='运行').click()");
     await waitFor(() => cdp.evaluate("document.querySelector('.library-query .ds-error')?.innerText.includes('查询语法错误')"), 'query syntax error');
     await cdp.evaluate("[...document.querySelectorAll('.library-query-toolbar button')].find(button=>button.innerText.includes('已知未实现语法')).click()");
@@ -249,12 +275,32 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     // Theorems: browse and show unavailable verifier capabilities honestly.
     await cdp.evaluate("[...document.querySelectorAll('.library-nav button')].find(button=>button.innerText.includes('定理')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-theorem-list li'))"), 'theorem list');
-    await cdp.evaluate("document.querySelector('.library-theorem-list li button').click()");
+    await cdp.evaluate("window.libraryFixture.state.delayTheoremId='thm-1'; window.libraryFixture.state.denyTheoremRelations=true; [...document.querySelectorAll('.library-theorem-list li button')].find(button=>button.innerText.includes('一致收敛定理')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path==='/theorems/thm-1')"), 'first theorem request started');
+    await cdp.evaluate("[...document.querySelectorAll('.library-theorem-list li button')].find(button=>button.innerText.includes('极限唯一性定理')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-theorem-detail'))"), 'theorem detail');
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-theorem-detail .ds-error')?.innerText.includes('权限不足')"), 'theorem relationship permission error');
+    assert.match(await cdp.evaluate("document.querySelector('.library-theorem-detail h3')?.innerText"), /极限唯一性定理/, 'stale detail responses do not replace the newly selected theorem');
+    await cdp.evaluate("window.libraryFixture.state.denyTheoremRelations=false; window.libraryFixture.state.delayTheoremId=''; [...document.querySelectorAll('.library-theorem-list li button')].find(button=>button.innerText.includes('一致收敛定理')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-theorem-detail')?.innerText.includes('f_n 连续')"), 'complete theorem detail');
     const theoremDetail = await cdp.evaluate("document.querySelector('.library-theorem-detail').innerText");
     assert.match(theoremDetail, /Lean verification unavailable/);
     assert.match(theoremDetail, /Agent derivation unavailable/);
     assert.match(theoremDetail, /formal_status: none/, 'no fake verified status');
+
+    // Switching tables never shows a previous table's index job during a slow refresh.
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr'))"), 'table opened before job switch');
+    await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('索引')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.inspector-index')?.innerText.includes('job-9')"), 'first table index job restored');
+    await cdp.evaluate("window.libraryFixture.state.delayJobsTable='t2'; [...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('notes')).click()");
+    const jobsDuringSwitch = await cdp.evaluate("document.querySelector('.inspector-index')?.innerText || ''");
+    assert.ok(!jobsDuringSwitch.includes('job-9'), 'the old table job is hidden immediately after switching tables');
+    await sleep(650);
+    const jobsAfterSwitch = await cdp.evaluate("({index:document.querySelector('.inspector-index')?.innerText || '', calls:window.libraryFixture.calls.filter(call=>call.path.startsWith('/jobs?'))})");
+    assert.ok(jobsAfterSwitch.index.includes('job-t2'), `new table index job appears: ${JSON.stringify(jobsAfterSwitch)}`);
+    await cdp.evaluate("window.libraryFixture.state.delayJobsTable=''; [...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr'))"), 'original table restored');
 
     // Table operations: destructive schema warning, move, and explained delete failure.
     await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");

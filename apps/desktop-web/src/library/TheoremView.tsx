@@ -18,6 +18,8 @@ export function TheoremView({
   searchResults,
   selected,
   relations,
+  detailLoading,
+  detailError,
   loading,
   loadingMore,
   error,
@@ -33,6 +35,8 @@ export function TheoremView({
   searchResults: Theorem[] | null;
   selected: Theorem | null;
   relations: {dependencies: any[]; dependents: any[]; evidence: any[]} | null;
+  detailLoading: boolean;
+  detailError: unknown;
   loading: boolean;
   loadingMore: boolean;
   error: unknown;
@@ -47,6 +51,7 @@ export function TheoremView({
   const [query, setQuery] = useState('');
   const list = searchResults ?? items;
   const errorInfo = error ? describeError(error, '读取定理') : null;
+  const detailErrorInfo = detailError ? describeError(detailError, '读取定理关联信息') : null;
 
   return (
     <div className="library-theorems">
@@ -130,18 +135,26 @@ export function TheoremView({
           {selected.proof_natural && <section><h4>Natural Proof</h4><pre>{selected.proof_natural}</pre></section>}
           {selected.formal_statement && <section><h4>Formal Statement</h4><pre>{selected.formal_statement}</pre></section>}
           {selected.lean_source && <section><h4>Lean Proof</h4><pre>{selected.lean_source}</pre></section>}
-          <section>
-            <h4>Evidence</h4>
-            {relations?.evidence?.length ? <ul>{relations.evidence.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有 evidence_refs。</p>}
-          </section>
-          <section>
-            <h4>Dependencies</h4>
-            {relations?.dependencies?.length ? <ul>{relations.dependencies.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录依赖。</p>}
-          </section>
-          <section>
-            <h4>Dependents</h4>
-            {relations?.dependents?.length ? <ul>{relations.dependents.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录被依赖项。</p>}
-          </section>
+          {detailErrorInfo ? (
+            <ErrorState title={detailErrorInfo.title} message={detailErrorInfo.message} requestId={detailErrorInfo.code} onRetry={() => onOpen(selected.theorem_id)} />
+          ) : detailLoading ? (
+            <p className="muted" role="status">正在读取 evidence 与定理关系…</p>
+          ) : (
+            <>
+              <section>
+                <h4>Evidence</h4>
+                {relations?.evidence?.length ? <ul>{relations.evidence.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有 evidence_refs。</p>}
+              </section>
+              <section>
+                <h4>Dependencies</h4>
+                {relations?.dependencies?.length ? <ul>{relations.dependencies.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录依赖。</p>}
+              </section>
+              <section>
+                <h4>Dependents</h4>
+                {relations?.dependents?.length ? <ul>{relations.dependents.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录被依赖项。</p>}
+              </section>
+            </>
+          )}
           <section className="library-notice">
             <strong>不可用能力</strong>
             <p>Agent derivation unavailable — Library Agent 尚未部署，POST /theorems/{'{id}'}/candidates 会返回 503。</p>
