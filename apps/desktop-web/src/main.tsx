@@ -265,28 +265,46 @@ function App() {
 
   const apiRaw = useCallback(async (path: string, init: RequestInit = {}): Promise<Response> => {
     const generation=sessionGenerationRef.current;
-    if(sessionStatusRef.current.phase==='retrying'&&Date.now()<retryNotBeforeRef.current)throw new APIRequestError('服务要求稍后重试',429,'RETRY_AFTER');
-    const current = await accessToken();
-    if (!current) throw Error('需要登录后访问工作空间');
-    const headers = new Headers(init.headers);
-    if (typeof FormData !== 'undefined' && init.body instanceof FormData) headers.delete('Content-Type');
-    else if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    headers.set('Authorization', `Bearer ${current.token}`);
-    let response:Response;
-    try{response=await fetch(`/api/v1${path}`, {...init, headers})}
+    const method=(init.method||'GET').toUpperCase();
+    const perform=async():Promise<Response>=>{
+      if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+      const current = await accessToken();
+      if (!current) throw Error('需要登录后访问工作空间');
+      if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+      const headers = new Headers(init.headers);
+      if (typeof FormData !== 'undefined' && init.body instanceof FormData) headers.delete('Content-Type');
+      else if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+      headers.set('Authorization', `Bearer ${current.token}`);
+      let response:Response;
+      try{response=await fetch(`/api/v1${path}`, {...init, headers})}
+      catch(cause){
+        if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+        const failure=new APIRequestError('网络连接暂时中断，请稍后重试',0,'NETWORK_ERROR');
+        applyFailureState(0,undefined,{message:failure.message},generation);
+        throw failure;
+      }
+      if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+      if (!response.ok) {
+        const raw=await response.clone().text().catch(()=> '');
+        if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+        let result:any=null;try{result=raw?JSON.parse(raw):null}catch{}
+        applyFailureState(response.status,response.headers,result?.error,generation);
+        throw new APIRequestError(result?.error?.message || result?.detail?.[0]?.msg || `HTTP ${response.status}`, response.status, result?.error?.code);
+      }
+      if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+      if(sessionStatusRef.current.phase==='retrying'&&pendingRequestsRef.current.length===0)transition({type:'restored'});
+      return response;
+    };
+    const defer=()=>new Promise<Response>((resolve,reject)=>pendingRequestsRef.current.push({generation,replay:perform as ()=>Promise<unknown>,resolve:resolve as (value:unknown)=>void,reject}));
+    if(generation===sessionGenerationRef.current&&sessionStatusRef.current.phase==='retrying'&&Date.now()<retryNotBeforeRef.current){
+      if(canReplayRequest(path,method))return await defer();
+      throw new APIRequestError('服务要求稍后重试',429,'RETRY_AFTER');
+    }
+    try{return await perform()}
     catch(cause){
-      const failure=new APIRequestError('网络连接暂时中断，请稍后重试',0,'NETWORK_ERROR');
-      applyFailureState(0,undefined,{message:failure.message},generation);
-      throw failure;
+      if(generation===sessionGenerationRef.current&&canReplayRequest(path,method)&&isRetryable(cause))return await defer();
+      throw cause;
     }
-    if (!response.ok) {
-      const raw=await response.clone().text().catch(()=> '');
-      let result:any=null;try{result=raw?JSON.parse(raw):null}catch{}
-      applyFailureState(response.status,response.headers,result?.error,generation);
-      throw new APIRequestError(result?.error?.message || result?.detail?.[0]?.msg || `HTTP ${response.status}`, response.status, result?.error?.code);
-    }
-    if(generation===sessionGenerationRef.current&&sessionStatusRef.current.phase==='retrying'&&pendingRequestsRef.current.length===0)transition({type:'restored'});
-    return response;
   }, [accessToken, applyFailureState]);
 
   const retryPendingRequests=useCallback(async()=>{

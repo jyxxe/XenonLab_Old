@@ -137,7 +137,7 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
     await cdp.call('Page.enable');
     await cdp.call('Runtime.enable');
 
-    const state = {mode: 'ok', tokenCalls: 0, dataCalls: 0, delayToken: false, delayedTokenRequestId: null, returnTable: false};
+    const state = {mode: 'ok', tokenCalls: 0, dataCalls: 0, delayToken: false, delayedTokenRequestId: null, returnTable: false, rawMode: 'ok', rawCalls: 0, rawUploadCalls: 0, delayedRawRequestId: null, delayRaw: false};
     const preferences = {
       theme: 'dark',
       accent: 'blue',
@@ -171,6 +171,17 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
       if (url.pathname === '/health/ready') {
         return fulfil(requestId, 200, {status: 'ready', service: 'desktop-web'});
       }
+      if (url.pathname === '/api/v1/attachments/attachment-1/content') {
+        state.rawCalls += 1;
+        if(state.delayRaw){state.delayedRawRequestId=requestId;return;}
+        if(state.rawMode==='gateway')return fulfilRaw(requestId,502,'<html>attachment gateway unavailable</html>','text/html',[{name:'Retry-After',value:'1'}]);
+        if(state.rawMode==='network')return cdp.call('Fetch.failRequest',{requestId,errorReason:'Failed'});
+        return fulfilRaw(requestId,200,'raw-fixture-content','application/octet-stream');
+      }
+      if (url.pathname === '/api/v1/attachments' && request.method === 'POST') {
+        state.rawUploadCalls += 1;
+        return fulfilRaw(requestId,502,'<html>upload gateway unavailable</html>','text/html',[{name:'Retry-After',value:'1'}]);
+      }
       const data = () => {
         state.dataCalls += 1;
         if (state.mode === 'rate') {
@@ -190,8 +201,20 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
         return fulfil(requestId, 200, {token: `access-${state.tokenCalls}`, expires: 300});
       }
       if (url.pathname === '/api/v1/apps') return fulfil(requestId, 200, {data: [], meta: {request_id: 'fixture'}});
+      if (url.pathname === '/api/v1/tables' && url.searchParams.get('limit') === '100') {
+        return fulfil(requestId,200,{data:[{id:'raw-fixture',path:'/示例/平台',name:'附件测试',table_revision:1,schema_revision:1}],meta:{request_id:'fixture',next_cursor:null}});
+      }
+      if (url.pathname === '/api/v1/tables/raw-fixture/schema') {
+        return fulfil(requestId,200,{data:{columns:[{name:'title',type:'text',nullable:true,default_value:null}],table_revision:1,schema_revision:1},meta:{request_id:'fixture'}});
+      }
+      if (url.pathname === '/api/v1/tables/raw-fixture/rows' && request.method === 'GET') {
+        return fulfil(requestId,200,{data:[{_row_id:'raw-row',_revision:1,_created_at:'2026-01-01T00:00:00Z',_updated_at:'2026-01-01T00:00:00Z',_deleted_at:null,values:{title:'附件读取测试'}}],meta:{request_id:'fixture',next_cursor:null}});
+      }
+      if (url.pathname === '/api/v1/tables/raw-fixture/rows/raw-row/attachments') {
+        return fulfil(requestId,200,{data:[{attachment_id:'attachment-1',row_id:'raw-row',filename:'fixture.txt',media_type:'text/plain',size:19,created_at:'2026-01-01T00:00:00Z',metadata:{}}],meta:{request_id:'fixture',next_cursor:null}});
+      }
       if (url.pathname === '/api/v1/users/me') {
-        return fulfil(requestId, 200, {data: {subject: 'fixture-admin', kind: 'human', scopes: ['desktop:read', 'xelibrary:read', 'dev:read']}, meta: {request_id: 'fixture'}});
+        return fulfil(requestId, 200, {data: {subject: 'fixture-admin', kind: 'human', scopes: ['desktop:read', 'xelibrary:read', 'xelibrary:attach', 'dev:read']}, meta: {request_id: 'fixture'}});
       }
       if (url.pathname === '/api/v1/users/me/layout') return fulfil(requestId, 200, {data: {dock: [], windows: []}, meta: {request_id: 'fixture'}});
       if (url.pathname === '/api/v1/users/me/preferences') return fulfil(requestId, 200, {data: preferences, meta: {request_id: 'fixture'}});
@@ -216,7 +239,50 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.dashboard'))"), 'system app');
     assert.equal(state.tokenCalls, tokensAfterBootstrap, 'browsing does not refresh the access token per request');
 
+    // Attachment downloads use apiRaw. A transient response must queue and replay
+    // the original GET so the component receives the recovered Response body.
+    await cdp.evaluate(`(() => {
+      window.__downloadedBlobSizes=[];
+      URL.createObjectURL=blob=>{window.__downloadedBlobSizes.push(blob.size);return 'blob:fixture-download'};
+      URL.revokeObjectURL=()=>{};
+      [...document.querySelectorAll('nav.dock button')].find(button=>button.title==='知识库')?.click();
+    })()`);
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-welcome-list button'))"), 'fixture table in library');
+    await cdp.evaluate("document.querySelector('.library-welcome-list button').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('tr[data-row-id=raw-row]'))"), 'fixture row');
+    await cdp.evaluate("document.querySelector('tr[data-row-id=raw-row]').click()");
+    await waitFor(() => cdp.evaluate("Boolean([...document.querySelectorAll('.attachment-panel button')].find(button=>button.innerText.trim()==='鉴权下载'))"), 'attachment download action');
+    state.rawMode='gateway';
+    const rawGatewayCalls=state.rawCalls;
+    await cdp.evaluate("[...document.querySelectorAll('.attachment-panel button')].find(button=>button.innerText.trim()==='鉴权下载').click()");
+    await waitFor(() => bannerPhase().then(phase => phase === 'retrying'), 'apiRaw gateway retry banner');
+    await sleep(350);
+    assert.equal(state.rawCalls,rawGatewayCalls+1,'apiRaw does not retry before Retry-After');
+    state.rawMode='ok';
+    await waitFor(() => state.rawCalls===rawGatewayCalls+2&&cdp.evaluate('window.__downloadedBlobSizes.length===1'),'apiRaw 502 GET replayed after Retry-After');
+    assert.equal(await cdp.evaluate('window.__downloadedBlobSizes[0]'),Buffer.byteLength('raw-fixture-content'),'the original download receives the replayed body');
+
+    state.rawMode='network';
+    const rawNetworkCalls=state.rawCalls;
+    await cdp.evaluate("[...document.querySelectorAll('.attachment-panel button')].find(button=>button.innerText.trim()==='鉴权下载').click()");
+    await waitFor(() => bannerPhase().then(phase => phase === 'retrying'), 'apiRaw network retry banner');
+    state.rawMode='ok';
+    await cdp.evaluate("document.querySelector('[data-testid=session-retry]')?.click()");
+    await waitFor(() => state.rawCalls===rawNetworkCalls+2&&cdp.evaluate('window.__downloadedBlobSizes.length===2'),'apiRaw network GET replayed by Retry');
+
+    const rawUploadCalls=state.rawUploadCalls;
+    await cdp.evaluate(`(() => {
+      const input=document.querySelector('.attachment-panel input[type=file]');
+      const transfer=new DataTransfer();transfer.items.add(new File(['upload-fixture'],'upload.txt',{type:'text/plain'}));
+      input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+    })()`);
+    await waitFor(() => state.rawUploadCalls===rawUploadCalls+1, 'attachment upload attempted once');
+    await waitFor(() => bannerPhase().then(phase => phase === 'retrying'), 'upload 502 recovery banner');
+    await waitFor(() => bannerPhase().then(phase => phase===null), 'upload cooldown settles without replaying the write');
+    assert.equal(state.rawUploadCalls,rawUploadCalls+1,'unsafe attachment upload is never automatically replayed');
+
     // Rate limiting keeps the workspace and shows a recoverable banner.
+    const tokensBeforeRateLimit=state.tokenCalls;
     state.mode = 'rate';
     await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText.trim()==='刷新')?.click()");
     await waitFor(() => bannerPhase().then(phase => phase === 'retrying'), 'retryable rate-limit banner');
@@ -227,7 +293,7 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
     const limitedDataCalls=state.dataCalls;
     assert.equal(await cdp.evaluate("document.querySelector('[data-testid=session-retry]').disabled"),true,'Retry-After disables an early manual retry');
     const tokensDuringRateLimit = state.tokenCalls;
-    assert.equal(tokensDuringRateLimit, tokensAfterBootstrap, 'rate limiting does not trigger a token storm');
+    assert.equal(tokensDuringRateLimit, tokensBeforeRateLimit, 'rate limiting does not trigger a token storm');
 
     // Background recovery waits for Retry-After and replays the failed reads.
     state.mode = 'ok';
@@ -293,6 +359,30 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
     await fulfil(state.delayedTokenRequestId,200,{token:'late-access-token',expires:300});
     await sleep(100);
     assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock'))"),false,'late token refresh does not restore the workspace');
+    assert.equal(await statusPhase(),'signed-out');
+
+    // A raw attachment GET already in flight when the user logs out is fenced too.
+    state.mode='ok';
+    state.delayToken=false;
+    await cdp.evaluate('location.reload()');
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('nav.dock'))"), 'desktop after synthetic session restore');
+    await cdp.evaluate("[...document.querySelectorAll('nav.dock button')].find(button=>button.title==='知识库')?.click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-welcome-list button'))"), 'library restored for raw logout race');
+    await cdp.evaluate("document.querySelector('.library-welcome-list button').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('tr[data-row-id=raw-row]'))"), 'raw logout race row');
+    await cdp.evaluate("document.querySelector('tr[data-row-id=raw-row]').click()");
+    await waitFor(() => cdp.evaluate("Boolean([...document.querySelectorAll('.attachment-panel button')].find(button=>button.innerText.trim()==='鉴权下载'))"), 'raw logout race download action');
+    state.delayRaw=true;
+    await cdp.evaluate("[...document.querySelectorAll('.attachment-panel button')].find(button=>button.innerText.trim()==='鉴权下载').click()");
+    await waitFor(() => state.delayedRawRequestId!==null, 'delayed raw attachment response');
+    const delayedRawRequestId=state.delayedRawRequestId;
+    await cdp.evaluate("document.querySelector('.menubar-app-menu > button').click()");
+    await waitFor(()=>cdp.evaluate("Boolean([...document.querySelectorAll('[role=menuitem]')].find(item=>item.innerText==='退出登录'))"),'logout menu item for raw request');
+    await cdp.evaluate("[...document.querySelectorAll('[role=menuitem]')].find(item=>item.innerText==='退出登录').click()");
+    await waitFor(()=>cdp.evaluate("document.body.innerText.includes('登录 XeonoLab')"),'logout while raw request is pending');
+    await fulfilRaw(delayedRawRequestId,200,'late-raw-response','application/octet-stream');
+    await sleep(100);
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock'))"),false,'late raw response cannot restore the workspace after logout');
     assert.equal(await statusPhase(),'signed-out');
 
     const shotDir = process.env.UI_SCREENSHOT_DIR;
