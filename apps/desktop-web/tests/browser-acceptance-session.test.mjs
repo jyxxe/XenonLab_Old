@@ -112,10 +112,12 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
   const server = await createServer({root: appRoot, server: {host: '127.0.0.1', port: portNumber, strictPort: true, watch: null}});
   await server.listen();
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xeonolab-session-acceptance-'));
+  // The rootless runner's job container runs as UID 0; Chrome requires this flag for that UID.
   const chrome = spawn(
     chromePath,
     [
       '--headless=new',
+      ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []),
       '--no-first-run',
       '--no-default-browser-check',
       `--user-data-dir=${path.join(tempDir, 'profile')}`,

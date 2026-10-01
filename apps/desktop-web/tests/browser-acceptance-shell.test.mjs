@@ -168,10 +168,12 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
   await new Promise(resolve => stalled.listen(stalledPort, '127.0.0.1', resolve));
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'xeonolab-shell-acceptance-'));
+  // The rootless runner's job container runs as UID 0; Chrome requires this flag for that UID.
   const chrome = spawn(
     chromePath,
     [
       '--headless=new',
+      ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []),
       '--no-first-run',
       '--no-default-browser-check',
       `--user-data-dir=${path.join(tempDir, 'profile')}`,
