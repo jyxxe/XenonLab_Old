@@ -12,6 +12,18 @@
 export const REFRESH_SKEW_MS = 60000;
 export const DEFAULT_RETRY_DELAY_MS = 12000;
 
+/**
+ * Only replay requests whose body can be sent again without consuming a stream
+ * or duplicating a write. Current safe POST callers pass JSON strings.
+ */
+export function canReplayRequest(path, method, body) {
+  if (method === 'GET') return true;
+  if (method !== 'POST' || (body != null && typeof body !== 'string')) return false;
+  const route = path.split('?')[0];
+  return ['/query', '/query/validate', '/query/explain', '/search/text', '/search/semantic', '/search/hybrid'].includes(route)
+    || /^\/tables\/[^/]+\/query$/.test(route);
+}
+
 /** Parse Retry-After as either delta seconds or an HTTP date. */
 export function retryAfterDelayMs(value, now = Date.now()) {
   if (!value) return 0;

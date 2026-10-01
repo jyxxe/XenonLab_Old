@@ -17,11 +17,11 @@
 
 | 命令 | 结果 |
 |---|---|
-| `npm test` | 47 passed，0 failed；包括 session policy、浏览器恢复、外壳与可用性测试 |
+| `npm test` | 48 passed，0 failed；包括 session policy、浏览器恢复、外壳与可用性测试 |
 | `npm run build` | `tsc --noEmit` 与 Vite production build 通过 |
 | `git diff --check` | 通过 |
 
-CDP 浏览器夹具覆盖 token 缓存、429 与两秒 `Retry-After`、冷却期间请求排队、恢复后更新原始 Dashboard 请求结果、500 手动重放、HTML 502、网络失败、附件原始 GET 的重放、上传不重放、授权撤销，以及登出后迟到 token/raw 响应不恢复桌面。无后端改动，因此本轮未运行后端 pytest 或重新生成 OpenAPI。
+CDP 浏览器夹具覆盖 token 缓存、近过期并发请求 single-flight、429 与两秒 `Retry-After`、冷却期间请求排队、恢复后更新原始 Dashboard 请求结果、500 手动重放、HTML 502、网络失败、附件原始 GET 的重放、上传不重放、手动 bearer token 的冷却重放、refresh 授权撤销和无会话令牌时清空待处理请求、首个重放 401 后停止队列，以及登出后迟到 token/raw 响应不恢复桌面。策略单测确认一次性 FormData/stream body 不会重放。无后端改动，因此本轮未运行后端 pytest 或重新生成 OpenAPI。
 
 ## 遗留项
 

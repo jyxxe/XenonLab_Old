@@ -6,7 +6,7 @@ import './shell/shell.css';
 import './style.css';
 import {login, callback, sessionToken, logout, SessionFailure} from './auth';
 import {initialSessionState, transitionSession, mayUseCachedToken} from './session-state.js';
-import {emptyAccess, accessExpired, classifyFailure, DEFAULT_RETRY_DELAY_MS, failureMessage, rememberAccess, retryAfterDelayMs, shouldRefresh} from './session-policy.js';
+import {emptyAccess, accessExpired, canReplayRequest, classifyFailure, DEFAULT_RETRY_DELAY_MS, failureMessage, rememberAccess, retryAfterDelayMs, shouldRefresh} from './session-policy.js';
 import {ToastProvider} from './design-system/primitives';
 import {DesktopShell} from './shell/DesktopShell';
 import {Knowledge} from './Knowledge';
@@ -20,14 +20,6 @@ function isRetryable(error:unknown){
   if(error instanceof SessionFailure)return error.kind==='temporary';
   if(error instanceof APIRequestError)return error.status===0||error.status===429||error.status>=500;
   return false;
-}
-
-function canReplayRequest(path:string,method:string){
-  if(method==='GET')return true;
-  if(method!=='POST')return false;
-  const route=path.split('?')[0];
-  return ['/query','/query/validate','/query/explain','/search/text','/search/hybrid'].includes(route)
-    || /^\/tables\/[^/]+\/query$/.test(route);
 }
 
 function App() {
@@ -249,12 +241,12 @@ function App() {
     };
     const defer=()=>new Promise<APIPage<T>>((resolve,reject)=>pendingRequestsRef.current.push({generation,replay:perform as ()=>Promise<unknown>,resolve:resolve as (value:unknown)=>void,reject}));
     if(generation===sessionGenerationRef.current&&sessionStatusRef.current.phase==='retrying'&&Date.now()<retryNotBeforeRef.current){
-      if(canReplayRequest(path,method))return await defer();
+      if(canReplayRequest(path,method,init.body))return await defer();
       throw new APIRequestError('服务要求稍后重试',429,'RETRY_AFTER');
     }
     try{return await perform()}
     catch(cause){
-      if(generation===sessionGenerationRef.current&&canReplayRequest(path,method)&&isRetryable(cause))return await defer();
+      if(generation===sessionGenerationRef.current&&canReplayRequest(path,method,init.body)&&isRetryable(cause))return await defer();
       throw cause;
     }
   }, [accessToken, applyFailureState]);
@@ -297,12 +289,12 @@ function App() {
     };
     const defer=()=>new Promise<Response>((resolve,reject)=>pendingRequestsRef.current.push({generation,replay:perform as ()=>Promise<unknown>,resolve:resolve as (value:unknown)=>void,reject}));
     if(generation===sessionGenerationRef.current&&sessionStatusRef.current.phase==='retrying'&&Date.now()<retryNotBeforeRef.current){
-      if(canReplayRequest(path,method))return await defer();
+      if(canReplayRequest(path,method,init.body))return await defer();
       throw new APIRequestError('服务要求稍后重试',429,'RETRY_AFTER');
     }
     try{return await perform()}
     catch(cause){
-      if(generation===sessionGenerationRef.current&&canReplayRequest(path,method)&&isRetryable(cause))return await defer();
+      if(generation===sessionGenerationRef.current&&canReplayRequest(path,method,init.body)&&isRetryable(cause))return await defer();
       throw cause;
     }
   }, [accessToken, applyFailureState]);
@@ -314,7 +306,23 @@ function App() {
     if(retryNotBeforeRef.current){retryNotBeforeRef.current=0;setRetryNotBefore(0)}
     const generation=sessionGenerationRef.current;
     try{
-      try{await refreshAccess()}catch{return}
+      let current:{token:string}|null;
+      try{current=await accessToken()}
+      catch(cause){
+        if(isRetryable(cause))return;
+        const queued=pendingRequestsRef.current;
+        pendingRequestsRef.current=[];
+        for(const pending of queued)pending.reject(cause);
+        return;
+      }
+      if(!current){
+        const failure=new APIRequestError('登录凭据已失效，需要重新授权',401,'NO_SESSION');
+        transition({type:'reauthorization-required',message:failure.message});
+        const queued=pendingRequestsRef.current;
+        pendingRequestsRef.current=[];
+        for(const pending of queued)pending.reject(failure);
+        return;
+      }
       if(generation!==sessionGenerationRef.current)return;
       for(const pending of [...pendingRequestsRef.current]){
         if(pending.generation!==generation){
@@ -332,6 +340,13 @@ function App() {
             pendingRequestsRef.current=pendingRequestsRef.current.filter(item=>item!==pending);
             pending.reject(cause);
           }
+          const authorizationFailed=(cause instanceof APIRequestError&&cause.status===401)||sessionStatusRef.current.phase==='reauthorize';
+          if(authorizationFailed){
+            const remaining=pendingRequestsRef.current;
+            pendingRequestsRef.current=[];
+            for(const queued of remaining)queued.reject(cause);
+            break;
+          }
           if(retryNotBeforeRef.current>Date.now()||isRetryable(cause))break;
         }
       }
@@ -340,7 +355,7 @@ function App() {
         if(sessionStatusRef.current.phase==='retrying')transition({type:'restored'});
       }
     }finally{retryRunningRef.current=false}
-  },[refreshAccess]);
+  },[accessToken]);
   retryPendingRef.current=()=>{void retryPendingRequests()};
 
   async function handleLogout() {

@@ -1,5 +1,6 @@
 export const REFRESH_SKEW_MS: number;
 export const DEFAULT_RETRY_DELAY_MS: number;
+export function canReplayRequest(path: string, method: string, body?: BodyInit | null): boolean;
 
 export type AccessToken = {token: string; expiresAt: number};
 export type TokenResult = {token: string; expires: number};

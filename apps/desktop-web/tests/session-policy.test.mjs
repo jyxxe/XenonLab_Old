@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   REFRESH_SKEW_MS,
   accessExpired,
+  canReplayRequest,
   classifyFailure,
   emptyAccess,
   failureMessage,
@@ -62,4 +63,13 @@ test('retryAfterDelayMs honors delta seconds and HTTP dates', () => {
   assert.equal(retryAfterDelayMs(new Date(NOW+3500).toUTCString(),NOW),3000);
   assert.equal(retryAfterDelayMs('not-a-date',NOW),0);
   assert.equal(retryAfterDelayMs('0',NOW),0);
+});
+
+test('canReplayRequest accepts reusable reads but excludes one-shot POST bodies', () => {
+  assert.equal(canReplayRequest('/attachments/1/content', 'GET'), true);
+  assert.equal(canReplayRequest('/query', 'POST', JSON.stringify({expression: 'FROM "/**"'})), true);
+  assert.equal(canReplayRequest('/search/semantic', 'POST', JSON.stringify({query: 'fixture'})), true);
+  assert.equal(canReplayRequest('/query', 'POST', new FormData()), false);
+  assert.equal(canReplayRequest('/query', 'POST', new ReadableStream()), false);
+  assert.equal(canReplayRequest('/attachments', 'POST', 'form data'), false);
 });

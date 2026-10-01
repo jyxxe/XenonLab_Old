@@ -137,7 +137,7 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
     await cdp.call('Page.enable');
     await cdp.call('Runtime.enable');
 
-    const state = {mode: 'ok', tokenCalls: 0, dataCalls: 0, delayToken: false, delayedTokenRequestId: null, returnTable: false, rawMode: 'ok', rawCalls: 0, rawUploadCalls: 0, delayedRawRequestId: null, delayRaw: false};
+    const state = {mode: 'ok', noSession: false, refreshUnauthorized: false, forceNearExpiry: false, tokenCalls: 0, dataCalls: 0, delayToken: false, delayedTokenRequestId: null, returnTable: false, rawMode: 'ok', rawCalls: 0, rawUploadCalls: 0, delayedRawRequestId: null, delayRaw: false, firstUnauthorizedSent: false, logoutCalls: 0};
     const preferences = {
       theme: 'dark',
       accent: 'blue',
@@ -191,15 +191,22 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
         if (state.mode === 'gateway') return fulfilRaw(requestId, 502, '<html>upstream unavailable</html>', 'text/html');
         if (state.mode === 'network') return cdp.call('Fetch.failRequest', {requestId, errorReason: 'Failed'});
         if (state.mode === 'revoked') return fulfil(requestId, 401, errorBody('DESKTOP_ACCESS_REVOKED', 'desktop permission revoked'));
+        if (state.mode === 'first-unauthorized' && !state.firstUnauthorizedSent) {
+          state.firstUnauthorizedSent=true;
+          return fulfil(requestId,401,errorBody('DESKTOP_ACCESS_REVOKED','desktop permission revoked'));
+        }
         if (state.returnTable&&url.pathname==='/api/v1/tables') return fulfil(requestId,200,{data:[{id:'recovered-table',name:'部署验收',path:'/示例/平台'}],meta:{request_id:'fixture',next_cursor:null}});
         return fulfil(requestId, 200, {data: [], meta: {request_id: 'fixture', next_cursor: null}});
       };
       if (url.pathname === '/api/v1/auth/session/token') {
         state.tokenCalls += 1;
         if (state.delayToken) { state.delayedTokenRequestId=requestId; return; }
+        if (state.noSession) return fulfil(requestId,401,errorBody('NO_SESSION','No desktop session'));
+        if (state.refreshUnauthorized) return fulfil(requestId,401,errorBody('DESKTOP_ACCESS_REVOKED','desktop permission revoked'));
         if (state.mode === 'revoked') return fulfil(requestId, 401, errorBody('DESKTOP_ACCESS_REVOKED', 'desktop permission revoked'));
-        return fulfil(requestId, 200, {token: `access-${state.tokenCalls}`, expires: 300});
+        return fulfil(requestId, 200, {token: `access-${state.tokenCalls}`, expires: state.forceNearExpiry?30:state.tokenCalls===1?30:300});
       }
+      if (url.pathname === '/api/v1/auth/session/logout') {state.logoutCalls+=1;return fulfil(requestId,200,{});}
       if (url.pathname === '/api/v1/apps') return fulfil(requestId, 200, {data: [], meta: {request_id: 'fixture'}});
       if (url.pathname === '/api/v1/tables' && url.searchParams.get('limit') === '100') {
         return fulfil(requestId,200,{data:[{id:'raw-fixture',path:'/示例/平台',name:'附件测试',table_revision:1,schema_revision:1}],meta:{request_id:'fixture',next_cursor:null}});
@@ -230,7 +237,7 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('nav.dock'))"), 'connected desktop');
     await waitFor(() => cdp.evaluate("document.querySelector('output[data-testid=session-status]')?.dataset.phase === 'connected'"), 'connected session phase');
     const tokensAfterBootstrap = state.tokenCalls;
-    assert.ok(tokensAfterBootstrap >= 1 && tokensAfterBootstrap <= 2, `bootstrap refreshes the token once (${tokensAfterBootstrap})`);
+    assert.equal(tokensAfterBootstrap,2,'concurrent bootstrap requests share one refresh for the near-expiry token');
 
     // Open two apps: the burst must share one cached token, not refresh per request.
     await cdp.evaluate("[...document.querySelectorAll('nav.dock button')].find(button=>button.title==='知识库')?.click()");
@@ -307,6 +314,54 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
     assert.equal(await bannerPhase(), null, 'banner disappears after recovery');
     assert.match(await cdp.evaluate("[...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('知识库概览')).innerText"),/1 张表/,'the replayed response updates the original view');
 
+    // A refresh revoked while reads are queued rejects the queue and keeps the
+    // signed-in workspace available for explicit user action.
+    state.mode='rate';
+    const revokedQueueStart=state.dataCalls;
+    await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText.trim()==='刷新')?.click()");
+    await waitFor(async () => state.dataCalls>=revokedQueueStart+3&&await bannerPhase()==='retrying','reads queued before token refresh revocation');
+    const callsBeforeRevokedRefresh=state.dataCalls;
+    const logoutCountBeforeRevocation=state.logoutCalls;
+    state.refreshUnauthorized=true;
+    const tokensBeforeRevokedRefresh=state.tokenCalls;
+    await cdp.evaluate("window.__nearExpiryRealDateNow=Date.now.bind(Date);Date.now=()=>window.__nearExpiryRealDateNow()+250000");
+    await waitFor(() => statusPhase().then(phase=>phase==='reauthorize'),'queued requests rejected after session refresh revocation');
+    await sleep(250);
+    assert.equal(state.dataCalls,callsBeforeRevokedRefresh,'no queued API requests are sent after the token refresh is revoked');
+    assert.equal(state.tokenCalls,tokensBeforeRevokedRefresh+1,'the pending batch shares one refresh attempt');
+    assert.equal(await workspaceVisible(),true,'refresh revocation does not discard the workspace');
+    assert.equal(state.logoutCalls,logoutCountBeforeRevocation,'refresh revocation does not call logout');
+    await cdp.evaluate('Date.now=window.__nearExpiryRealDateNow');
+    state.refreshUnauthorized=false;
+    state.mode='ok';
+    await cdp.evaluate('location.reload()');
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('nav.dock'))"), 'desktop after restored session');
+    await cdp.evaluate("[...document.querySelectorAll('nav.dock button')].find(button=>button.title==='系统状态')?.click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.dashboard'))"), 'dashboard after restored session');
+
+    // A missing session token resolves to null rather than throwing. That path
+    // must also settle every queued caller instead of leaving promises pending.
+    state.mode='rate';
+    const noSessionQueueStart=state.dataCalls;
+    await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText.trim()==='刷新')?.click()");
+    await waitFor(async () => state.dataCalls>=noSessionQueueStart+3&&await bannerPhase()==='retrying','reads queued before session disappears');
+    const noSessionReplayStart=state.dataCalls;
+    const logoutCountBeforeNoSession=state.logoutCalls;
+    state.noSession=true;
+    await cdp.evaluate('window.__nearExpiryRealDateNow=Date.now.bind(Date);Date.now=()=>window.__nearExpiryRealDateNow()+250000');
+    await waitFor(() => statusPhase().then(phase=>phase==='reauthorize'),'queued requests rejected when refresh returns no session');
+    await sleep(250);
+    assert.equal(state.dataCalls,noSessionReplayStart,'no queued API request is sent without a session token');
+    assert.equal(await workspaceVisible(),true,'missing session token preserves the workspace for reauthorization');
+    assert.equal(state.logoutCalls,logoutCountBeforeNoSession,'missing session token does not call logout');
+    await cdp.evaluate('Date.now=window.__nearExpiryRealDateNow');
+    state.noSession=false;
+    state.mode='ok';
+    await cdp.evaluate('location.reload()');
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('nav.dock'))"), 'desktop after no-session fixture reset');
+    await cdp.evaluate("[...document.querySelectorAll('nav.dock button')].find(button=>button.title==='系统状态')?.click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.dashboard'))"), 'dashboard after no-session fixture reset');
+
     // A 500 is recoverable and the manual Retry repeats the actual failed read.
     state.mode = 'error';
     await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText.trim()==='刷新')?.click()");
@@ -347,6 +402,8 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
 
     // A late refresh response cannot restore session state after explicit logout.
     state.mode='error';
+    state.forceNearExpiry=true;
+    await cdp.evaluate("window.__originalDateNow=Date.now.bind(Date);Date.now=()=>window.__originalDateNow()+250000");
     await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText.trim()==='刷新')?.click()");
     await waitFor(() => bannerPhase().then(phase=>phase==='retrying'),'retryable request before logout race');
     state.delayToken=true;
@@ -363,6 +420,7 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
 
     // A raw attachment GET already in flight when the user logs out is fenced too.
     state.mode='ok';
+    state.forceNearExpiry=false;
     state.delayToken=false;
     await cdp.evaluate('location.reload()');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('nav.dock'))"), 'desktop after synthetic session restore');
@@ -391,6 +449,54 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
       const shot = await cdp.call('Page.captureScreenshot', {format: 'png'});
       await fs.writeFile(path.join(shotDir, 'desktop-session-retry-dark.png'), Buffer.from(shot.data, 'base64'));
     }
+
+    // A manual bearer token has no cookie-backed session to refresh. Its queued
+    // read must replay with the same token after the Retry-After cooldown.
+    state.noSession=true;
+    state.delayRaw=false;
+    await cdp.evaluate('location.reload()');
+    await waitFor(() => cdp.evaluate('Boolean(document.querySelector("input[aria-label=\\\"访问令牌\\\"]"))'), 'manual bearer token form');
+    const manualFormState=await cdp.evaluate(`(() => {
+      const details=document.querySelector('details');
+      if(details)details.open=true;
+      const input=document.querySelector('input[aria-label="访问令牌"]');
+      const button=[...(details?.querySelectorAll('button')||[])].find(item=>item.innerText.trim()==='连接');
+      if(!input||!button)return {input:Boolean(input),buttons:[...(details?.querySelectorAll('button')||[])].map(item=>item.innerText.trim()),phase:document.querySelector('output[data-testid=session-status]')?.dataset.phase};
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'fixture-manual-bearer');
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      button.click();
+      return {input:true,clicked:true};
+    })()`);
+    assert.deepEqual(manualFormState,{input:true,clicked:true},'manual bearer form is available and connected');
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('nav.dock'))"), 'desktop connected with manual bearer');
+    const manualTokenCalls=state.tokenCalls;
+    await cdp.evaluate("[...document.querySelectorAll('nav.dock button')].find(button=>button.title==='系统状态')?.click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.dashboard'))"), 'dashboard with manual bearer');
+    state.mode='rate';
+    const manualReadCalls=state.dataCalls;
+    await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText.trim()==='刷新')?.click()");
+    await waitFor(() => bannerPhase().then(phase=>phase==='retrying'), 'manual bearer transient retry banner');
+    state.mode='ok';
+    await waitFor(() => statusPhase().then(async phase=>phase==='connected'&&state.dataCalls>manualReadCalls),'manual bearer GET replay after Retry-After');
+    assert.equal(await bannerPhase(),null,'manual bearer session returns to the workspace');
+    assert.equal(await workspaceVisible(),true,'manual bearer workspace remains connected');
+    assert.equal(state.tokenCalls,manualTokenCalls,'manual bearer retry does not request a cookie session token');
+
+    // If the first replay is unauthorized, reject the rest of the pending batch
+    // instead of sending more requests with the revoked bearer token.
+    state.mode='rate';
+    const queuedBatchStart=state.dataCalls;
+    await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText.trim()==='刷新')?.click()");
+    await waitFor(async () => state.dataCalls>=queuedBatchStart+3&&await bannerPhase()==='retrying','multiple reads queued during rate limit');
+    const replayStart=state.dataCalls;
+    state.firstUnauthorizedSent=false;
+    state.mode='first-unauthorized';
+    const logoutCount=state.logoutCalls;
+    await waitFor(() => statusPhase().then(phase=>phase==='reauthorize'),'first replay requires reauthorization');
+    await sleep(250);
+    assert.equal(state.dataCalls,replayStart+1,'later pending reads are not sent after the first 401');
+    assert.equal(await workspaceVisible(),true,'reauthorization keeps the workspace open');
+    assert.equal(state.logoutCalls,logoutCount,'401 recovery never automatically logs out');
 
     assert.ok(state.dataCalls >= 14, `fixture exercised data endpoints and retries (${state.dataCalls})`);
   } finally {
