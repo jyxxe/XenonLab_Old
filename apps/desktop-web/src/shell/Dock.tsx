@@ -1,4 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
+import {flushSync} from 'react-dom';
 import {ContextMenu, type MenuItem} from '../design-system/primitives';
 import type {DesktopApp, WindowState} from './types';
 
@@ -46,13 +47,21 @@ export function Dock({
     if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
   }, []);
 
+  useEffect(() => {
+    if (autoHide) return;
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+    setPointerActive(false);
+  }, [autoHide]);
+
   function revealForPointer(event: React.PointerEvent) {
     if (event.pointerType === 'touch') return;
     if (hideTimer.current !== null) {
       window.clearTimeout(hideTimer.current);
       hideTimer.current = null;
     }
-    setPointerActive(true);
+    // Commit the reveal before the next pointer event can leave the edge trigger.
+    flushSync(() => setPointerActive(true));
   }
 
   function schedulePointerHide(event: React.PointerEvent) {

@@ -363,44 +363,59 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     // reaches it. Keep the reveal alive across the user's slow entry path, and let
     // keyboard focus reveal the same auto-hidden Dock.
     await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 913, deviceScaleFactor: 1, mobile: false});
-    const movePointer = (x, y) => cdp.call('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y, button: 'none', buttons: 0});
+    const movePointer = (x, y, pointerType = 'mouse') => cdp.call('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y, pointerType, button: 'none', buttons: 0});
     const dockState = () => cdp.evaluate(`(() => {
       const dock = document.querySelector('nav.dock');
+      const edge = document.querySelector('.dock-edge');
       const style = getComputedStyle(dock);
       const rect = dock.getBoundingClientRect();
-      return {opacity: style.opacity, pointerEvents: style.pointerEvents, hovered: dock.matches(':hover'), duration: style.transitionDuration, reducedMotion: document.documentElement.dataset.reducedMotion === 'true', x: rect.x, y: rect.y, width: rect.width, height: rect.height};
+      return {opacity: style.opacity, pointerEvents: style.pointerEvents, hovered: dock.matches(':hover'), edgeHovered: edge?.matches(':hover') ?? false, pointerActive: dock.classList.contains('ds-pointer-active'), duration: style.transitionDuration, reducedMotion: document.documentElement.dataset.reducedMotion === 'true', x: rect.x, y: rect.y, width: rect.width, height: rect.height};
     })()`);
-    const assertDockVisible = async label => {
-      await waitFor(async () => {
-        const state = await dockState();
-        return Number(state.opacity) > 0.98 && state.pointerEvents === 'auto' && state.hovered;
-      }, label);
-    };
     const dockPointerTrace = [];
-    const recordDockPointer = async (point, dwellMs) => {
-      dockPointerTrace.push({point, requestedDwellMs: dwellMs, observedAt: new Date().toISOString(), ...(await dockState())});
+    const recordDockPointer = async (point, pointerType, dwellMs) => {
+      dockPointerTrace.push({point, pointerType, requestedDwellMs: dwellMs, observedAt: new Date().toISOString(), ...(await dockState())});
+    };
+    const persistDockTrace = async failure => {
+      const verificationRoot = path.resolve(appRoot, '..', '..', 'runtime', 'verification', 'issue-75');
+      await fs.mkdir(verificationRoot, {recursive: true});
+      await fs.writeFile(
+        path.join(verificationRoot, 'dock-hover-path.json'),
+        `${JSON.stringify({browser: 'Chrome/Chromium via CDP', viewport: '1440x913', failure: failure || null, trace: dockPointerTrace}, null, 2)}\n`,
+      );
+    };
+    const assertDockVisible = async label => {
+      try {
+        await waitFor(async () => {
+          const state = await dockState();
+          return Number(state.opacity) > 0.98 && state.pointerEvents === 'auto' && state.hovered;
+        }, label);
+      } catch (error) {
+        dockPointerTrace.push({point: `${label} FAILED`, observedAt: new Date().toISOString(), ...(await dockState())});
+        await persistDockTrace(error instanceof Error ? error.message : String(error));
+        throw error;
+      }
     };
     assert.match((await dockState()).duration, /0s/, 'reduced-motion preference removes Dock transition');
     await movePointer(720, 500);
     await waitFor(async () => (await dockState()).opacity === '0', 'auto-hidden dock starts closed');
     await movePointer(720, 905);
     await sleep(90);
-    await recordDockPointer('slow path y=905 (edge)', 90);
+    await recordDockPointer('slow path y=905 (edge)', 'mouse', 90);
     await movePointer(720, 899);
     await sleep(90);
-    await recordDockPointer('slow path y=899', 90);
+    await recordDockPointer('slow path y=899', 'mouse', 90);
     await movePointer(720, 889);
     await sleep(90);
-    await recordDockPointer('slow path y=889', 90);
+    await recordDockPointer('slow path y=889', 'mouse', 90);
     await movePointer(720, 873);
     await sleep(90);
-    await recordDockPointer('slow path y=873', 90);
+    await recordDockPointer('slow path y=873', 'mouse', 90);
     await movePointer(720, 860);
     await assertDockVisible('slow bottom-edge-to-Dock pointer path remains open with reduced motion');
-    await recordDockPointer('slow path y=860 (Dock center)', 90);
+    await recordDockPointer('slow path y=860 (Dock center)', 'mouse', 90);
     await movePointer(720, 600);
     await waitFor(async () => (await dockState()).opacity === '0', 'Dock hides again after pointer leaves');
-    await recordDockPointer('slow path leave y=600 (hidden)', 520);
+    await recordDockPointer('slow path leave y=600 (hidden)', 'mouse', 520);
 
     const firstDockButton = await cdp.evaluate("document.querySelector('nav.dock .dock-item').focus(); getComputedStyle(document.querySelector('nav.dock')).opacity");
     assert.equal(firstDockButton, '1', 'keyboard focus reveals the auto-hidden Dock');
@@ -412,19 +427,73 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='false'"), 'reduced motion turned off for animation check');
     assert.match((await dockState()).duration, /0\.42s/, 'Dock uses the slower 420ms transition');
     await movePointer(720, 500);
+    await waitFor(async () => (await dockState()).opacity === '0', 'full-motion Dock starts closed');
+    for (const [y, label] of [[905, 'edge'], [899, 'gap'], [889, 'gap'], [873, 'approach'], [860, 'center']]) {
+      await movePointer(720, y);
+      await sleep(90);
+      await recordDockPointer(`full-motion slow path y=${y} (${label})`, 'mouse', 90);
+    }
+    await assertDockVisible('full-motion 90ms step path reaches Dock hover target');
+    await movePointer(720, 600);
+    await waitFor(async () => (await dockState()).opacity === '0', 'full-motion slow path hides after leaving');
+    await recordDockPointer('full-motion slow path leave y=600 (hidden)', 'mouse', 940);
+
+    // Re-enter before the hide grace expires to ensure a previous leave timer cannot
+    // retract a Dock that has been entered again.
+    await movePointer(720, 905);
+    await sleep(90);
+    await movePointer(720, 600);
+    await sleep(250);
+    await movePointer(720, 905);
+    await sleep(90);
+    await movePointer(720, 860);
+    await assertDockVisible('re-entering during hide grace cancels the old timer');
+    await sleep(600);
+    await assertDockVisible('Dock stays open while the pointer remains over it');
+    await recordDockPointer('mouse re-entry after canceled timer y=860', 'mouse', 600);
+    await movePointer(720, 600);
+    await waitFor(async () => (await dockState()).opacity === '0', 're-entered Dock hides after the next leave');
+    await recordDockPointer('mouse second leave y=600 (hidden)', 'mouse', 940);
+
+    // Pen hover follows the same reveal path as a mouse. Touch continues to use the
+    // pre-existing CSS edge hover behavior and is excluded from the JS grace timer.
+    await movePointer(720, 905, 'pen');
+    await sleep(90);
+    await movePointer(720, 860, 'pen');
+    await assertDockVisible('pen pointer reveals Dock');
+    await recordDockPointer('pen path y=860 (Dock center)', 'pen', 90);
+    await movePointer(720, 600, 'pen');
+    await waitFor(async () => (await dockState()).opacity === '0', 'pen-leave Dock returns to hidden state');
+    await recordDockPointer('pen leave y=600 (hidden)', 'pen', 940);
+
+    await cdp.call('Emulation.setTouchEmulationEnabled', {enabled: true, maxTouchPoints: 1});
+    await cdp.call('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x: 720, y: 905, id: 1}]});
+    await sleep(90);
+    const touchDockState = await dockState();
+    await recordDockPointer('touch at y=905 (existing edge CSS behavior)', 'touch', 90);
+    assert.equal(touchDockState.pointerActive, false, 'touch input does not start the mouse/pen hide timer');
+    assert.equal(touchDockState.opacity, '0', 'touch input preserves the existing auto-hidden mobile behavior');
+    await cdp.call('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
+    await cdp.call('Emulation.setTouchEmulationEnabled', {enabled: false});
+    await movePointer(720, 600);
+
+    // Direct, fast mouse entry remains supported after repeated hover/timer changes.
+    await movePointer(720, 500);
+    await waitFor(async () => (await dockState()).opacity === '0', 'fast-entry Dock starts closed');
     await movePointer(720, 905);
     await movePointer(720, 860);
     await assertDockVisible('fast edge-to-center pointer entry reveals Dock');
-    await recordDockPointer('fast path y=860 (Dock center)', 0);
+    await recordDockPointer('fast path y=860 (Dock center)', 'mouse', 0);
     await movePointer(720, 600);
     await waitFor(async () => (await dockState()).opacity === '0', 'fast-entry Dock returns to auto-hidden state');
-    await recordDockPointer('fast path leave y=600 (hidden)', 520);
-    const verificationRoot = path.resolve(appRoot, '..', '..', 'runtime', 'verification', 'issue-75');
-    await fs.mkdir(verificationRoot, {recursive: true});
-    await fs.writeFile(
-      path.join(verificationRoot, 'dock-hover-path.json'),
-      `${JSON.stringify({browser: 'Chrome/Chromium via CDP', viewport: '1440x913', trace: dockPointerTrace}, null, 2)}\n`,
-    );
+    await recordDockPointer('fast path leave y=600 (hidden)', 'mouse', 940);
+
+    await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"Dock 自动隐藏\"]').click()");
+    await waitFor(async () => !(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')")) && (await dockState()).opacity === '1', 'turning auto-hide off shows Dock');
+    await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"Dock 自动隐藏\"]').click()");
+    await waitFor(async () => (await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')")) && (await dockState()).opacity === '0', 'turning auto-hide back on starts hidden without stale pointer state');
+    await recordDockPointer('auto-hide off then on while pointer is away', 'mouse', 420);
+    await persistDockTrace(null);
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"减少动态效果\"]').click()");
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='true'"), 'reduced motion preference restored');
     await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 900, deviceScaleFactor: 1, mobile: false});
