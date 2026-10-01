@@ -153,6 +153,19 @@ def project_events(forgejo, config, reconcile=False):
     )
     for pr in pulls:
         number, head = pr["number"], pr["head"]["sha"]
+        if pr["state"] != "open":
+            # Forgejo keeps branch references live even on historical merged PRs.
+            # Later base/checkpoint pushes cannot reopen maintenance of those heads.
+            yield (
+                f"pr:{number}",
+                {
+                    "number": number,
+                    "state": pr["state"],
+                    "merged": pr["merged"],
+                    "merge_commit_sha": pr.get("merge_commit_sha"),
+                },
+            )
+            continue
         # Historical closed PRs are reconciled without waking on mere checkpoint pushes.
         comments = forgejo.pages(f"/issues/{number}/comments")
         reviews = forgejo.pages(f"/pulls/{number}/reviews")

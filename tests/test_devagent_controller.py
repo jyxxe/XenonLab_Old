@@ -131,3 +131,27 @@ def test_checkpoint_push_repository_timestamp_does_not_wake_prs():
     forgejo.updated = "checkpoint"
     after = list(controller.project_events(forgejo, {"identity": "devagent-maintainer"}))
     assert before == after
+
+
+def test_closed_pr_live_branch_references_do_not_wake_history():
+    class Fake:
+        head = "a" * 40
+
+        def api(self, method, path):
+            return [
+                {
+                    "number": 1,
+                    "head": {"sha": self.head},
+                    "state": "closed",
+                    "merged": True,
+                    "merge_commit_sha": "c" * 40,
+                }
+            ]
+
+        def pages(self, path):
+            return []
+
+    forgejo = Fake()
+    before = list(controller.project_events(forgejo, {"identity": "devagent-maintainer"}))
+    forgejo.head = "b" * 40
+    assert before == list(controller.project_events(forgejo, {"identity": "devagent-maintainer"}))
