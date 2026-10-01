@@ -136,6 +136,7 @@ export function Dock({
         onPointerEnter={revealForPointer}
         onPointerLeave={schedulePointerHide}
       >
+        <div className="dock-inner">
         <button type="button" className="dock-item" title="LaunchPad" onClick={onToggleLaunchPad}>
           <span className="dock-icon" aria-hidden="true">▦</span>
           <span className="dock-label">LaunchPad</span>
@@ -201,6 +202,7 @@ export function Dock({
             ))}
           </div>
         )}
+        </div>
       </nav>
       {context && <ContextMenu x={context.x} y={context.y} items={contextItems(context.appId)} onClose={() => setContext(null)} />}
     </>
