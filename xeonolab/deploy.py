@@ -60,8 +60,8 @@ def create_app(settings=None):
         )
 
     def codex(actor):
-        if actor.kind != "codex":
-            raise APIError(403, "CODEX_REQUIRED", "only a verified Codex identity may deploy")
+        if actor.kind not in ("codex", "devagent"):
+            raise APIError(403, "MAINTAINER_REQUIRED", "verified Codex or DevAgent maintainer identity required")
 
     def unresolved(db):
         return db.execute(

@@ -1,0 +1,23 @@
+[Unit]
+Description=XeonoLab incremental autonomous maintainer check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=devagent
+Group=devagent
+WorkingDirectory=/var/lib/devagent/checkout
+Environment=HOME=/var/lib/devagent
+ExecStart=/usr/local/libexec/devagent-controller
+TimeoutStartSec=35min
+CPUQuota=200%
+MemoryHigh=5G
+MemoryMax=6G
+TasksMax=256
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/devagent /var/log/devagent /var/lib/devagent-privileged
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

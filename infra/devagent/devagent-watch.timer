@@ -1,0 +1,11 @@
+[Unit]
+Description=Check relevant Forgejo changes every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+RandomizedDelaySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

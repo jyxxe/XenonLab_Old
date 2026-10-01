@@ -18,6 +18,7 @@ def settings(tmp_path):
             "alice": {"sub": "alice", "scope": SCOPES, "agent_kind": "codex"},
             "bob": {"sub": "bob", "scope": SCOPES, "agent_kind": "codex"},
             "opencode": {"sub": "opencode", "scope": SCOPES, "agent_kind": "opencode"},
+            "devagent": {"sub": "devagent", "scope": SCOPES, "agent_kind": "devagent"},
             "admin": {
                 "sub": "admin",
                 "scope": SCOPES + " xelibrary:admin deploy:approve hf-cache:admin",

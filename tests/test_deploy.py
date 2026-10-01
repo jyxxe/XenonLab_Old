@@ -61,3 +61,27 @@ def test_lease_exclusion_and_identity(settings):
             "INSERT INTO deployments VALUES('d',?,?,?,'deploying')", (rid, winner["holder"], winner["epoch"])
         )
     assert acquire("alice").status_code == 409
+
+
+def test_dedicated_maintainer_identity_uses_same_exclusive_lease(settings):
+    client = TestClient(create_app("deploy-gateway", settings))
+    rid = release(client)
+    lease = client.post(
+        "/api/v1/deploy/lease/acquire",
+        headers=auth("devagent"),
+        json={"agent_id": "devagent", "release_id": rid},
+    )
+    assert lease.status_code == 200
+    lease = lease.json()["data"]
+    assert (
+        client.post(
+            "/api/v1/deploy/lease/acquire",
+            headers=auth("alice"),
+            json={"agent_id": "alice", "release_id": rid},
+        ).status_code
+        == 409
+    )
+    assert (
+        client.post(f"/api/v1/deploy/lease/{lease['lease_id']}/release", headers=auth("devagent")).status_code
+        == 200
+    )

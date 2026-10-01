@@ -1,0 +1,2 @@
+# Only the fixed stdin protocol is permitted. No arguments, environment preservation or shell.
+devagent ALL=(root) NOPASSWD: /usr/local/libexec/devagent-privileged ""

@@ -2367,7 +2367,7 @@ codex-release
 |---|---:|---:|---:|---:|---:|
 | Codex Dev | yes | own branch | yes | yes | no |
 | OpenCode | yes | own branch | yes | yes | no |
-| DevAgent | limited | no | no | yes | no |
+| DevAgent autonomous maintainer | yes | own branch | write/review/merge | yes | **protected helper + lease required** |
 | Library Agent | source optional | no | no | limited | no |
 | Codex Release | yes | no/limited | read | read | **lease required** |
 
@@ -2377,7 +2377,7 @@ codex-release
 
 目标：
 
-> 所有发布由 Codex 完成，但同一时刻只有一个 Codex 能获得生产发布能力。
+> 发布由验证过的 Codex 或专用 DevAgent maintainer 身份通过 Deploy Gateway 完成；任意时刻只有一个有效 holder。
 
 Agent 永远不直接获得长期：
 
@@ -2416,7 +2416,7 @@ POST /api/v1/deploy/lease/acquire
 
 服务端验证：
 
-- identity 是 Codex
+- identity 是 Codex 或专用 DevAgent maintainer（签名 agent_kind=devagent，仍需 deploy:execute scope）
 - release 已通过策略
 - 当前无有效 holder
 - 当前无未解决 deployment state
@@ -3170,7 +3170,7 @@ fix/issue-123
 
 # 75. Codex 发布规则
 
-生产发布只允许 Codex 身份。
+生产发布允许 Codex 和专用 DevAgent maintainer 身份，统一使用独占租约与受保护执行器。
 
 但不是：
 
@@ -3182,7 +3182,7 @@ fix/issue-123
 
 ```text
 任意时刻
-最多一个 Codex
+最多一个 Codex / DevAgent maintainer
 持有短期 deploy lease
 ```
 
@@ -3365,6 +3365,10 @@ packages/auth-client
 ---
 
 # 84. Phase 7 — DevAgent
+
+DevAgent V1 的定位为 autonomous project maintainer，运行在 VM111 的独立 Unix 用户上，使用 OpenCode CLI 和 `opencode-go/deepseek-v4.1-flash`。现有 triage/work API 保留；增量 watcher、reconciliation timer、SQLite 去重、人工 CLI、Forgejo helper 和 root-owned deployment/infrastructure helper 承担自主维护。它可开发、测试、commit/push、PR write/review/merge 和指定 SHA 部署。一般 OpenCode Harness 的旧生产权限限制仍保留；专用 maintainer 通过签名身份和受保护接口获得权限。
+
+验收和权限交接必须基于实际运行证据，不能以配置存在代替完成。见 `docs/runbooks/devagent-maintainer.md`。
 
 实现：
 
@@ -3828,7 +3832,7 @@ docs/adr/ADR-xxxx-*.md
 7. Forgejo 公开完整项目源代码和 Issues。
 8. DevAgent 可以自动分类 / 去重 / 关联 Issues。
 9. Codex 与 OpenCode 可同时开发。
-10. 只有 Codex 身份可以请求生产 deploy lease。
+10. 只有验证过的 Codex 或专用 DevAgent maintainer 身份可以请求生产 deploy lease。
 11. 任意时刻只有一个有效 deploy lease。
 12. 发布、回滚、ACL、定理晋升均可审计。
 13. fnOS 在 AI / Web / Agent 全部停机时仍可独立访问。
@@ -3881,6 +3885,6 @@ Agent 通过 API 工作，不直接获得基础设施超级权限。
 
 ### 发布边界
 
-开发可以多 Agent 并行；生产发布始终通过 Deploy Gateway，并且只有一个 Codex 在某一时刻持有部署能力。
+开发可以多 Agent 并行；生产发布始终通过 Deploy Gateway，并且任意时刻只有一个 Codex / DevAgent maintainer 持有有效部署租约。
 
 只要这四条边界不被破坏，后续无论增加 GPU、SSD、第二台 PVE、更多 Agent 或更大的知识库，都可以在不推翻系统的前提下继续扩展。

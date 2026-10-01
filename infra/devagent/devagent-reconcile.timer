@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile Forgejo project state every thirty minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=30min
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

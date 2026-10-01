@@ -397,7 +397,7 @@ def route_group(request, actor):
         )
     ) or path.endswith("/schema"):
         return "admin"
-    return "agent" if actor.kind in {"agent", "codex", "opencode"} else "interactive"
+    return "agent" if actor.kind in {"agent", "codex", "opencode", "devagent"} else "interactive"
 
 
 def enforce_rate_limit(request, actor):
