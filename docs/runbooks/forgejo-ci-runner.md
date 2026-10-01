@@ -20,7 +20,8 @@ token, environment and trusted CA bundle under /etc/forgejo-runner are managed
 by root:forgejo-runner; directory 0750 and files 0640. Install the service from
 infra/forgejo/forgejo-runner.service in /etc/systemd/system as root:root 0644;
 daemon-reload and validate on VM 111. Starting/enabling is a separate operator
-step after prerequisites are ready; the daemon is currently stopped.
+step after prerequisites are ready. It was enabled and started on 2026-10-01
+after project DNS repair; actual workflow acceptance remains pending.
 
 Config uses server.connections with token_url pointing to the protected file,
 exact LAN HTTPS and trusted CA bundle; insecure=false. Capacity is 1 and job
@@ -41,12 +42,28 @@ general network cause. See the [Go compatibility reference](https://go.dev/doc/g
 and [Forgejo runner guide](https://forgejo.org/docs/v16.0/admin/actions/installation/binary/).
 
 The temporary SSH reverse proxy was terminated on 2026-10-01; VM 111 loopback
-port 17897 was confirmed to have no listener, and forgejo-runner remained
-inactive. It must not become the production CI dependency. #87 requires
+port 17897 was confirmed to have no listener. It must not become the production
+CI dependency. #87 requires
 independent NetworkServer egress, constrained access,
 TLS/DNS handling, startup/health evidence and actual CI verification after the
 workstation tunnel stops. A cached image alone does not satisfy action/npm/uv/
 Chromium download requirements. #82 remains open until actual execution.
+
+The upstream router returned an incorrect npm address (141.193.154.210), causing
+hostname verification to fail. NetworkServer 105 now forwards public DNS to
+1.1.1.1 and 8.8.8.8 while retaining xenon.lan locally. VM111's persistent netplan
+and runtime resolver use 192.168.0.105; rootless containers use the same resolver.
+Strict TLS requests to npm and OpenCode Go returned HTTP 200 after the repair.
+The temporary OpenCode hosts pin was removed. Keep DNS backups outside dnsmasq's
+configuration include directory, which can load files without a .conf extension.
+
+Job containers need the project's public LAN CA to fetch the repository.
+The reviewed runner configuration mounts only `/etc/forgejo-runner/ca-bundle.crt`
+read-only at the same container path and sets SSL_CERT_FILE, GIT_SSL_CAINFO and
+NODE_EXTRA_CA_CERTS. Arbitrary workflow host volumes remain denied; credentials
+and runtime sockets are not mounted. See the nonsecret runner configuration
+example. DNS/CA repair and starting the daemon do not prove CI passed: inspect
+the exact-head jobs before merging.
 
 ## Operational acceptance
 
