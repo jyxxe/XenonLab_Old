@@ -222,6 +222,7 @@ def runtime_environment(config):
             "OPENCODE_CONFIG_CONTENT": json.dumps(policy),
             "OPENCODE_DISABLE_PROJECT_CONFIG": "true",
             "OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
+            "OPENCODE_DISABLE_MODELS_FETCH": "true",
             "OPENCODE_DISABLE_AUTOUPDATE": "true",
             "OPENCODE_DISABLE_CLAUDE_CODE": "true",
             "OPENCODE_DISABLE_LSP_DOWNLOAD": "true",
