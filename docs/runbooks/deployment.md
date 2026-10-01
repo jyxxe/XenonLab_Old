@@ -1,5 +1,15 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #73 Forgejo claim 同步及 `assignees: null` 修复已上线。代码 commit
+`b0e56a9d60061f234451c9bbeeb315b8ad838553`，Deploy Gateway release
+`add884bb-6a4f-4ca1-9372-936f23cd9c08` / deployment `85480820-d168-4fac-ba61-997db8b3d828`
+状态 `completed`，租约已释放。发布前 DevAgent `work.sqlite` 在线备份
+`runtime/backups/2026-10-01-issue73/work-predeploy.sqlite` 的 `integrity_check` 为 `ok`，权限
+`0600`；本次无数据库 schema 迁移。279 项后端测试、修改文件 Ruff、OpenAPI 导出及 diff check
+通过。五个服务 readiness 全为 200，VM 101/104/106/107/111 均指向该 commit。生产
+`general-agent-dev-01` 成功 claim Issue #73；Forgejo `general-agent` assignee 与 epoch 6 评论均已
+核实。Issue 经生产验收后关闭，webhook 将 Work 状态推进为 completed（最终 epoch 7）。
+
 2026-10-01 更新：Issue #71 System 概览失败反馈与重试已通过 Deploy Gateway 发布。代码 commit
 `44e5d1a2b2875b122f70eb27daa9afbe6d83361f`，release `85b605ea-46ba-4a26-bcd5-26d1caa79d75`，
 deployment `33a0af38-94e2-4a60-8d1a-3b6248c281e4` 状态 `completed`，租约已释放。此增量只改前端，
