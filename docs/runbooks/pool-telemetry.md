@@ -2,9 +2,10 @@
 
 This is the local implementation for plan.md §72. It collects one explicitly configured physical ZFS
 pool on the PVE host and publishes its current byte counts to the HF-cache VM (VM 103 in the existing
-inventory). The receiver writes the HF-cache metrics file; it does not query PVE APIs or run commands
-on the PVE host. Read-only PVE API inspection on 2026-10-01 confirmed the pool and host addresses
-below. The receiver port and HMAC secret still need provisioning before production activation.
+inventory). The receiver writes the pool metrics file, and the HF-cache API reads that same file
+through its root-fed storage adapter; the receiver does not query PVE APIs or run commands on the PVE
+host. Read-only PVE API inspection on 2026-10-01 confirmed the pool and host addresses below. The
+receiver port and HMAC secret still need provisioning before production activation.
 
 ## Confirmed production mapping
 
@@ -23,6 +24,8 @@ The deployment values established by that read-only check are:
 | `POOL_TELEMETRY_BIND_ADDRESS` | `192.168.0.103` |
 | `POOL_TELEMETRY_RECEIVER_URL` | `http://192.168.0.103:<selected-port>/api/v1/pool-metrics` |
 | `POOL_METRICS_FILE` | `/var/lib/xeonolab/pool-telemetry/physical-pool.json` |
+| HF-cache consumer file | `/var/lib/xeonolab/pool-telemetry/physical-pool.json` |
+| `HF_CACHE_EXPECTED_POOL` | `aux-10t` |
 
 Select a receiver port that is confirmed unused on VM 103. Generate a new random HMAC secret and
 install it independently on both hosts with root-only access; do not reuse any API credential.
@@ -61,6 +64,9 @@ Keep all values deployment-specific; do not copy a sample pool name or secret fr
 | `POOL_TELEMETRY_PORT` | — | Required TCP port, 1–65535. |
 | `POOL_TELEMETRY_HMAC_SECRET` | Required shared random secret, at least 32 bytes. | Same secret, installed independently with root-only access. |
 | `POOL_METRICS_FILE` | — | Required absolute path under `/var/lib/xeonolab/pool-telemetry/`, for example `physical-pool.json`. |
+| `HF_CACHE_POOL_METRICS_FILE` | — | Required on the HF-cache API process; use the same absolute path as the receiver's `POOL_METRICS_FILE`. |
+| `HF_CACHE_EXPECTED_POOL` | — | Required on the HF-cache API process; set to the exact physical pool name `aux-10t`. |
+| `HF_CACHE_POOL_METRICS_MAX_AGE_SECONDS` | — | Recommended explicit value `120`; the consumer rejects older samples. |
 
 The timestamp and HMAC signature cover the HTTP method, fixed endpoint path, timestamp header, and
 exact request body. The receiver never logs request bodies or headers. The collector's only subprocess
@@ -94,8 +100,20 @@ configured VM 103 address and port. Do not expose the receiver through Caddy, th
 any general application gateway. Keep normal management access rules separate. Verify the installed
 rules from the firewall configuration; this change does not install or activate production rules.
 
-After installing the scripts and units, install the required environment values, reload systemd, and
-enable the receiver service and PVE timer. Check service status and inspect the metrics file locally;
-do not treat this source change as production acceptance. Pool and address selection, secret
+Keep the `HF_CACHE_*` settings in the existing HF-cache API service configuration on VM 103, separate
+from the receiver's environment file. The receiver's environment contains the HMAC secret; do not
+load that file into the application process. Set `HF_CACHE_POOL_METRICS_FILE` to the same file path
+as `POOL_METRICS_FILE`, set `HF_CACHE_EXPECTED_POOL=aux-10t`, and set the maximum sample age to 120
+seconds. Use the service's existing configuration and deployment mechanism rather than inventing a
+new application unit.
+
+After installing the scripts and units, install the receiver and collector environment values,
+reload systemd, and enable the receiver service and PVE timer. Confirm the receiver has written a
+fresh root-owned metrics file before enabling the HF-cache consumer configuration. Then apply the
+HF-cache environment settings and restart its existing service through the normal deployment
+procedure. Verify that the HF-cache storage/readiness API reports the expected physical pool,
+capacity, sample time, and watermark; verify a stale/missing sample fails closed using local tests,
+not by corrupting production state. Check service status and inspect the metrics file locally; do
+not treat this source change as production acceptance. Pool and address selection, secret
 provisioning/rotation, firewall activation, and confirmation that the chosen pool is the physical
 backing device all remain operator deployment work.
