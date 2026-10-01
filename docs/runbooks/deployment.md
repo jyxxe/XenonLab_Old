@@ -1,5 +1,11 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 运维记录：查看发布执行器参数时误调用了无参数解析支持的 `scripts/execute_release.py --help`，导致本机
+`release.json` 中现有桌面 release 被重新激活。目标仍是已部署的 commit
+`51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `fda082c8-4557-4efb-8e1d-3f339e7e73cb`、deployment
+`8ad95f57-f985-403d-a358-e6c4c9dbea41` 状态均为 `completed`。没有切换到本轮候选代码，也没有 API、数据库 schema
+或生产数据变更。Deploy Gateway 已确认没有活动租约；桌面 LAN 与公网 `/health/ready` 均返回 200。
+
 2026-10-01 更新：Issue #71 System Dashboard 知识表首次加载状态已通过 Deploy Gateway 上线。部署提交
 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`（功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`），
 release `da941881-eba2-4d91-aa34-74baff428470`，deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3`
