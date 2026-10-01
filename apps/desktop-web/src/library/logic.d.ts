@@ -38,6 +38,7 @@ export type SchemaChange = {
 export function classifySchemaChange(current?: Column[], draft?: Column[]): SchemaChange;
 export function parseFieldFilters(text: string): {filters: Record<string, string>; errors: string[]};
 export function searchWarnings(meta?: Record<string, unknown>): string[];
+export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;
 export function indexStatusFromJobs(jobs?: Job[]): {state: string; detail: string; latest?: Job};
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];

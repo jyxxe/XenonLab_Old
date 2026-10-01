@@ -1,6 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Input, Skeleton, Tabs, Textarea} from '../design-system/primitives';
-import {describeError, parseFieldFilters, searchWarnings} from './logic.js';
+import {describeError, isKeywordResult, parseFieldFilters, searchWarnings} from './logic.js';
 import type {SearchHit, SearchMeta, SearchMode} from './types';
 
 export function SearchView({
@@ -153,7 +153,7 @@ export function SearchView({
                 <div className="library-result-head">
                   <strong>{hit.snippet?.split('\n')[0]?.slice(0, 80) || hit.row_id}</strong>
                   <span className="library-result-score" title={`score ${hit.score}`}>
-                    {hit.score_type === 'sqlite_fts_bm25' ? 'Keyword' : 'Semantic'} · {hit.score.toFixed(3)}
+                    {isKeywordResult(hit.score_type) ? 'Keyword' : 'Semantic'} · {hit.score.toFixed(3)}
                   </span>
                 </div>
                 <div className="library-result-meta">

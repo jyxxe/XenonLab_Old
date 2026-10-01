@@ -1514,6 +1514,16 @@ POST /api/v1/search/hybrid
 POST /api/v1/search/text
 ```
 
+The legacy English FTS5/BM25 index remains unchanged. A separate CJK-tokenized
+FTS index supports unspaced Chinese keyword substrings. CJK queries also run a
+bounded literal scan over readable active rows to cover legacy `.xl` files and
+merge/deduplicate those hits with indexed results. ACL, path and field filters
+are rechecked against current `.xl` data. When the scan budget leaves rows
+unchecked, the response marks `partial=true` and `approximate=true`; the default
+budget is 5,000 rows (`XELIBRARY_CJK_SCAN_ROWS`, capped at 100,000). See
+[ADR 0006](docs/adr/0006-xelibrary-cjk-text-search.md) for index migration and
+rollback compatibility.
+
 ## 28.4 image
 
 ```text

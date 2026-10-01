@@ -222,11 +222,15 @@ export function searchWarnings(meta = {}) {
     warnings.push(`还有 ${meta.missing_embeddings} 条记录尚未建立可用的向量索引，结果可能不完整。`);
   }
   if (meta.partial) warnings.push('本次结果标记为部分结果（partial）。');
-  if (meta.approximate) warnings.push('结果来自近似向量检索（approximate），不是精确匹配。');
+  if (meta.approximate) warnings.push('结果包含近似或回退匹配（approximate）。');
   if (meta.index_backend === 'sqlite_exact_bootstrap') {
     warnings.push('当前索引后端为开发用 SQLite 精确引导（sqlite_exact_bootstrap），不是生产向量库。');
   }
   return warnings;
+}
+
+export function isKeywordResult(scoreType) {
+  return typeof scoreType === 'string' && (scoreType.startsWith('sqlite_fts') || scoreType === 'substring_scan');
 }
 
 export const INDEX_STATES = {

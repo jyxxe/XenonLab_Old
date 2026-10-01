@@ -38,6 +38,64 @@ TYPES = {
     "theorem_ref",
 }
 
+# FTS5's unicode61 tokenizer treats an unspaced CJK sentence as one token. Keep
+# the original index untouched for rollback compatibility and maintain a second,
+# additive index whose CJK characters are separated into searchable tokens.
+CJK_RANGES = (
+    (0x3040, 0x30FF),  # Hiragana / Katakana
+    (0x3400, 0x4DBF),  # CJK extension A
+    (0x4E00, 0x9FFF),  # CJK unified ideographs
+    (0xF900, 0xFAFF),  # CJK compatibility ideographs
+    (0xAC00, 0xD7AF),  # Hangul syllables
+)
+
+
+def contains_cjk(text):
+    return any(any(start <= ord(char) <= end for start, end in CJK_RANGES) for char in text)
+
+
+def cjk_fts_body(values):
+    if isinstance(values, str):
+        values = [values]
+    text = " ".join(str(value) for value in values)
+    segmented = []
+    for char in text:
+        if contains_cjk(char):
+            if segmented and not segmented[-1].isspace():
+                segmented.append(" ")
+            segmented.extend((char, " "))
+        else:
+            segmented.append(char)
+    return " ".join("".join(segmented).split())
+
+
+def cjk_fts_query(query):
+    clauses = []
+    for term in query.split():
+        # The serialized body is already tokenized: CJK characters are
+        # separated, while contiguous Latin text remains one unicode61 token.
+        tokens = cjk_fts_body(term).split()
+        if tokens:
+            clauses.append('"' + " ".join(token.replace('"', '""') for token in tokens) + '"')
+    return " AND ".join(clauses)
+
+
+def ensure_cjk_fts(db):
+    db.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS __xl_fts_cjk "
+        "USING fts5(row_id UNINDEXED,body, tokenize='unicode61')"
+    )
+
+
+def cjk_fts_exists(db):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE name='__xl_fts_cjk'").fetchone() is not None
+
+
+def index_cjk_row(db, row_id, values):
+    ensure_cjk_fts(db)
+    db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (row_id,))
+    db.execute("INSERT INTO __xl_fts_cjk VALUES(?,?)", (row_id, cjk_fts_body(values)))
+
 
 def now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -419,6 +477,7 @@ def create_app(settings=None):
                     CREATE TABLE __xl_stats(key TEXT PRIMARY KEY,value TEXT);
                     CREATE TABLE __xl_idempotency(key TEXT PRIMARY KEY,digest TEXT,row_id TEXT);
                     CREATE VIRTUAL TABLE __xl_fts USING fts5(row_id UNINDEXED,body, tokenize='unicode61');
+                    CREATE VIRTUAL TABLE __xl_fts_cjk USING fts5(row_id UNINDEXED,body, tokenize='unicode61');
                     """)
                     db.execute(
                         "INSERT INTO __xl_meta VALUES(?,?,?,?,?,?,?,?)",
@@ -619,11 +678,18 @@ def create_app(settings=None):
                 (now(),),
             )
             db.execute("DELETE FROM __xl_fts")
+            ensure_cjk_fts(db)
+            db.execute("DELETE FROM __xl_fts_cjk")
             for raw in db.execute("SELECT * FROM data WHERE _deleted_at IS NULL"):
                 row = decode(raw)
+                body = " ".join(str(v) for v in row["values"].values())
                 db.execute(
                     "INSERT INTO __xl_fts VALUES(?,?)",
-                    (row["_row_id"], " ".join(str(v) for v in row["values"].values())),
+                    (row["_row_id"], body),
+                )
+                db.execute(
+                    "INSERT INTO __xl_fts_cjk VALUES(?,?)",
+                    (row["_row_id"], cjk_fts_body(row["values"].values())),
                 )
             revision = metadata(db)["table_revision"]
         audit(actor, "schema.changed", tid)
@@ -682,6 +748,7 @@ def create_app(settings=None):
                 db.execute("INSERT INTO __xl_idempotency VALUES(?,?,?)", (idempotency_key, digest, rid))
             change(db, row, "create")
             db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+            index_cjk_row(db, rid, values.values())
         return JSONResponse(response(request, row), status_code=201, headers={"ETag": etag(1)})
 
     @app.get("/api/v1/tables/{tid}/rows")
@@ -734,6 +801,7 @@ def create_app(settings=None):
             change(db, row, "update")
             db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
             db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+            index_cjk_row(db, rid, values.values())
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
     @app.delete("/api/v1/tables/{tid}/rows/{rid}")
@@ -759,6 +827,8 @@ def create_app(settings=None):
                     ("__xl_fts", "row_id"),
                 ]:
                     db.execute(f"DELETE FROM {name} WHERE {column}=?", (rid,))
+                if cjk_fts_exists(db):
+                    db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (rid,))
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name='__xl_vectors'").fetchone():
                     db.execute("DELETE FROM __xl_vectors WHERE row_id=?", (rid,))
                 db.execute("UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?", (now(),))
@@ -773,6 +843,8 @@ def create_app(settings=None):
             db.execute("UPDATE data SET _deleted_at=?,_revision=_revision+1 WHERE _row_id=?", (now(), rid))
             change(db, load_row(db, rid, True), "delete")
             db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
+            if cjk_fts_exists(db):
+                db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (rid,))
         audit(actor, "row.deleted", f"{tid}:{rid}")
         return response(request, {"deleted": True})
 
@@ -823,6 +895,7 @@ def create_app(settings=None):
             change(db, row, "restore")
             db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
             db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(v) for v in values.values())))
+            index_cjk_row(db, rid, values.values())
         audit(actor, "row.restored", f"{tid}:{rid}")
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
@@ -1244,13 +1317,15 @@ def create_app(settings=None):
             raise APIError(422, "EMPTY_QUERY", "query is empty")
         with connect(catalogue) as db:
             tables = [dict(t) for t in db.execute("SELECT * FROM tables ORDER BY id")]
-        results = []
+        results_by_row = {}
+        eligible_tables = []
         for table in tables:
             if not path_matches(table["path"], body.path):
                 continue
             permits = request_acl(actor, table)
             if not permits("read"):
                 continue
+            eligible_tables.append((table, permits))
             with table_connect(table["id"]) as db:
                 for hit in db.execute(
                     "SELECT row_id,bm25(__xl_fts) AS rank FROM __xl_fts WHERE __xl_fts MATCH ?", (fts_query,)
@@ -1263,20 +1338,118 @@ def create_app(settings=None):
                         continue
                     if any(row["values"].get(k) != v for k, v in body.filters.items()):
                         continue
-                    results.append(
-                        {
+                    results_by_row[(table["id"], hit["row_id"])] = {
+                        "table_id": table["id"],
+                        "row_id": hit["row_id"],
+                        "row_revision": row["_revision"],
+                        "path": table["path"],
+                        "score": -hit["rank"],
+                        "score_type": "sqlite_fts_bm25",
+                        "snippet": " ".join(str(v) for v in row["values"].values())[:240],
+                        "approximate": False,
+                    }
+
+        partial = False
+        if contains_cjk(body.query):
+            # Older .xl files may not yet have the additive CJK index. Scan a
+            # bounded prefix of all readable, path-matched active rows even when
+            # the new index already found results; otherwise mixed-version
+            # libraries silently miss legacy records.
+            try:
+                scan_budget = max(1, min(100_000, int(os.getenv("XELIBRARY_CJK_SCAN_ROWS", "5000"))))
+            except ValueError:
+                scan_budget = 5000
+            remaining = scan_budget
+            partial = False
+            search_terms = [term.casefold() for term in terms]
+
+            # Query the additive index for every eligible table independently
+            # of the legacy-row scan budget. An indexed hit must not disappear
+            # just because an earlier table exhausted that fallback budget.
+            query = cjk_fts_query(body.query)
+            for table, permits in eligible_tables:
+                with table_connect(table["id"]) as db:
+                    if not cjk_fts_exists(db):
+                        continue
+                    for hit in db.execute(
+                        "SELECT row_id,bm25(__xl_fts_cjk) AS rank FROM __xl_fts_cjk WHERE __xl_fts_cjk MATCH ?",
+                        (query,),
+                    ):
+                        key = (table["id"], hit["row_id"])
+                        if key in results_by_row or not permits("read", hit["row_id"]):
+                            continue
+                        try:
+                            row = load_row(db, hit["row_id"])
+                        except APIError:
+                            continue
+                        if any(row["values"].get(k) != v for k, v in body.filters.items()):
+                            continue
+                        current_text = " ".join(str(v) for v in row["values"].values()).casefold()
+                        if not all(term.casefold() in current_text for term in terms):
+                            # A previous binary may have updated the source
+                            # row while leaving this additive index stale.
+                            continue
+                        results_by_row[key] = {
                             "table_id": table["id"],
                             "row_id": hit["row_id"],
                             "row_revision": row["_revision"],
                             "path": table["path"],
                             "score": -hit["rank"],
-                            "score_type": "sqlite_fts_bm25",
+                            "score_type": "sqlite_fts_cjk",
                             "snippet": " ".join(str(v) for v in row["values"].values())[:240],
                             "approximate": False,
                         }
-                    )
+
+            for table_index, (table, permits) in enumerate(eligible_tables):
+                if remaining <= 0:
+                    # One-row lookahead avoids an unbounded COUNT(*) over
+                    # legacy tables while still distinguishing an exact budget
+                    # boundary from an actually incomplete scan.
+                    for later_table, _later_permits in eligible_tables[table_index:]:
+                        with table_connect(later_table["id"]) as db:
+                            if db.execute(
+                                "SELECT 1 FROM data WHERE _deleted_at IS NULL LIMIT 1"
+                            ).fetchone():
+                                partial = True
+                                break
+                    break
+                with table_connect(table["id"]) as db:
+                    scan_rows = db.execute(
+                        "SELECT * FROM data WHERE _deleted_at IS NULL ORDER BY _row_id LIMIT ?",
+                        (remaining + 1,),
+                    ).fetchall()
+                    if len(scan_rows) > remaining:
+                        partial = True
+                    for raw in scan_rows[:remaining]:
+                        row = decode(raw)
+                        key = (table["id"], row["_row_id"])
+                        if key in results_by_row or not permits("read", row["_row_id"]):
+                            continue
+                        if any(row["values"].get(k) != v for k, v in body.filters.items()):
+                            continue
+                        combined = " ".join(str(v) for v in row["values"].values()).casefold()
+                        if all(term in combined for term in search_terms):
+                            results_by_row[key] = {
+                                "table_id": table["id"],
+                                "row_id": row["_row_id"],
+                                "row_revision": row["_revision"],
+                                "path": table["path"],
+                                "score": 0,
+                                "score_type": "substring_scan",
+                                "snippet": " ".join(str(v) for v in row["values"].values())[:240],
+                                "approximate": True,
+                            }
+                    remaining -= min(remaining, len(scan_rows))
+                    if partial:
+                        break
+        results = list(results_by_row.values())
         results.sort(key=lambda x: x["score"], reverse=True)
-        return response(request, results[: body.limit], partial=False)
+        return response(
+            request,
+            results[: body.limit],
+            partial=partial,
+            approximate=partial or any(hit["approximate"] for hit in results[: body.limit]),
+        )
 
     snapshot_ttl = 60
     snapshot_lock = threading.Lock()
