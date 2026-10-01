@@ -1,5 +1,14 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #71 System 概览失败反馈与重试已通过 Deploy Gateway 发布。代码 commit
+`44e5d1a2b2875b122f70eb27daa9afbe6d83361f`，release `85b605ea-46ba-4a26-bcd5-26d1caa79d75`，
+deployment `33a0af38-94e2-4a60-8d1a-3b6248c281e4` 状态 `completed`，租约已释放。此增量只改前端，
+没有 API 或数据库 schema 变更。235 项后端测试（19 项既有临时目录清理警告）、38 项前端测试、
+TypeScript/Vite production build、OpenAPI 导出及 diff check 通过。LAN 五个入口 readiness 均为 200；
+桌面首页为 200，JS/CSS SHA-256 与发布构建一致，未认证 Work API 仍返回预期的 401。此次浏览器
+故障/重试验收使用合成 API；未完成真实登录态浏览器验收。Issue #71 仍开放，完整原生 Forgejo Dashboard
+和其余验收项仍待完成。
+
 2026-10-01 更新：XeLibrary 知识管理 WebUI 及浏览器竞态修复已随 commit
 `f1e9de3eb44795e8666ed0d0df151ba9b2de6edc` 发布；Deploy Gateway release
 `f2c2446a-46cd-4c52-b3dc-779ee2041129` / deployment

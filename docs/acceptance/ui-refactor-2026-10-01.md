@@ -78,3 +78,11 @@ Development 使用可达的 Forgejo 外链，不再启动不存在的内置 Forg
 - 直接 IP 入口首页和认证配置返回 200；通过 `https://192.168.0.101:9443` 完成真实 PKCE、服务端 session exchange、cookie 恢复、授权 API 读取与 logout 撤销。
 - 公网配置与 discovery 返回正确 issuer，但本次自动化公网 PKCE 检查未完成：本机 HTTPX 代理在 Keycloak 登录表单 POST 时超时，直连公网的 TLS 握手也超时。此结果不能证明公网登录失败，也不能作为公网登录通过证据；需在真实浏览器网络路径复测。
 - Issue #71 保持打开。XeLibrary 三栏知识管理、表格/搜索/Query Console、原生 Forgejo Dashboard 和完整公网登录后的浏览器验收尚未完成；本次上线是桌面 Shell 与系统页面的增量发布。
+
+## System 概览错误状态增量（2026-10-01）
+
+- 当索引队列、Harness 工作队列、知识库概览或桌面 readiness 请求失败时，System 概览使用统一错误提示与键盘可操作的“重试”按钮；重试重新读取现有数据源。
+- 合成浏览器验收将 Harness 工作队列请求切换为失败，检查 alert 和重试按钮，再恢复 API 并确认错误消失。
+- 生产 commit `44e5d1a2b2875b122f70eb27daa9afbe6d83361f`；Deploy Gateway release `85b605ea-46ba-4a26-bcd5-26d1caa79d75`；deployment `33a0af38-94e2-4a60-8d1a-3b6248c281e4` completed，租约已释放。
+- 235 项后端测试、38 项前端测试、TypeScript/Vite build、OpenAPI 导出与 diff check 通过。LAN 五个入口 readiness 为 200，桌面 JS/CSS 哈希与构建一致，未认证 Work API 返回 401。
+- 此验收没有使用真实登录态浏览器，不能替代完整桌面视觉和跨服务用户流程；Issue #71 仍开放。
