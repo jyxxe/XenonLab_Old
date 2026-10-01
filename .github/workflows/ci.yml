@@ -1,5 +1,9 @@
 name: verify
-on: [push, pull_request]
+on:
+  push:
+    branches: [feature/platform-v1]
+  pull_request:
+    branches: [feature/platform-v1]
 jobs:
   backend:
     runs-on: ubuntu-latest
