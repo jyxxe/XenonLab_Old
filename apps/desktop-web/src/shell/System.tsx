@@ -1,0 +1,100 @@
+import React, {useEffect, useRef, useState} from 'react';
+import {Badge, Button, EmptyState, ErrorState, Skeleton} from '../design-system/primitives';
+import {Dashboard} from '../Dashboard';
+import type {AppViewProps} from './types';
+
+const sections = [
+  ['overview', '概览'], ['services', '服务'], ['storage', '存储'], ['embedding', 'Embedding'],
+  ['hfcache', 'HF Cache'], ['agents', 'Agents'], ['deployments', '部署'], ['network', '网络'], ['audit', '审计'],
+];
+const statusLabels: Record<string,string> = {queued:'排队',running:'运行中',claimed:'已领取',completed:'已完成',failed:'失败',blocked:'阻塞'};
+const unavailable: Record<string,[string,string]> = {
+  storage:['容量信息尚未接入','知识库表数量不能代表磁盘容量。当前桌面没有磁盘或池水位 API。'],
+  hfcache:['HF Cache 尚未接入桌面','HF Cache 服务使用独立 API；当前桌面没有受控的状态读取入口。'],
+  deployments:['部署状态尚未接入桌面','当前桌面没有发布历史 API。部署完成状态由发布协调器确认。'],
+};
+
+/** Read-only views use existing same-origin API boundaries; unavailable services are explicit. */
+export function System(props: AppViewProps) {
+  const {api,apiPage,openApp} = props;
+  const [tab,setTab] = useState('overview');
+  const [tick,setTick] = useState(0);
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState('');
+  const [rows,setRows] = useState<any[]>([]);
+  const [cursor,setCursor] = useState<string|null>(null);
+  const [loadingMore,setLoadingMore] = useState(false);
+  const [ready,setReady] = useState<{service:string;ready:boolean}|null>(null);
+  const generation=useRef(0);
+  const [online,setOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const change = () => setOnline(navigator.onLine);
+    addEventListener('online',change); addEventListener('offline',change);
+    return () => {removeEventListener('online',change);removeEventListener('offline',change)};
+  },[]);
+
+  useEffect(() => {
+    let active = true;
+    generation.current += 1;
+    setError('');setRows([]);setCursor(null);setReady(null);setLoadingMore(false);
+    const path = tab === 'embedding' ? '/jobs?limit=50' : tab === 'agents' ? '/work?limit=100' : tab === 'audit' ? '/audit?limit=100' : '';
+    if (!path && tab !== 'services') {setLoading(false);return () => {generation.current += 1}}
+    setLoading(true);
+    (async () => {
+      try {
+        if (tab === 'services') {
+          const response = await fetch('/health/ready');
+          const body = await response.json();
+          if (active) setReady({service:body.service || 'desktop-web',ready:response.ok});
+        } else {
+          const me = await api('/users/me');
+          const required = tab === 'agents' ? 'dev:read' : 'xelibrary:admin';
+          if (!me.scopes?.includes(required)) throw new Error(`当前身份需要 ${required} 权限才能查看此页面。`);
+          const page = await apiPage(path);
+          if (active) {setRows(page.data);setCursor(page.meta.next_cursor || null)}
+        }
+      } catch (cause) {if (active) setError(String(cause))}
+      finally {if (active) setLoading(false)}
+    })();
+    return () => {active = false;generation.current += 1};
+  },[tab,tick,api,apiPage]);
+
+  const title = sections.find(section => section[0] === tab)?.[1];
+  const jobView = tab === 'embedding';
+  const rowsView = ['embedding','agents','audit'].includes(tab);
+  const missing = unavailable[tab];
+
+  return <div className="system-app">
+    <nav className="system-sidebar" aria-label="系统分类">
+      <h2>系统状态</h2>
+      {sections.map(([id,label]) => <button type="button" key={id} aria-current={tab===id ? 'page' : undefined} onClick={() => setTab(id)}>{label}</button>)}
+    </nav>
+    <section className="system-content" aria-label={`系统${title}`}>
+      {tab === 'overview' ? <Dashboard apiPage={apiPage} openApp={openApp}/> : <>
+        <header className="app-head"><div><h2>{title}</h2><p>只展示当前可读取的真实状态</p></div><Button disabled={loading} onClick={() => setTick(value => value+1)}>刷新</Button></header>
+        {loading ? <div role="status"><Skeleton height={28}/><Skeleton height={28}/><Skeleton height={28}/></div> : error ? <ErrorState title="状态读取失败" message={error} onRetry={() => setTick(value => value+1)}/> : missing ? <EmptyState title={missing[0]} description={missing[1]}/> : tab==='services' ? <>
+          {ready && <p><Badge tone={ready.ready ? 'success' : 'danger'}>{ready.ready ? 'Ready' : 'Unavailable'}</Badge> {ready.service}</p>}
+          <p className="muted">此探测只检查桌面服务。XeLibrary、Embedding 和外部应用的健康状态没有统一监控 API，不能据此认为所有服务在线。</p>
+        </> : tab==='network' ? <dl className="dev-meta"><div><dt>浏览器连接提示</dt><dd>{online ? '浏览器报告网络可用' : '浏览器报告离线'}</dd></div><div><dt>当前入口</dt><dd>{location.origin}</dd></div><div><dt>服务端网络与 Tunnel</dt><dd>状态读取尚未接入；浏览器提示不能确认 Tunnel 或上游服务健康。</dd></div></dl> : rowsView ? <>
+          {jobView && <p className="muted">索引任务队列不等于模型健康检查；Qwen quality worker 的部署状态没有在此 API 中提供。</p>}
+          {rows.length ? <div className="system-table-scroll"><table className="ds-table"><thead><tr>{tab==='audit' ? <><th>时间</th><th>事件</th><th>操作者</th><th>对象</th></> : <><th>{jobView ? '任务 / 知识表' : 'Issue'}</th><th>状态</th><th>{jobView ? '更新时间' : '持有者'}</th><th>{jobView ? '错误' : '租约'}</th></>}</tr></thead><tbody>
+            {rows.map(row => <tr key={row.id || row.job_id}>{tab==='audit' ? <><td>{row.at ? new Date(typeof row.at==='number' ? row.at*1000 : row.at).toLocaleString() : '—'}</td><td>{row.event}</td><td>{row.actor}</td><td title={row.resource || row.target}>{row.resource || row.target}</td></> : <><td title={jobView ? row.table_id : row.title}>{jobView ? `${row.job_id} · ${row.table_id}` : `#${row.issue_id} ${row.title}`}</td><td><Badge tone={row.status==='failed'||row.status==='blocked' ? 'danger' : row.status==='completed' ? 'success' : 'neutral'}>{statusLabels[row.status] || row.status}</Badge></td><td>{jobView ? row.updated_at || row.created_at || '—' : row.holder || '待领取'}</td><td>{jobView ? row.error || '—' : row.claim_active ? `有效 · epoch ${row.epoch}` : '无有效租约'}</td></>}</tr>)}
+          </tbody></table></div> : <EmptyState title="暂无记录" description="此 API 当前没有返回可见记录。"/>}
+          {cursor && <Button disabled={loadingMore} onClick={async () => {
+            const currentGeneration=generation.current;
+            setLoadingMore(true);
+            try {
+              const prefix=tab==='embedding'?'/jobs?limit=50':tab==='agents'?'/work?limit=100':'/audit?limit=100';
+              const page=await apiPage(`${prefix}&cursor=${encodeURIComponent(cursor)}`);
+              if (generation.current !== currentGeneration) return;
+              setRows(old=>[...old,...page.data.filter((item:any)=>!old.some(previous=>(previous.id||previous.job_id)===(item.id||item.job_id)))]);
+              setCursor(page.meta.next_cursor||null);
+            } catch(cause) {if(generation.current===currentGeneration)setError(String(cause))}
+            finally {if(generation.current===currentGeneration)setLoadingMore(false)}
+          }}>{loadingMore ? '读取中…' : '加载更多'}</Button>}
+        </> : null}
+      </>}
+    </section>
+  </div>;
+}

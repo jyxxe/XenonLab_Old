@@ -309,6 +309,15 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(()=>cdp.evaluate(`window.shellFixture.calls.filter(call=>call.method==='PUT').length>${layoutBefore}`),'layout saves with restore off');
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"恢复上次窗口\"]').click()");
 
+    // System pages expose true missing-data and permission states.
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统状态\"]').click()");
+    await waitFor(()=>cdp.evaluate("Boolean(document.querySelector('.system-app'))"),'System app');
+    await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='存储').click()");
+    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('容量信息尚未接入')"),'Storage unavailable');
+    await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='审计').click()");
+    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('xelibrary:admin')"),'Audit permission denied');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=system] .bar .close').click()");
+
     // Failed settings writes remain visible and are never labelled saved.
     await cdp.evaluate("window.shellFixture.control.failPreferences=true;document.querySelector('button[role=switch][aria-label=\"界面动画\"]').click()");
     await waitFor(()=>cdp.evaluate("document.querySelector('.preference-form [role=status]').innerText.includes('保存失败')"),'preference save failure');

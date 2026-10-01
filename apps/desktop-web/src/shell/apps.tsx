@@ -2,7 +2,7 @@ import React from 'react';
 import {EmptyState} from '../design-system/primitives';
 import {Knowledge} from '../Knowledge';
 import {Work} from '../Work';
-import {Dashboard} from '../Dashboard';
+import {System} from './System';
 import {Settings} from '../Settings';
 import {Development} from './Development';
 import {Issues} from './Issues';
@@ -90,7 +90,7 @@ export function builtinApps(): DesktopApp[] {
       singleton: true,
       dock: true,
       description: '服务、队列与部署状态',
-      component: Dashboard as React.ComponentType<any>,
+      component: System as React.ComponentType<any>,
     },
     {
       id: 'settings',

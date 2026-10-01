@@ -110,7 +110,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
       <article className="mac-card"><header><h3>服务状态</h3></header>
         {notes.health?<p className="muted">{notes.health}</p>:health&&<div className="check-list">
           <div className="status-line"><i className={`status-dot${health.ready?'':' bad'}`}/><span>{health.service}</span><em className="muted">{health.ready?'ready':'不可用'} · {health.latency} ms</em></div>
-          <div className="status-line"><i className={`status-dot${health.ready?'':' bad'}`}/><span>我的索引队列</span><em className="muted">{notes.jobs?'需要管理员权限查看':`${(jobCounts?.queued??jobs.filter(job=>job.status==='queued').length)+(jobCounts?.running??jobs.filter(job=>job.status==='running').length)} 项进行中`}</em></div>
+          <div className="status-line"><i className={`status-dot${notes.jobs?' bad':''}`}/><span>我的索引队列</span><em className="muted">{notes.jobs?'需要管理员权限查看':`${(jobCounts?.queued??jobs.filter(job=>job.status==='queued').length)+(jobCounts?.running??jobs.filter(job=>job.status==='running').length)} 项进行中`}</em></div>
         </div>}
       </article>
     </div>

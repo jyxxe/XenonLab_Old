@@ -224,3 +224,6 @@ Issue #11 Qdrant `fast_text` production integration (2026-10-01): release `e6cb8
 ### Issue #71 桌面 UI/UX 重构增量（本地）
 
 `opencode/issue-71-desktop-ui`（worktree `runtime/agent-worktrees/issue-71-desktop-ui`）交付第一阶段到第四阶段的可验证增量：新增 `design-system/`（tokens、primitives、menu-logic）与 `shell/`（DesktopShell、MenuBar、Dock、LaunchPad、CommandPalette、WindowFrame、IFrameApp、window-manager、内置应用注册表），窗口管理改为纯函数并新增拖动/resize 下限/最大化避让 Menu Bar 与 Dock/双击标题栏/键盘快捷键，窗口与 Dock 顺序 debounce 自动保存并启动恢复，iframe 超时给出重载与外开入口；设置重组为分类并新增 `dock_size`、`dock_autohide`、`restore_windows`、`animations`、`reduced_motion` 向后兼容偏好字段。保留生产 QA 依赖的 DOM 契约（`nav.dock`、`.window`、`.bar .close`、`.launchpad`、`.knowledge`、`.settings-panel`、`.settings-tabs`、`[data-testid=session-*]`）。验证：211 项后端测试、24 项前端测试（新增窗口管理、菜单键盘逻辑与合成 API 浏览器验收集合）、TypeScript/Vite production build、OpenAPI 重新导出通过；合成数据截图覆盖 1920×1080/1440×900/1366×768/1024×768/390×844、明暗主题、LaunchPad 与命令面板，见 `docs/acceptance/ui-refactor-2026-10-01.md` 与 `docs/ui-audit.md`。未完成：XeLibrary 三栏布局与表格/搜索/Query Console、System App 分页、Forgejo 原生 Dashboard 数据源、真实后端登录与生产浏览器验收；未部署、未推送远端。
+
+
+Issue #71 Sol 接管本地增量：修复设置回调与保存反馈、空 Dock/排序保存、最大化尺寸恢复、窗口菜单、移动端活跃应用和焦点陷阱；新增只读 System 分栏并复用已有 jobs/work/audit API。OpenWebUI 未部署时明确显示尚未配置，Forgejo 使用完整外链入口；未增加生产依赖。235 backend tests、25 frontend tests 与 TypeScript/Vite build 通过，Chrome 合成夹具检查明暗与五种视口；真实生产登录/集成验收及 #72 Library 整合仍待完成。本记录不是已部署或 #71 已完成的声明。

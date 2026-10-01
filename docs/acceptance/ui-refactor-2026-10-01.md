@@ -59,3 +59,8 @@ Development 使用可达的 Forgejo 外链，不再启动不存在的内置 Forg
 实际验证：235 后端测试通过（19 个已有依赖/临时目录清理警告）；前端 25 项测试通过；TypeScript/Vite production build、Scoped Ruff、OpenAPI 导出通过。Chrome 合成 API 核心路径新增显式保存、保存失败/恢复、注册应用后保持桌面、禁用窗口恢复时仍保存布局、空 Dock、System unavailable/permission 状态。截图在 `runtime/verification/issue-71-takeover/`，已查看明暗 1440x900 与 390x844；也生成 1920x1080、1366x768、1024x768、LaunchPad 与命令面板截图。这些是真实 Chrome 渲染的合成夹具，不能替代部署后的真实账号与 API 验收。
 
 仍待：#72 Library 交付整合与独立回归；实际部署后的浏览器核心路径；OpenWebUI 实际服务上线；原生 Forgejo dashboard API。未关闭 #71，未推送或部署。
+
+
+## System 应用增量
+
+新增概览、服务、存储、Embedding、HF Cache、Agents、部署、网络、审计分类。概览复用既有 Dashboard；Embedding 使用 `/jobs`，Agents 使用 `/work`，审计使用 `/audit`，分页按游标读取并丢弃跨分类/刷新后的陈旧响应。服务健康只确认桌面 `/health/ready`，不把桌面健康推断为全部服务健康；磁盘、HF Cache、部署历史等无受控桌面 API 的分类明确显示未接入。网络显示浏览器连接提示及当前入口，不伪造 Tunnel 状态。审计兼容 RFC3339 时间。所有视图只读，保留现有 scope 检查，未添加生产依赖。
