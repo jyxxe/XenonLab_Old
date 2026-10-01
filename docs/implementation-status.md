@@ -245,3 +245,7 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #71 Dashboard 知识表加载状态（2026-10-01，已部署）
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
+
+### Issue #94 修复（zcode 本地交付）
+
+分支 `zcode/issue-94-edge-headers`（基于 `8d960f9`）：公网边缘（`cloudflare-origin.caddy` 站点块）补齐与 LAN `(xeonolab-desktop)` snippet 一致的安全头——`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，并按 Issue 建议的灰度值在两侧同时加 `Strict-Transport-Security "max-age=300"`（公网源站为 HTTP，经 Cloudflare HTTPS 边缘下发后浏览器按 HTTPS 响应生效；max-age 短窗灰度，可后续调大）。新增契约测试 `tests/test_edge_security_headers.py`：按大括号作用域提取两个文件的桌面/公网站点块，断言必需头齐全且两侧 header 集合完全一致（防再漂移；library.xenon.lan 的 frame-ancestors CSP 属该站点特有，不参与比对）。全部 383 项测试与 Ruff 通过。CSP 的完整方案（iframe 应用白名单等）需单独评估，本 PR 不含。
