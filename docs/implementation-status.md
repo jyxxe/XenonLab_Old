@@ -245,3 +245,7 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #71 Dashboard 知识表加载状态（2026-10-01，已部署）
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
+
+### Issue #93 修复（zcode 本地交付）
+
+分支 `zcode/issue-93-work-active`（基于 `754ff27`）：`GET /api/v1/work` 新增 `?active=true|false` 服务端过滤（SQL 级，游标分页语义不变）并在每行显式返回 `lease_expired` 布尔（claimed 且租约已过期），客户端不再各自实现 `expires > now` 比较；计算列由 SQLite 产出后转回 JSON 布尔以保持既有契约。新增 1 项测试覆盖五种状态的过滤/标记/游标/422（全库 353 项通过），改动文件 Ruff 通过，OpenAPI 导出仅 dev-agent.openapi.json 增加查询参数。
