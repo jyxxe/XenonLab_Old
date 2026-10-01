@@ -78,3 +78,14 @@
 ## coordinator 回归修复
 
 本轮修复了实测发现的虚拟窗口越界、nullable 改为必填未标记为破坏性变更、分页改写引号内 `LIMIT/OFFSET`、编辑查询后 offset 未重置、Query DSL 校验错误未显示、搜索使用旧过滤条件、Quality 模式沿用关键词 endpoint、定理详情响应竞争及关联 API 错误被吞掉、慢搜索结果写入已切换的另一张表、不同 Harness 最近/收藏共用、跨表索引任务短暂串显，以及权限说明把 scopes 描述成单独资源授权等问题。单元与浏览器回归已覆盖这些行为。
+
+## 生产发布与只读验收（2026-10-01）
+
+- 发布 commit：`f1e9de3eb44795e8666ed0d0df151ba9b2de6edc`；release：`f2c2446a-46cd-4c52-b3dc-779ee2041129`；deployment：`958439cf-94b6-442f-8c82-a1d075fa7643`，状态 `completed`，部署租约已释放。
+- 本次只发布前端 UI 与异步竞态修复，无数据库 schema migration。上线前 Web 101 的桌面 SQLite 使用 SQLite backup API 快照至 `runtime/backups/2026-10-01-issue72/predeploy-desktop.sqlite`；`PRAGMA integrity_check` 为 `ok`，SHA-256：`2b688a0e1f5e28e2e1f29cb868db7e3a181133d087574b8b96ec5f1eb912d1a3`。
+- 公网桌面首页、认证配置返回 200；发布后的 JS `index-BT_S0aTH.js` 与 CSS `index-L2gKoqEU.css` 返回 200，内容 SHA-256 与本地 production build 完全一致。匿名 `/api/v1/users/me` 返回预期 401。
+- LAN 直连 IP `https://192.168.0.101:9443` 首页与 auth config 返回 200；桌面、XeLibrary、Tool Gateway、Deploy Gateway、LLM Gateway、Embedding、DevAgent 七个服务 readiness 全部返回 200。
+- 真实 IP 入口登录验收通过：PKCE → `/auth/session/exchange` → HttpOnly session cookie 恢复 → 已授权 API 请求 → logout 后 cookie 失效。公网配置与静态资产通过；本次未在公网提交登录表单，公网带登录态完整 Chrome 验收仍待真实浏览器复测。
+- 全量 pytest 235 passed；前端 38 passed；TypeScript/Vite production build、OpenAPI check、`git diff --check` 与受影响 Python 模块的 Ruff 检查通过。仓库全量 Ruff 仍报告 11 个未改动 `infra/` lint 问题；本轮没有 Python 代码变更。
+
+Issue #71 继续开放：本次发布完成的是 Issue #72 知识库 WebUI 增量，不代表全部 Plan/#71 Definition of Done 已完成。

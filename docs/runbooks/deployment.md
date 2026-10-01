@@ -1,5 +1,16 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：XeLibrary 知识管理 WebUI 及浏览器竞态修复已随 commit
+`f1e9de3eb44795e8666ed0d0df151ba9b2de6edc` 发布；Deploy Gateway release
+`f2c2446a-46cd-4c52-b3dc-779ee2041129` / deployment
+`958439cf-94b6-442f-8c82-a1d075fa7643` completed，租约已释放。此版本仅更新前端，无数据库
+schema migration。上线前 Web 101 的 `desktop.sqlite` 经 SQLite backup API 复制到
+`runtime/backups/2026-10-01-issue72/predeploy-desktop.sqlite`，`integrity_check` 为 `ok`。
+公网首页、auth config、JS/CSS 内容 hash、匿名 API 401、直连 IP 页面与 auth config 均通过；
+七个服务 readiness 均为 200，真实 IP 入口 PKCE/session exchange/cookie restore/API/logout 全流程通过。
+公网带登录态浏览器登录本次未测，Issue #71 保持打开；知识库 UI 与限制详见
+`docs/acceptance/xelibrary-2026-10-01.md`。
+
 2026-10-01 更新：Issue #71 桌面 Shell/System 增量已通过 Deploy Gateway 上线。代码 commit
 `5a33d9342f9d65b737d16b64943ffb3cc58d6434`，release
 `b42c8abe-81be-4024-9fe1-9fafdbc0f186`，deployment
