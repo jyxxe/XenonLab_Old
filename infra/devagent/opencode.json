@@ -39,6 +39,7 @@
           "rg *": "allow",
           "ls*": "allow",
           "pwd": "allow",
+          "echo *": "allow",
           "cat *": "allow",
           "sed *": "allow",
           "head *": "allow",

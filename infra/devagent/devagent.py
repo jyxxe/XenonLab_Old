@@ -268,6 +268,7 @@ def run_model(config, state, task, manual=False):
     logs = Path(config["private_logs"])
     logs.mkdir(parents=True, exist_ok=True, mode=0o700)
     session, cost, tokens, error = None, 0.0, {}, False
+    finish_reason = None
     log_path = logs / (task["id"] + ".jsonl")
     with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output:
         env = runtime_environment(config)
@@ -310,6 +311,7 @@ def run_model(config, state, task, manual=False):
             error = True
         if event.get("type") == "step_finish":
             part = event.get("part") or {}
+            finish_reason = part.get("reason")
             cost += part.get("cost", 0) or 0
             for k, v in (part.get("tokens") or {}).items():
                 if isinstance(v, (float, int)):
@@ -317,13 +319,22 @@ def run_model(config, state, task, manual=False):
                 elif isinstance(v, dict):
                     for ck, cv in v.items():
                         tokens[k + "." + ck] = tokens.get(k + "." + ck, 0) + cv
-    status = "done" if result.returncode == 0 and not error and session else "failed"
+    status = (
+        "done" if result.returncode == 0 and not error and session and finish_reason == "stop" else "failed"
+    )
     with state.db:
         state.db.execute(
             "UPDATE tasks SET status=?,session=?,cost=cost+?,tokens=?,updated=? WHERE id=?",
             (status, session, cost, json.dumps(tokens), time.time(), task["id"]),
         )
-    state.audit("model." + status, task=task["id"], session=session, cost=cost, tokens=tokens)
+    state.audit(
+        "model." + status,
+        task=task["id"],
+        session=session,
+        cost=cost,
+        tokens=tokens,
+        finish_reason=finish_reason,
+    )
     if manual and status == "done":
         texts = []
         for line in log_path.read_text().splitlines():
