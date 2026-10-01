@@ -1,5 +1,15 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #76 桌面会话冷却重试及原请求恢复已通过 Deploy Gateway 发布。代码 commit
+`24ee54e965455827779b5341d62900d880f47079`，release `2514a42d-fcc0-4736-9366-581712785557`，
+deployment `c7c5014f-1976-4ea5-aeed-0c2ee9f0feac`，状态 `completed`，租约已释放。发布前桌面数据库
+SQLite backup API 快照位于 `runtime/backups/2026-10-01-issue76/predeploy-desktop.sqlite`，完整性检查为 `ok`。
+前端测试 48/48、TypeScript/Vite build、diff check 及独立 Luna review 通过；无后端代码或数据库 schema 变更。
+部署后 LAN 五个入口 readiness 均为 200；VM 101/104/106/107/111 release symlink 均指向该 commit；LAN 与公网
+JS/CSS SHA-256 与本机构建一致，认证配置为 200。无 cookie 的 session token 请求返回预期 `401 NO_SESSION`。
+真实五分钟限流症状仍未复现，Issue #76 暂保持打开，等待真实会话验收，细节见
+`docs/acceptance/session-resilience-2026-10-01.md`。
+
 2026-10-01 运维记录：查看发布执行器参数时误调用了无参数解析支持的 `scripts/execute_release.py --help`，导致本机
 `release.json` 中现有桌面 release 被重新激活。目标仍是已部署的 commit
 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `fda082c8-4557-4efb-8e1d-3f339e7e73cb`、deployment

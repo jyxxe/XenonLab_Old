@@ -26,3 +26,15 @@ CDP 浏览器夹具覆盖 token 缓存、近过期并发请求 single-flight、4
 ## 遗留项
 
 生产问题的触发条件与身份服务当时返回的状态码、限流窗口及 `Retry-After` 仍无证据。发布后应由协调器安排真实浏览与限流恢复验收；本地夹具结果不能替代该验收。
+
+## 生产部署验收
+
+2026-10-01 已通过 Deploy Gateway 发布 commit `24ee54e965455827779b5341d62900d880f47079`；release
+`2514a42d-fcc0-4736-9366-581712785557` 和 deployment `c7c5014f-1976-4ea5-aeed-0c2ee9f0feac`
+均为 `completed`，租约已释放。发布前桌面数据库使用 SQLite backup API 快照到
+`runtime/backups/2026-10-01-issue76/predeploy-desktop.sqlite`；`PRAGMA integrity_check` 为 `ok`。
+
+部署后，LAN 五个服务入口 readiness 全为 200；VM 101、104、106、107、111 的
+`/opt/xeonolab/current` 均指向本次 commit。LAN 与公网桌面首页及 JS/CSS 均为 200，静态资源 SHA-256
+均与本机构建一致。认证配置返回 200；带公网 Origin 且无 cookie 的 session token 请求返回预期的
+`401 NO_SESSION`。没有真实用户会话下的五分钟复现或生产限流注入；Issue #76 保持打开，等待真实浏览场景验收。
