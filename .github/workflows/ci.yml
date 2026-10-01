@@ -27,8 +27,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24.21.0"
-          cache: npm
-          cache-dependency-path: apps/desktop-web/package-lock.json
       - run: npm ci
       - name: Check pinned headless browser
         run: |
