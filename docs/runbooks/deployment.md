@@ -1,5 +1,14 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #71 知识库错误请求编号修复已通过 Deploy Gateway 上线。代码 commit
+`a866e2bb778840a4f12142b1cd2a869b7931129b`，release `6f0436d5-48fe-4c03-b307-83b90f126646`，
+deployment `0deb7fc3-6ec8-4cc8-923e-64b69c55147a` 状态 `completed`，租约已释放。纯前端更新，无
+数据库 schema 或生产数据迁移。后端 279 项、前端 52 项测试、TypeScript/Vite production build、
+diff check 通过，Luna 独立审查通过。部署后 LAN 五个 readiness 与公网桌面 readiness 均为 200；
+VM 101/104/106/107/111 均指向此 commit；LAN/公网 JS 与 CSS SHA-256 匹配；认证配置为 200；
+匿名表 API 返回预期 401 且携带 request ID。Chrome 错误/重建索引回归使用合成 API，未执行真实生产账号登录；
+Issue #71 保持开放，其他未完成范围见 `docs/acceptance/issue-71-request-id-2026-10-01.md`。
+
 2026-10-01 更新：Issue #76 桌面会话冷却重试及原请求恢复已通过 Deploy Gateway 发布。代码 commit
 `24ee54e965455827779b5341d62900d880f47079`，release `2514a42d-fcc0-4736-9366-581712785557`，
 deployment `c7c5014f-1976-4ea5-aeed-0c2ee9f0feac`，状态 `completed`，租约已释放。发布前桌面数据库
