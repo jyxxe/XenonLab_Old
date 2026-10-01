@@ -219,8 +219,10 @@ Keycloak dump 可被 pg_restore 读取目录。模型原始权重仍位于操作
 该备份尚未设置定期自动化或异地存储；多个 `.xl` 与 catalogue 的快照不是全局原子快照。
 恢复时停写、恢复 catalogue/.xl/objects/ACL、校验一致性，再重建索引。
 
-尚未上线：Qwen worker、Library Agent、OpenWebUI 和完整监控。HF-cache API 与预取水位保护代码已部署，
-但物理池 telemetry collector/receiver 尚未完成生产接线；PVE 池映射、VM103 接收、防火墙和真实下载验收仍待完成。
+尚未上线：Qwen worker、Library Agent、OpenWebUI 和完整监控。2026-10-01 生产盘点纠正：
+HF-cache API 与预取水位保护源码已实现，但 VM103 无 HF-cache 应用单位或 /opt/xeonolab，
+不能认为应用已生产部署。物理池 telemetry collector/receiver 现已安装、启用并实测，见
+`docs/acceptance/pool-telemetry-2026-10-01.md`；应用 consumer、真实下载/水位验收仍待完成。
 这些功能不能从当前部署成功推断为已完成。
 
 ## Issue #75 Dock release (2026-10-01)

@@ -1,11 +1,13 @@
 # Physical pool telemetry deployment
 
-This is the local implementation for plan.md §72. It collects one explicitly configured physical ZFS
+The collector and receiver for plan.md §72 were installed on 2026-10-01; see
+[production acceptance](../acceptance/pool-telemetry-2026-10-01.md). They collect one explicitly configured physical ZFS
 pool on the PVE host and publishes its current byte counts to the HF-cache VM (VM 103 in the existing
-inventory). The receiver writes the pool metrics file, and the HF-cache API reads that same file
+inventory). The receiver writes the pool metrics file, and the HF-cache API is intended to read that same file
 through its root-fed storage adapter; the receiver does not query PVE APIs or run commands on the PVE
 host. Read-only PVE API inspection on 2026-10-01 confirmed the pool and host addresses below. The receiver deployment selects TCP 9183, verified unused on 2026-10-01.
-Production activation and HF-cache consumer wiring require separate evidence.
+The receiver/collector are enabled and validated; the HF-cache application consumer is not yet
+installed on VM 103, so application storage/readiness acceptance remains pending.
 
 ## Confirmed production mapping
 

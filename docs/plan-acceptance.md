@@ -43,8 +43,8 @@
 | 34 | Theorem API | 部分实现 / 已发布，生产授权读写验收待做 | XeLibrary 的 CRUD、search、dependencies/dependents、evidence、promote/reject、路径 ACL、If-Match/ETag 与审计已随 release `7779e286` 部署；本次仅验收了服务健康和未认证请求拒绝，尚未做已授权主体的线上 CRUD/审核验收。`verify` 和 `candidates` 在 Lean/Library Agent 未配置时明确返回 503。 |
 | 35 | Embedding API | 部分实现 / 未做生产验收 | Embedding D100M fast endpoint 有真实模型；Qwen/image 端点不可用。 |
 | 36 | Embedding 调度优先级 | 部分机制 / 关键能力缺失 | CPU worker busy 会 429；没有请求优先级/后台 ingestion 抢占队列。 |
-| 37 | HF-cache API | 部分实现 / 已发布，物理池接线未验收 | `xeonolab/hf_cache.py` 提供 ensure、manifest/hash、items、pin/lease、evict/GC、storage 与异步预取 job；运行记录确认 API 已部署。生产物理池数据源仍未接线，真实模型缓存下载/回收场景待验收。 |
-| 38 | HF-cache 预测性 API | 部分实现 / 已发布，自动发现未实现 | 有 dependency signal、候选 accept/reject、预取 job/retry 和使用容量保护；生产配置引用与 Issue 扫描的自动发现/决策闭环仍缺。 |
+| 37 | HF-cache API | 本地实现 / 生产应用未安装 | `hf_cache.py` 有 ensure、manifest/hash、pin/lease/GC 和 job；2026-10-01 实测 VM103 无 HF-cache 应用单位或 `/opt/xeonolab`，纠正此前“已部署”表述。遥测基础设施已上线，应用 consumer 与真实下载仍待部署验收。 |
+| 38 | HF-cache 预测性 API | 本地实现 / 未做生产验收 | 有 dependency signal、候选 accept/reject、预取 job/retry；VM103 应用未安装。自动发现/决策闭环仍缺。 |
 | 39 | Library Agent API | Skeleton / 关键能力未实现 | Library Agent 仅 skeleton；无 derive/evidence/proposal 流程。 |
 | 40 | Lean 验证接口 | 未实现 | 没有隔离的 Lean 编译/验证 sandbox。 |
 | 41 | LLM Gateway API | 部分实现 / 未做生产验收 | LLM Gateway 支持固定模型、服务端密钥与非流式转发；无计划全量能力。 |
@@ -78,7 +78,7 @@
 | 69 | fnOS 边界 | 部分实现 / 外部验证未覆盖 | 有 fnOS VM/数据边界记录；独立认证/平台停机时访问未在本轮实测。 |
 | 70 | 备份 | 部分实现 / 未做生产验收 | XeLibrary backup/verify/restore 有脚本与故障测试；`docs/runbooks/deployment.md` 记载 2026-09-30 实际备份及 integrity/pg_restore 检查。定期自动化、异地存储和完整模型权重副本仍缺。 |
 | 71 | XeLibrary 恢复顺序 | 部分实现 / 未做生产验收 | 恢复脚本与 runbook 有顺序；`dd6a397` / `docs/implementation-status.md` 记录发布前 quiesced backup 和 isolated restore（含空 object store 回归）通过。完整 PVE 灾难恢复与跨 catalogue/.xl 原子快照仍未验证。 |
-| 72 | HF-cache 水位 | 本地实现 / 测试通过 / 未发布 | `infra/pve/pool_telemetry_collector.py`、`infra/hfcache/pool_metrics_receiver.py`、systemd units 与 `tests/test_pool_telemetry.py` 已合入；见 `docs/runbooks/pool-telemetry.md`。尚未选择生产 pool/address/secret、安装服务或应用防火墙规则，物理水位尚未在生产消费。 |
+| 72 | HF-cache 水位 | 遥测已上线 / 应用消费未上线 | PVE aux-10t→VM103:9183 采集/认证接收、root-owned 文件、专用防火墙/固定目标和 timer 已安装并实测样本对照、非PVE来源拒绝、签名/replay/TTL拒绝、receiver重启及后续刷新。见 [验收](acceptance/pool-telemetry-2026-10-01.md)。HF-cache 应用尚未安装，水位触发/过期阻止下载与缓存命中生产场景待验，#66/#22 保持开放。 |
 | 73 | 开发权限 | 部分实现 / 未做生产验收 | 仓库贡献规则/API 边界文档存在；远端 Forgejo 权限矩阵需平台配置证据。 |
 | 74 | Codex 开发规则 | 部分实现 / 未做生产验收 | AGENTS/Agent workflow 有独立 worktree、测试与发布规则；PR required checks 需远端配置核实。 |
 | 75 | Codex 发布规则 | 部分实现 / 未做生产验收 | Deploy policy 限制 OpenCode；只有通过工作 API 可证明 API policy，不等同所有主机凭证盘点。 |
@@ -92,7 +92,7 @@
 | 83 | Phase 6 — Library Agent | 部分实现 / 未做生产验收 | Library Agent 任务/evidence/theorem/proposal/Lean 闭环不存在。 |
 | 84 | Phase 7 — DevAgent | 部分实现 / 未做生产验收 | Webhook/work queue/links/triage 有组件；端到端自动 triage/duplicate 并未完成。 |
 | 85 | Phase 8 — Deploy Gateway | 部分实现 / 未做生产验收 | leases 与受限执行器代码存在；SSE/full rollback 状态机及全量 production acceptance 缺。 |
-| 86 | Phase 9 — HF-cache | 部分实现 / 未做完整生产验收 | HF-cache API、异步预取、候选审核、pin/lease/GC 和 fail-closed 水位消费者已实现；一般 API 已发布。PVE 物理遥测 collector/receiver 与自动依赖发现仍未上线。 |
+| 86 | Phase 9 — HF-cache | 本地API实现 / 遥测已上线 / 应用待部署 | API、异步预取、候选审核、pin/lease/GC 和 fail-closed reader 有源码；物理遥测 collector/receiver 已上线并实测。VM103 应用未安装；consumer与真实Hub transfer、自动发现仍缺。 |
 | 87 | API 测试矩阵 | 部分实现 / 未做生产验收 | 新增 429 身份/路由组回归；全 endpoint 状态码/幂等/并发矩阵并未完整。 |
 | 88 | Query 测试 | 部分实现 / 未做生产验收 | 中文/类型/嵌套布尔等 DSL tests 存在；attachment EXISTS/FTS/quality/stale/move 矩阵不完整。 |
 | 89 | D100M 评测 | 未实现 | 没有本领域独立 held-out retrieval evaluation 与 Recall@10/nDCG/MRR 基线。 |
