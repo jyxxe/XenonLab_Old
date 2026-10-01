@@ -329,9 +329,20 @@ def install(app):
         "/api/v1/work/{work_id}/claim",
         responses={
             409: {
-                "description": "Work is already claimed/completed, source is blocked, Forgejo Issue is closed, or the claim was fenced during synchronization."
+                "description": (
+                    "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`). "
+                    "Codes: `WORK_CLAIMED`, `WORK_COMPLETED`, `SYNC_CONFLICT`, `ISSUE_NOT_OPEN`, or "
+                    "`STALE_CLAIM` when the claim was fenced during Forgejo synchronization."
+                )
             },
-            503: {"description": "Forgejo claim synchronization is not configured or failed; local claim is rolled back."},
+            503: {
+                "description": (
+                    "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`); "
+                    "codes are `FORGEJO_CLAIM_NOT_CONFIGURED` or `FORGEJO_CLAIM_SYNC_FAILED`. The request's "
+                    "holder+epoch claim is conditionally reset only while that exact claim remains current. "
+                    "If a concurrent webhook or reclaim changed the lease, its newer state is preserved."
+                )
+            },
         },
         description=(
             "Atomically claims a Work item, then assigns the mapped Forgejo account and posts an Issue comment "

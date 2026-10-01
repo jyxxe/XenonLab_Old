@@ -156,3 +156,13 @@ def test_prepare_deployment_fails_before_payload_generation_without_claim_inputs
     assert "required private Forgejo claim input is unavailable" in result.stderr
     assert not (tmp_path / "runtime").exists()
     assert "fixture-only-secret" not in result.stdout + result.stderr
+
+
+def test_release_report_matches_current_validation_and_openapi_change():
+    source = Path(__file__).resolve().parents[1] / "scripts/prepare_deployment.py"
+    text = source.read_text()
+
+    assert "uv run pytest 250 passed" in text
+    assert "OpenAPI regenerated with DevAgent claim side effects" in text
+    assert "234 backend tests passed" not in text
+    assert "OpenAPI export unchanged" not in text

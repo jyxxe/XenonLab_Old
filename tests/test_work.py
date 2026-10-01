@@ -42,8 +42,13 @@ def test_claim_openapi_documents_forgejo_sync_side_effects_and_failures(settings
     contract = create_app("dev-agent", settings).openapi()["paths"]["/api/v1/work/{work_id}/claim"]["post"]
 
     assert "assigns the mapped Forgejo account" in contract["description"]
-    assert "409" in contract["responses"]
-    assert "503" in contract["responses"]
+    conflict = contract["responses"]["409"]["description"]
+    unavailable = contract["responses"]["503"]["description"]
+    assert "STALE_CLAIM" in conflict and "error` envelope" in conflict
+    assert "FORGEJO_CLAIM_NOT_CONFIGURED" in unavailable
+    assert "FORGEJO_CLAIM_SYNC_FAILED" in unavailable
+    assert "conditionally reset only while that exact claim remains current" in unavailable
+    assert "newer state is preserved" in unavailable
 
 
 def test_claim_synchronizes_forgejo_assignee_and_comment(settings, monkeypatch, tmp_path):

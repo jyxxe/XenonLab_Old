@@ -144,7 +144,10 @@ artifact = {
             "commit": commit,
             "artifacts": [artifact],
             "migration_manifest": "no catalogue schema migration; production semantic search requires Qdrant HTTPS/API key; .xl remains the source of truth and vectors are rebuildable",
-            "test_report": "234 backend tests passed; Qdrant ACL/revision/chunk/score/lifecycle/config-staging regressions; scoped Ruff clean; OpenAPI export unchanged",
+            "test_report": (
+                "2026-10-01 validation: uv run pytest 250 passed; changed Python files pass Ruff; "
+                "OpenAPI regenerated with DevAgent claim side effects and 409/503 contract updates"
+            ),
         }
     )
 )
