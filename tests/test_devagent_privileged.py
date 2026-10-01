@@ -1,7 +1,9 @@
 import importlib.util
 import io
+import json
 import tarfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -79,3 +81,80 @@ def test_staged_archive_rejects_credentials_paths_and_links(name, link):
     raw.seek(0)
     with tarfile.open(fileobj=raw) as archive, pytest.raises(ValueError):
         stage.safe_members(archive)
+
+
+@pytest.mark.parametrize("identifier", ["../root", "/etc/key", "a" * 31, "a" * 32 + ";id"])
+def test_job_queries_cannot_select_paths(identifier):
+    with pytest.raises(ValueError):
+        broker.request_valid({"action": "operation-logs", "args": [identifier]})
+
+
+def test_async_submission_is_not_completion_and_excludes_another_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(broker, "ROOT", tmp_path)
+    calls = []
+    monkeypatch.setattr(broker, "service_active", lambda _: True)
+
+    def start(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(broker.subprocess, "run", start)
+    request = {"action": "validate", "args": ["a" * 40], "task": "test"}
+    submitted = broker.submit(request)
+    assert submitted["state"] == "queued"
+    assert "--worker" in calls[0] and "-I" in calls[0]
+    with pytest.raises(RuntimeError, match="active"):
+        broker.submit(request)
+    assert len(calls) == 1
+
+
+def test_crashed_deployment_is_not_replayed(tmp_path, monkeypatch):
+    monkeypatch.setattr(broker, "ROOT", tmp_path)
+    monkeypatch.setattr(broker, "service_active", lambda _: False)
+    identifier = "a" * 32
+    directory = broker.job_path(identifier)
+    directory.mkdir(parents=True)
+    broker.save(directory / "status.json", {"id": identifier, "action": "deploy", "state": "running"})
+    outcome = broker.job_status(identifier)
+    assert outcome["state"] == "interrupted" and outcome["recovery_required"]
+    monkeypatch.setattr(broker.subprocess, "run", lambda *a, **kw: pytest.fail("Crash replay attempted"))
+    with pytest.raises(RuntimeError, match="recovery"):
+        broker.submit({"action": "deploy", "args": ["xenon-admin/XeonoLab", "b" * 40, "production"]})
+
+
+@pytest.mark.parametrize("returncode,expected", [(0, "completed"), (2, "failed")])
+def test_worker_preserves_terminal_result_and_audit(tmp_path, monkeypatch, returncode, expected):
+    monkeypatch.setattr(broker, "ROOT", tmp_path)
+    monkeypatch.setattr(broker, "os", SimpleNamespace(geteuid=lambda: 0, environ={}))
+    identifier = "a" * 32
+    directory = broker.job_path(identifier)
+    directory.mkdir(parents=True)
+    broker.save(directory / "request.json", {"action": "validate", "args": ["b" * 40]})
+    broker.save(directory / "status.json", {"id": identifier, "state": "queued", "action": "validate"})
+    monkeypatch.setattr(
+        broker.subprocess,
+        "run",
+        lambda *a, **kw: SimpleNamespace(returncode=returncode, stdout='{"validation":{"state":"passed"}}'),
+    )
+    broker.worker(identifier)
+    assert json.loads((directory / "status.json").read_text())["state"] == expected
+    assert json.loads((tmp_path / "operations.jsonl").read_text())["state"] == expected
+    with pytest.raises(ValueError, match="already started"):
+        broker.worker(identifier)
+
+
+def test_operation_logs_redact_before_output_truncation(tmp_path, monkeypatch):
+    monkeypatch.setattr(broker, "ROOT", tmp_path)
+    identifier = "a" * 32
+    directory = broker.job_path(identifier)
+    directory.mkdir(parents=True)
+    broker.save(directory / "status.json", {"id": identifier, "state": "failed"})
+    token = tmp_path / "protected-token"
+    token.write_text("not-a-real-credential-just-test-data")
+    (directory / "runner.log").write_text(
+        "failure " + token.read_text() + " Bearer abcdefghijklmnopqrstuvwxyz123456"
+    )
+    tail = broker.job_logs(identifier, {"validator_token": str(token)})["tail"]
+    assert token.read_text() not in tail
+    assert "abcdefghijklmnopqrstuvwxyz123456" not in tail
+    assert "[REDACTED]" in tail

@@ -49,6 +49,9 @@ def validate(sha):
     task = uuid4().hex
     report_dir = ROOT / "validation" / (sha + "-" + task)
     report_dir.mkdir(parents=True, mode=0o700)
+    operation = os.getenv("DEVAGENT_OPERATION", "")
+    if re.fullmatch("[a-f0-9]{32}", operation):
+        (ROOT / "jobs" / operation / "validation.json").write_text(json.dumps({"directory": report_dir.name}))
     worktree = Path("/var/lib/devagent/worktrees") / ("validate-" + task)
     checkout = Path("/var/lib/devagent/checkout")
     log = report_dir / "commands.log"

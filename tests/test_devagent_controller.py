@@ -155,3 +155,33 @@ def test_closed_pr_live_branch_references_do_not_wake_history():
     before = list(controller.project_events(forgejo, {"identity": "devagent-maintainer"}))
     forgejo.head = "b" * 40
     assert before == list(controller.project_events(forgejo, {"identity": "devagent-maintainer"}))
+
+
+@pytest.mark.parametrize("reason,expected", [("tool-calls", "failed"), ("stop", "done")])
+def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypatch, reason, expected):
+    state = controller.State(tmp_path / "state")
+    state.observe("pr:1", {"head": "a"}, baseline=True)
+    state.observe("pr:1", {"head": "b"})
+    task = state.pending()
+    policy = tmp_path / "policy.json"
+    policy.write_text("{}")
+    config = {"checkout": str(tmp_path), "private_logs": str(tmp_path / "logs"), "policy_file": str(policy)}
+    commands = []
+
+    class Process:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            commands.append(argv)
+            assert argv[argv.index("--dir") + 1] == str(tmp_path)
+            assert kwargs["env"]["PWD"] == str(tmp_path)
+            event = {"sessionID": "independent-session", "type": "step_finish", "part": {"reason": reason}}
+            kwargs["stdout"].write(json.dumps(event) + "\n")
+
+        def communicate(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(controller.subprocess, "Popen", Process)
+    assert controller.run_model(config, state, task) == expected
+    assert state.db.execute("SELECT status FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == expected
+    assert "--continue" not in commands[0]

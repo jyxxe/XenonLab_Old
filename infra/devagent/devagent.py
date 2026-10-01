@@ -242,6 +242,8 @@ def runtime_environment(config):
             "UV_NO_PROGRESS": "1",
             "MAKEFLAGS": "-j2",
             "OMP_NUM_THREADS": "2",
+            "CHROME_BIN": "/opt/devagent/browser/chrome/chrome",
+            "PWD": config.get("checkout", "/var/lib/devagent/checkout"),
         }
     )
     return env
@@ -277,6 +279,8 @@ def run_model(config, state, task, manual=False):
             [
                 "/usr/local/bin/opencode",
                 "run",
+                "--dir",
+                config["checkout"],
                 "--pure",
                 "--model",
                 MODEL,
@@ -395,6 +399,8 @@ def devctl(config, argv):
             "merge",
             "deploy",
             "validate",
+            "operation",
+            "operation-logs",
             "infrastructure",
             "audit",
         ],
@@ -403,7 +409,7 @@ def devctl(config, argv):
     args = parser.parse_args(argv)
     state, forgejo = State(config["state_dir"]), Forgejo(config)
     # Deployment and infrastructure credentials stay behind a root-owned, narrow broker.
-    if args.action in ("deploy", "validate", "infrastructure"):
+    if args.action in ("deploy", "validate", "infrastructure", "operation", "operation-logs"):
         request = {"action": args.action, "args": args.args, "task": os.getenv("DEVAGENT_TASK", "manual")}
         result = subprocess.run(
             ["sudo", "-n", "/usr/local/libexec/devagent-privileged"],
@@ -538,7 +544,15 @@ def main():
         with state.lock():
             state.audit("manual.interactive_started")
             return subprocess.call(
-                ["/usr/local/bin/opencode", "--pure", "--model", MODEL, "--agent", "maintainer"],
+                [
+                    "/usr/local/bin/opencode",
+                    config["checkout"],
+                    "--pure",
+                    "--model",
+                    MODEL,
+                    "--agent",
+                    "maintainer",
+                ],
                 cwd=config["checkout"],
                 env=runtime_environment(config),
             )
