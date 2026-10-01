@@ -1,6 +1,7 @@
 #!/usr/bin/python3 -I
 """Project target forced-command staging receiver. Application build runs without root."""
 
+import fcntl
 import hashlib
 import json
 import os
@@ -159,7 +160,11 @@ def main():
 if __name__ == "__main__":
     os.umask(0o022)
     try:
-        main()
+        if os.geteuid() != 0:
+            raise ValueError("root receiver required")
+        with Path("/var/lock/devagent-stage.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            main()
     except (ValueError, KeyError, RuntimeError, OSError, subprocess.TimeoutExpired):
         print("Release staging rejected or failed", file=sys.stderr)
         sys.exit(2)

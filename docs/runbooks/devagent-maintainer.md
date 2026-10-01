@@ -22,7 +22,7 @@ persistent, publicly listening OpenCode server is unnecessary.
 Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
-the installed policy as inline configuration. The maintainer has 32 steps per
+the installed policy as inline configuration. The maintainer has 48 steps per
 task. Repository and Issue text remain untrusted data. Blocking questions and
 evidence belong in the relevant Issue/PR, after inspecting existing tools.
 
@@ -35,6 +35,13 @@ track PR heads, reviews/comments, merge state and CI, plus Issues assigned to
 the maintainer or labelled `devagent`. Own comments and the embedded repository
 timestamp in Forgejo combined-status responses do not trigger a model call.
 Ordinary unrelated branch pushes therefore do not wake every PR.
+Closed PR fingerprints ignore moving historical branch references. A CLI exit
+code of zero only completes a model task if its last step finished with `stop`;
+permission-interrupted tool sessions remain failed. The wrapper sets the actual
+repository directory explicitly instead of inheriting a login shell's home.
+Hitting the configured step limit is also failed/incomplete, even when OpenCode
+returns a normal summary with `stop`. Investigation or a planned fix does not
+prove the requested code change, verification or publication was delivered.
 
 Baseline/repeated live checks have returned zero pending work without a model
 call. Failed automatic tasks have a thirty-minute cooldown and three attempts;
@@ -67,6 +74,10 @@ snapshots, start VMs, adjust bounded resources and grow disks are typed commands
 Changes require a project reason; there is no arbitrary shell or VM deletion
 command. PVE status 111 has passed; private-key readability and unrelated sudo
 have been rejected as expected. Existing administrator keys remain available.
+Each application target has a separate `devagent-stage` Unix identity with a
+forced command and one fixed sudo receiver. Root SSH login remains disabled on
+those targets. The dedicated private staging key stays root-only on VM111; its
+public key is restricted to VM111's address. Management SSH is preserved.
 
 ## Exact-SHA deployment mechanics
 
@@ -81,6 +92,14 @@ the existing exclusive Deploy Gateway lease, stages fixed targets and invokes
 the existing activation executor. Its readiness failure path restores the
 previous immutable release. Protected audits record task, SHA, artifact, lease,
 previous versions, result and verification.
+
+`devctl validate EXACT_40_HEX` and deployment return a background operation ID.
+Use `devctl operation ID` for state and `devctl operation-logs ID` for a bounded,
+redacted validation-log excerpt. Submission is not completion. Operations are
+serialized, run under a two-hour transient-unit limit, and retain root-owned
+requests/results/audits. A crashed deployment is recorded as interrupted and
+requires operator recovery rather than automatic replay. Before clearing that
+flag, inspect target versions, the Gateway/executor lease and deployment audits.
 
 Node v24.21.0 and Chrome 150.0.7871.186 are installed for verification. The
 current frontend lockfile has a local dependency seed because npm egress remains

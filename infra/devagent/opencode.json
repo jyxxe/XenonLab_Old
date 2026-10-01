@@ -11,7 +11,7 @@
     "maintainer": {
       "description": "XeonoLab autonomous code, PR and deployment maintainer",
       "mode": "primary",
-      "steps": 32,
+      "steps": 48,
       "permission": {
         "*": "deny",
         "read": {
@@ -34,11 +34,12 @@
         "grep": "allow",
         "list": "allow",
         "bash": {
-          "*": "ask",
+          "*": "deny",
           "git *": "allow",
           "rg *": "allow",
           "ls*": "allow",
           "pwd": "allow",
+          "which *": "allow",
           "echo *": "allow",
           "cat *": "allow",
           "sed *": "allow",
@@ -48,6 +49,9 @@
           "uv sync *": "allow",
           "npm ci*": "allow",
           "npm run *": "allow",
+          "npm --version": "allow",
+          "node --version": "allow",
+          "node --test *": "allow",
           "python* -m pytest*": "allow",
           "python* scripts/export_openapi.py*": "allow",
           "devctl *": "allow",
@@ -55,6 +59,7 @@
           "git reset --hard*": "deny",
           "git clean *": "deny",
           "git credential *": "deny",
+          "git replace *": "deny",
           "git config *": "deny",
           "*auth.json*": "deny",
           "*forgejo-token*": "deny",

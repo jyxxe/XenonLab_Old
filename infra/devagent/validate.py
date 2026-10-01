@@ -34,6 +34,7 @@ def user_command(argv, cwd, log):
         "--setenv=UV_PYTHON_INSTALL_DIR=/opt/xeonolab/python",
         "--setenv=CHROME_BIN=/opt/devagent/browser/chrome/chrome",
         "--setenv=GIT_TERMINAL_PROMPT=0",
+        "--setenv=GIT_NO_REPLACE_OBJECTS=1",
         "--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
         *argv,
     ]
@@ -49,6 +50,9 @@ def validate(sha):
     task = uuid4().hex
     report_dir = ROOT / "validation" / (sha + "-" + task)
     report_dir.mkdir(parents=True, mode=0o700)
+    operation = os.getenv("DEVAGENT_OPERATION", "")
+    if re.fullmatch("[a-f0-9]{32}", operation):
+        (ROOT / "jobs" / operation / "validation.json").write_text(json.dumps({"directory": report_dir.name}))
     worktree = Path("/var/lib/devagent/worktrees") / ("validate-" + task)
     checkout = Path("/var/lib/devagent/checkout")
     log = report_dir / "commands.log"

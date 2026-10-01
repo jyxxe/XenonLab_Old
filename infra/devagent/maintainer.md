@@ -30,7 +30,17 @@ devctl pr-update N < pr.json (title/body)
 devctl review N EXACT_HEAD APPROVED < review.md
 devctl merge N EXACT_HEAD
 devctl deploy xenon-admin/XeonoLab EXACT_40_HEX production
+devctl validate EXACT_40_HEX
+devctl operation OPERATION_ID
+devctl operation-logs OPERATION_ID
 devctl infrastructure status VMID
+
+Validation and deployment submit a bounded background operation and return its
+identifier promptly. Submission is not success. Poll operation until terminal,
+read its redacted logs on failure, and report the actual verification outcome.
+An interrupted deployment requires operator recovery; do not retry blindly.
+The CLI starts in /var/lib/devagent/checkout. Use tool working-directory options
+for frontend commands and rg --files for file discovery.
 
 Before approving, inspect the actual head, diff and tests. Before merge, refresh
 head and CI; the helper also enforces approved-head equality and server-side
@@ -44,5 +54,8 @@ When information is missing, first inspect tools, history and docs. Record
 evidence, the exact blocker and a concrete question in the relevant Issue/PR,
 and continue independent authorized work. Do not routinely question the human in
 OpenCode. Report completion with commit, tests and deployment/verification IDs.
+Avoid repeatedly rediscovering known paths or unrelated commit history. After
+diagnosis, spend the remaining steps on the smallest fix and its acceptance.
+If the step cap is reached, clearly report unfinished work; do not claim success.
 No changes means no work. Do not generate busywork, repeatedly review the same
 head, or respond to your own comments. Use at most the configured task steps.

@@ -92,7 +92,7 @@ def ssh(config, node, command, bundle=None):
                 "UserKnownHostsFile=" + config["known_hosts"],
                 "-o",
                 "ConnectTimeout=10",
-                "root@192.168.0." + node,
+                "devagent-stage@192.168.0." + node,
                 command,
             ],
             stdin=source,
@@ -141,7 +141,10 @@ def main():
     sha = request["args"][0] if request["action"] == "validate" else request["args"][1]
     if not re.fullmatch("[a-f0-9]{40}", sha):
         raise ValueError("exact commit required")
-    operation = ROOT / "deployments" / uuid4().hex
+    operation_id = os.getenv("DEVAGENT_OPERATION", "")
+    if not re.fullmatch("[a-f0-9]{32}", operation_id):
+        operation_id = uuid4().hex
+    operation = ROOT / "deployments" / operation_id
     operation.mkdir(parents=True, mode=0o700)
     record = {
         "repository": REPO,
@@ -155,8 +158,9 @@ def main():
     }
     lease = None
     stop, renew_errors = threading.Event(), []
-    gateway = Gateway(config)
+    gateway = None
     try:
+        gateway = Gateway(config)
         status(config, sha, "pending", "Protected deterministic preflight is running")
         report, report_dir = preflight(sha)
         record["preflight_id"] = report["id"]
@@ -176,6 +180,7 @@ def main():
                 "-u",
                 "devagent",
                 "/usr/bin/git",
+                "--no-replace-objects",
                 "-C",
                 checkout,
                 "merge-base",
@@ -225,6 +230,7 @@ def main():
                     "-u",
                     "devagent",
                     "/usr/bin/git",
+                    "--no-replace-objects",
                     "-C",
                     checkout,
                     "archive",
@@ -298,6 +304,7 @@ def main():
         )
         record["deployment"] = deployment
         if deployment["state"] not in ("completed", "rolled_back"):
+            record["recovery_required"] = True
             raise RuntimeError("executor ended unresolved; preserve lease and require recovery")
         for node in TARGETS:
             target = ssh(config, node, "devagent-stage status")
@@ -320,6 +327,7 @@ def main():
                 except Exception:
                     rollback_ok = False
             record["rollback_verified"] = rollback_ok
+            record["recovery_required"] = not rollback_ok
             raise RuntimeError("postcheck failed; rollback attempted; operator audit required")
         record["state"] = deployment["state"]
         gateway.api("POST", "/api/v1/deploy/lease/" + lease["lease_id"] + "/release")
@@ -333,6 +341,18 @@ def main():
         raise
     finally:
         stop.set()
+        if lease and gateway:
+            # A staging failure has not invoked activation; a verified rollback is also safe.
+            safe_release = not record.get("deployment") and record.get("state_before_failure") == "staging"
+            safe_release = safe_release or record.get("rollback_verified", False)
+            if safe_release:
+                try:
+                    gateway.api("POST", "/api/v1/deploy/lease/" + lease["lease_id"] + "/release")
+                    record["lease_released"] = True
+                except Exception:
+                    record["recovery_required"] = True
+            else:
+                record["recovery_required"] = True
         record["finished_at"] = time.time()
         (operation / "audit.json").write_text(json.dumps(record, indent=2))
 

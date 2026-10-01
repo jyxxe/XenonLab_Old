@@ -24,8 +24,8 @@
 8. Network Server：网络代理、Cloudflare Tunnel、统一入口、受控反向代理。
 9. Docker Server：公共基础组件、认证、LLM Gateway、Deploy Gateway、监控等。
 10. Dev Server：公开项目完整源代码、Issues、PR、讨论。
-11. DevAgent：Issues 去重、分类、关联、重定向、任务编排。
-12. 多 Agent 开发：Codex 与 OpenCode 均可开发；**所有生产发布由 Codex 完成，并且同一时刻只能有一个 Codex 获得生产部署权限。**
+11. DevAgent：自主项目维护，包括开发、测试、Git 写入、PR review/merge 和受保护的指定 SHA 部署；保留 Issues 分类与任务编排。
+12. 多 Agent 开发：Codex 与 OpenCode 均可开发；**生产发布由验证过的 Codex 或专用 DevAgent maintainer 通过 Deploy Gateway 完成，同一时刻只有一个有效部署租约。**
 
 本项目 V1 的总体设计原则：
 

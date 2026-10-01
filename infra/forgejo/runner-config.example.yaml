@@ -1,0 +1,31 @@
+log:
+  level: info
+  job_level: info
+runner:
+  file: /var/lib/forgejo-runner/.runner-unused
+  capacity: 1
+  timeout: 30m
+  shutdown_timeout: 2m
+  insecure: false
+  fetch_interval: 5s
+  env_file: ''
+  envs:
+    SSL_CERT_FILE: /etc/forgejo-runner/ca-bundle.crt
+    GIT_SSL_CAINFO: /etc/forgejo-runner/ca-bundle.crt
+    NODE_EXTRA_CA_CERTS: /etc/forgejo-runner/ca-bundle.crt
+  labels:
+    - ubuntu-latest:docker://docker.io/library/node@sha256:64af3819f9275802414d7cdc38c27e9d82bd564dec4d4da87d008255d36c63b4
+cache:
+  enabled: false
+container:
+  privileged: false
+  options: --memory=3g --cpus=2 --pids-limit=512 --dns=192.168.0.105 --volume=/etc/forgejo-runner/ca-bundle.crt:/etc/forgejo-runner/ca-bundle.crt:ro
+  valid_volumes: []
+  docker_host: '-'
+  force_pull: false
+server:
+  connections:
+    xeonolab:
+      url: https://192.168.0.101:9445/
+      uuid: REPOSITORY_RUNNER_UUID
+      token_url: file:/etc/forgejo-runner/runner-token
