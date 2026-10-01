@@ -424,6 +424,21 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     assert.match(knowledgeOverview.text,/1 张表/);
     assert.match(knowledgeOverview.chart,/示例 1 张表/);
     assert.ok(knowledgeOverview.requests.includes('/tables?limit=1000'));
+    await cdp.evaluate('window.shellFixture.control.delayTables=true');
+    await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText==='刷新').click()");
+    const refreshingOverview = await cdp.evaluate(`(() => {
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('知识库概览'));
+      return {badge:card?.querySelector('.mac-badge')?.innerText,text:card?.innerText};
+    })()`);
+    assert.equal(refreshingOverview.badge,'读取中…');
+    assert.match(refreshingOverview.text,/正在读取可见知识表/);
+    assert.doesNotMatch(refreshingOverview.text,/0 张表/);
+    await waitFor(()=>cdp.evaluate('window.shellFixture.control.tablesInFlight===1'),'delayed Dashboard refresh request');
+    await cdp.evaluate('window.shellFixture.control.delayTables=false');
+    await waitFor(()=>cdp.evaluate(`(() => {
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('知识库概览'));
+      return window.shellFixture.control.tablesInFlight===0 && card?.querySelector('.mac-badge')?.innerText==='1 张表' && Boolean(card?.querySelector('.mac-bars'));
+    })()`),'Dashboard refresh settled');
     const dashboardWork = await cdp.evaluate(`(() => {
       const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('Harness 任务队列'));
       return {ring:card?.querySelector('.mac-ring')?.getAttribute('aria-label'),text:card?.innerText};

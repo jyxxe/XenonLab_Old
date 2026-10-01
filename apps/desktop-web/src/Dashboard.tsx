@@ -35,7 +35,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
   const [notes,setNotes]=useState<Record<string,string>>({}),[health,setHealth]=useState<{service:string;ready:boolean;latency:number}|null>(null);
   const [stamp,setStamp]=useState(0),[tick,setTick]=useState(0);
   const gridRef=useRef<HTMLDivElement>(null);
-  const retry=()=>setTick(value=>value+1);
+  const retry=()=>{setTablesLoading(true);setTick(value=>value+1)};
   useEffect(()=>{
     let active=true;
     setTablesLoading(true);
@@ -49,7 +49,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
       ]);
       if(active)setStamp(Date.now());
     })();
-    const next=setTimeout(()=>{if(active)setTick(value=>value+1)},30000);
+    const next=setTimeout(()=>{if(active){setTablesLoading(true);setTick(value=>value+1)}},30000);
     return ()=>{active=false;clearTimeout(next)};
   },[tick]);
   useLayoutEffect(()=>{
