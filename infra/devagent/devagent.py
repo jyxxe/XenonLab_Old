@@ -243,6 +243,7 @@ def runtime_environment(config):
             "MAKEFLAGS": "-j2",
             "OMP_NUM_THREADS": "2",
             "CHROME_BIN": "/opt/devagent/browser/chrome/chrome",
+            "GIT_NO_REPLACE_OBJECTS": "1",
             "PWD": config.get("checkout", "/var/lib/devagent/checkout"),
         }
     )

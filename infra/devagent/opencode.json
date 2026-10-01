@@ -59,6 +59,7 @@
           "git reset --hard*": "deny",
           "git clean *": "deny",
           "git credential *": "deny",
+          "git replace *": "deny",
           "git config *": "deny",
           "*auth.json*": "deny",
           "*forgejo-token*": "deny",

@@ -34,6 +34,7 @@ def user_command(argv, cwd, log):
         "--setenv=UV_PYTHON_INSTALL_DIR=/opt/xeonolab/python",
         "--setenv=CHROME_BIN=/opt/devagent/browser/chrome/chrome",
         "--setenv=GIT_TERMINAL_PROMPT=0",
+        "--setenv=GIT_NO_REPLACE_OBJECTS=1",
         "--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
         *argv,
     ]

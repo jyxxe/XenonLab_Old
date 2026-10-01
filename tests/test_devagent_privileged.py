@@ -22,6 +22,8 @@ broker, pve = load("privileged"), load("pve_receiver")
 @pytest.mark.parametrize(
     "job",
     [
+        [],
+        None,
         {"action": "shell", "args": ["id"]},
         {"action": "deploy", "args": ["other/repo", "a" * 40, "production"]},
         {"action": "deploy", "args": ["xenon-admin/XeonoLab", "main", "production"]},
@@ -158,3 +160,13 @@ def test_operation_logs_redact_before_output_truncation(tmp_path, monkeypatch):
     assert token.read_text() not in tail
     assert "abcdefghijklmnopqrstuvwxyz123456" not in tail
     assert "[REDACTED]" in tail
+
+
+def test_preflight_disables_git_replacement_objects(tmp_path, monkeypatch):
+    validator = load("validate")
+    commands = []
+    monkeypatch.setattr(
+        validator.subprocess, "run", lambda argv, **kw: commands.append(argv) or SimpleNamespace(returncode=0)
+    )
+    validator.user_command(["/usr/bin/git", "cat-file", "-e", "a" * 40], tmp_path, tmp_path / "log")
+    assert "--setenv=GIT_NO_REPLACE_OBJECTS=1" in commands[0]

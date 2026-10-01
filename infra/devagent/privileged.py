@@ -206,6 +206,8 @@ def worker(identifier):
 
 
 def request_valid(request):
+    if not isinstance(request, dict):
+        raise ValueError("object request required")
     if set(request) - {"action", "args", "task"}:
         raise ValueError("unexpected request fields")
     if not re.fullmatch("[A-Za-z0-9-]{1,64}", request.get("task", "manual")):
@@ -305,6 +307,7 @@ def main():
                 result = pve(config, request)
             else:
                 result = submit(request)
+                record["operation_id"] = result["id"]
             record["result"] = "completed" if request["action"] == "infrastructure" else "submitted"
             print(json.dumps(result))
         except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired):
