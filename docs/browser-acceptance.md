@@ -117,3 +117,29 @@ gap. In three columns, the service card must follow the shortest preceding card.
 page errors fail the run, and the knowledge button must still dispatch its application action.
 This proves local candidate layout behavior with fixture data; production OIDC and API
 integration remain covered separately by `browser_acceptance.mjs`.
+
+## CI and local synthetic smoke
+
+The frontend CI job uses a deterministic Playwright smoke test. It starts Vite on loopback,
+completes login against a synthetic OIDC provider, and stubs every platform API response in the
+browser. It checks that Knowledge and Work load, Work cursor pagination reaches page two, and
+401/429/500/503 plus timeout and network failures keep the desktop workspace and its unrelated
+Knowledge window mounted. It does not use a production identity, model, service, or tunnel.
+
+Run the frontend gate from the repository root:
+
+```sh
+cd apps/desktop-web
+npm ci
+npx playwright install --with-deps chromium
+npm test
+npm run test:browser-smoke
+npm run build
+```
+
+`test:browser-smoke` resolves Playwright's pinned Chromium by default and fails immediately if the
+binary is missing. Set `CHROME_BIN` to an executable Chromium path to use a preinstalled browser.
+On failure, the test writes `runtime/ci-browser-smoke/browser-smoke-failure.png`, a JSON summary
+of console/page/request/HTTP diagnostics and fixture state, and a Playwright trace ZIP. Forgejo CI
+uploads that directory on job failure; local runs leave it in the ignored `runtime/` directory.
+Existing production browser acceptance remains a separate, credentialed, coordinator-run workflow.
