@@ -19,6 +19,12 @@ session. An actual SSH PTY opened the Maintainer / DeepSeek V4.1 Flash TUI and e
 `flock` protecting the checkout. The runtime uses ephemeral CLI sessions; a
 persistent, publicly listening OpenCode server is unnecessary.
 
+Before the first service-mode run, create a root-owned
+`/etc/devagent/opencode/.gitignore` containing OpenCode startup exclusions
+(`node_modules`, `package.json`, `package-lock.json`, `bun.lock`, `.gitignore`).
+The configuration directory remains read-only to the model. Actual automatic
+startup initially failed without this file, unlike manual mode.
+
 Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
@@ -35,7 +41,9 @@ track PR heads, reviews/comments, merge state and CI, plus Issues assigned to
 the maintainer or labelled `devagent`. Own comments and the embedded repository
 timestamp in Forgejo combined-status responses do not trigger a model call.
 Ordinary unrelated branch pushes therefore do not wake every PR.
-Closed PR fingerprints ignore moving historical branch references. A CLI exit
+Closed PR fingerprints ignore moving historical branch references. New project
+events supersede older pending/failed retries for the same resource; a completed
+new head must not be followed by a retry of an obsolete event. A CLI exit
 code of zero only completes a model task if its last step finished with `stop`;
 permission-interrupted tool sessions remain failed. The wrapper sets the actual
 repository directory explicitly instead of inheriting a login shell's home.

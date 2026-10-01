@@ -26,6 +26,25 @@ def test_baseline_dedup_and_crash_recovery(tmp_path):
     assert not state.observe("pr:1", {"head": "b"})
 
 
+@pytest.mark.parametrize("baseline", [False, True])
+def test_new_event_supersedes_failed_retry_and_old_queue(tmp_path, monkeypatch, baseline):
+    state = controller.State(tmp_path)
+    state.observe("pr:89", {"head": "old"})
+    old = state.pending()["id"]
+    state.db.execute("UPDATE tasks SET status='failed',attempts=1,updated=0 WHERE id=?", (old,))
+    state.db.commit()
+    state.observe("pr:90", {"head": "unrelated"})
+    state.observe("pr:89", {"head": "fresh"}, baseline=baseline)
+    assert state.db.execute("SELECT status FROM tasks WHERE id=?", (old,)).fetchone()[0] == "superseded"
+    assert state.db.execute("SELECT status FROM tasks WHERE resource='pr:90'").fetchone()[0] == "pending"
+    fresh = state.db.execute("SELECT id FROM tasks WHERE resource='pr:89' AND status='pending'").fetchall()
+    assert len(fresh) == (0 if baseline else 1)
+    state.db.execute("UPDATE tasks SET status='done' WHERE status='pending'")
+    state.db.commit()
+    monkeypatch.setattr(controller.time, "time", lambda: 99999999)
+    assert state.pending() is None  # expired retry cooldown cannot resurrect the old PR head
+
+
 def test_kernel_lock_excludes_other_process_and_recovers(tmp_path):
     state = controller.State(tmp_path)
     script = "import fcntl,sys; f=open(sys.argv[1],'a'); fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)"

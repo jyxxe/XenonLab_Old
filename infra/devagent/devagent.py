@@ -116,6 +116,12 @@ class State:
             return False
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO snapshots VALUES(?,?)", (resource, fingerprint))
+            # A newer head/CI/event replaces obsolete queued retries, preserving their audit.
+            self.db.execute(
+                "UPDATE tasks SET status='superseded',updated=? WHERE resource=? "
+                "AND fingerprint<>? AND status IN ('pending','failed')",
+                (time.time(), resource, fingerprint),
+            )
             if not baseline:
                 self.db.execute(
                     "INSERT OR IGNORE INTO tasks(id,resource,fingerprint,payload,status,updated) "
