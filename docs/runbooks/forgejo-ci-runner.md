@@ -62,6 +62,8 @@ Build `infra/forgejo/Containerfile` as the rootless runner user, using a context
 that contains the public CA bundle named `ca-bundle.crt`, verified official uv
 0.12.1/uvx, the existing root-owned public uv package cache, missing development
 wheels independently checked against the committed `uv.lock` SHA-256 values,
+their public `dev-uv-cache` overlay (official wheel contents plus matching uv
+cache records, with no credentials or private package index configuration),
 managed CPython 3.12.13 and the existing protected Chrome
 150.0.7871.186 runtime. Keep registration/auth files out of the context.
 Record artifact hashes before copying public runtimes; the installed root-owned
@@ -80,6 +82,14 @@ avoids repeating those downloads in each job. The workflow still runs locked
 dependency preparation, all backend/frontend/browser checks and the build; a
 missing browser remains a hard failure. This still does not prove CI passed: inspect exact-head
 workflow jobs before merging.
+The development-wheel overlay is needed because `UV_FIND_LINKS` alone does not
+satisfy the URLs already frozen in `uv.lock`. Verify `uv sync --locked --offline`
+against an archived public checkout in an isolated container before using the
+image; copying a wheelhouse is insufficient proof of a complete uv cache.
+For an already verified runtime image, `Containerfile.dev-cache` can add only
+that public overlay with `--build-arg RUNTIME_IMAGE=EXACT_LOCAL_IMAGE_ID`,
+`--pull=never` and `--network=none`; record both base and resulting IDs. A cold
+full build still needs the signed Debian repositories for browser libraries.
 
 ## Operational acceptance
 
