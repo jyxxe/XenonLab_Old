@@ -52,6 +52,53 @@ def repository_allowed(settings, repository):
         raise APIError(403, "REPOSITORY_FORBIDDEN", "repository outside service scope")
 
 
+class ForgejoClaimSync:
+    """Track this request's writes without retaining credentials in public details."""
+
+    def __init__(self, item):
+        self.work_id, self.epoch = item["id"], item["epoch"]
+        self.assignee, self.comment = "not_attempted", "not_attempted"
+        self.comment_id = None
+        self.client = None
+        self.root, self.headers = "", {}
+
+    def details(self):
+        return {
+            "work_id": self.work_id,
+            "claim_epoch": self.epoch,
+            "forgejo_sync": {
+                "assignee": self.assignee,
+                "comment": self.comment,
+                "comment_id": self.comment_id,
+                "reconciliation_required": (
+                    self.assignee in ("added", "unknown")
+                    or self.comment in ("created", "unknown", "cleanup_failed")
+                ),
+            },
+        }
+
+    def discard_comment(self):
+        # Delete only the ID returned for this request. Never search by body/epoch:
+        # a timed-out POST may have succeeded, but its comment cannot be identified.
+        if self.comment_id is not None:
+            try:
+                url = self.root.rsplit("/", 1)[0] + "/comments/" + str(self.comment_id)
+                result = self.client.delete(url, headers=self.headers)
+                result.raise_for_status()
+                self.comment = "deleted"
+            except Exception:
+                self.comment = "cleanup_failed"
+        # Assignees are shared, unversioned state in Forgejo. Replacing an old set
+        # could remove a new holder or another user's assignment, even after a GET.
+
+    def close(self):
+        if self.client is not None:
+            try:
+                self.client.close()
+            except Exception:
+                pass
+
+
 def sync_forgejo_claim(item, actor, settings):
     """Mirror a durable Work claim to Forgejo when the write integration is configured.
 
@@ -79,12 +126,14 @@ def sync_forgejo_claim(item, actor, settings):
 
     root = endpoint.rstrip("/") + "/api/v1/repos/" + item["repository"] + "/issues/" + str(item["issue_id"])
     headers = {"Authorization": "token " + token}
-    client = None
+    sync = ForgejoClaimSync(item)
+    sync.root, sync.headers = root, headers
+    succeeded = False
     try:
         context = ssl.create_default_context()
         if os.getenv("FORGEJO_CA_FILE"):
             context.load_verify_locations(Path(os.environ["FORGEJO_CA_FILE"]))
-        client = httpx.Client(verify=context, trust_env=False, timeout=10)
+        client = sync.client = httpx.Client(verify=context, trust_env=False, timeout=10)
         issue_response = client.get(root, headers=headers)
         issue_response.raise_for_status()
         issue = issue_response.json()
@@ -92,33 +141,42 @@ def sync_forgejo_claim(item, actor, settings):
             raise APIError(409, "ISSUE_NOT_OPEN", "Forgejo Issue is no longer open")
         old_assignees = [entry["login"] for entry in issue.get("assignees", []) if isinstance(entry, dict) and entry.get("login")]
         if username not in old_assignees:
+            sync.assignee = "unknown"
             assigned = client.patch(root, headers=headers, json={"assignees": old_assignees + [username]})
             assigned.raise_for_status()
+            sync.assignee = "added"
+        else:
+            sync.assignee = "unchanged"
         comment_url = root + "/comments"
+        sync.comment = "unknown"
         comment = client.post(
             comment_url,
             headers=headers,
-            json={"body": f"Harness claim: @{username} claimed this Issue (Work epoch {item['epoch']})."},
+            json={"body": (
+                f"Harness claim: @{username} claimed this Issue (Work epoch {item['epoch']}). "
+                "Verify the active holder and epoch via the Work API before working."
+            )},
         )
         comment.raise_for_status()
+        comment_id = comment.json().get("id")
+        if type(comment_id) is not int or comment_id < 1:
+            raise ValueError("missing comment ID")
+        sync.comment_id, sync.comment = comment_id, "created"
+        succeeded = True
+        return sync
     except APIError:
         raise
     except Exception:
-        # If comment creation fails after assignment, best-effort restore the exact
-        # prior assignee set. Never include remote response bodies or credentials in
-        # the public error.
-        try:
-            if client is not None and "old_assignees" in locals() and username not in old_assignees:
-                client.patch(root, headers=headers, json={"assignees": old_assignees}).raise_for_status()
-        except Exception:
-            pass
-        raise APIError(503, "FORGEJO_CLAIM_SYNC_FAILED", "Issue claim could not be synchronized") from None
+        # A timeout may follow a committed remote write. Do not claim rollback or
+        # overwrite the shared assignee set; expose sanitized uncertainty instead.
+        raise APIError(
+            503, "FORGEJO_CLAIM_SYNC_FAILED",
+            "Issue claim could not be synchronized; remote side effects may remain (see details)",
+            details=sync.details(),
+        ) from None
     finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception:
-                pass
+        if not succeeded:
+            sync.close()
 
 
 def install(app):
@@ -332,7 +390,10 @@ def install(app):
                 "description": (
                     "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`). "
                     "Codes: `WORK_CLAIMED`, `WORK_COMPLETED`, `SYNC_CONFLICT`, `ISSUE_NOT_OPEN`, or "
-                    "`STALE_CLAIM` when the claim was fenced during Forgejo synchronization."
+                    "`STALE_CLAIM` when the claim was fenced during Forgejo synchronization. In that case "
+                    "only the comment ID created by this request is deleted, best effort; assignees are "
+                    "left untouched. `details.forgejo_sync` reports remote write/cleanup outcomes and "
+                    "`reconciliation_required`; a stale assignee or comment may remain."
                 )
             },
             503: {
@@ -340,14 +401,21 @@ def install(app):
                     "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`); "
                     "codes are `FORGEJO_CLAIM_NOT_CONFIGURED` or `FORGEJO_CLAIM_SYNC_FAILED`. The request's "
                     "holder+epoch claim is conditionally reset only while that exact claim remains current. "
-                    "If a concurrent webhook or reclaim changed the lease, its newer state is preserved."
+                    "If a concurrent webhook or reclaim changed the lease, its newer state is preserved. "
+                    "Assignees are never restored from an old snapshot. `FORGEJO_CLAIM_SYNC_FAILED` includes "
+                    "`details.forgejo_sync` with assignee/comment outcomes (`unknown` for ambiguous writes), "
+                    "the known comment ID and `reconciliation_required`. Remote effects require operator "
+                    "verification when this flag is true; automatic remote reconciliation is not implemented."
                 )
             },
         },
         description=(
             "Atomically claims a Work item, then assigns the mapped Forgejo account and posts an Issue comment "
-            "containing the claim epoch. Existing assignees are preserved. If synchronization fails, the service "
-            "attempts to restore assignees and rolls back the matching local claim."
+            "containing the claim epoch. The initial assignment preserves assignees read from Forgejo, but "
+            "Forgejo's whole-set PATCH has no compare-and-swap protection against concurrent remote edits. "
+            "Work and Forgejo do not share a transaction. If synchronization fails, the service rolls back "
+            "only the matching local claim. The Work API's current holder, epoch and expiry authorize work; "
+            "Forgejo assignees/comments are advisory and may require manual reconciliation."
         ),
     )
     def claim(work_id: str, body: Claim, request: Request, actor=Depends(scope("dev:write"))):
@@ -367,7 +435,7 @@ def install(app):
             audit(db, actor, "work.claimed", work_id, epoch)
             claimed = load(db, work_id)
         try:
-            sync_forgejo_claim(claimed, actor, app.state.settings)
+            sync = sync_forgejo_claim(claimed, actor, app.state.settings)
         except APIError:
             # Release only this exact claim. A concurrent webhook may have fenced it;
             # never overwrite the newer state when cleaning up a failed sync.
@@ -380,16 +448,32 @@ def install(app):
                 current = load(db, work_id)
                 audit(db, actor, "work.claim_sync_failed", work_id, current["epoch"])
             raise
-        with transaction(database) as db:
-            current = load(db, work_id)
-            if (
-                current["status"] != "claimed"
-                or current["holder"] != actor.sub
-                or current["epoch"] != epoch
-                or current["expires"] <= time.time()
-            ):
-                raise APIError(409, "STALE_CLAIM", "claim changed while Forgejo synchronization was in progress")
+        try:
+            with transaction(database) as db:
+                current = load(db, work_id)
+                stale = (
+                    current["status"] != "claimed"
+                    or current["holder"] != actor.sub
+                    or current["epoch"] != epoch
+                    or current["expires"] <= time.time()
+                )
+                if stale:
+                    audit(db, actor, "work.claim_sync_stale", work_id, epoch)
+            # Remote cleanup must run outside the local transaction so a webhook
+            # or new holder can keep progressing. Never alter their local state.
+            if stale:
+                if sync is not None:
+                    sync.discard_comment()
+                raise APIError(
+                    409, "STALE_CLAIM",
+                    "claim changed while Forgejo synchronization was in progress; "
+                    "remote side effects may remain (see details)",
+                    details=sync.details() if sync is not None else {},
+                )
             return response(request, current)
+        finally:
+            if sync is not None:
+                sync.close()
 
     @app.post("/api/v1/work/{work_id}/renew")
     def renew(work_id: str, body: Renew, request: Request, actor=Depends(scope("dev:write"))):

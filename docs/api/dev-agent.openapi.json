@@ -203,7 +203,7 @@
     "/api/v1/work/{work_id}/claim": {
       "post": {
         "summary": "Claim",
-        "description": "Atomically claims a Work item, then assigns the mapped Forgejo account and posts an Issue comment containing the claim epoch. Existing assignees are preserved. If synchronization fails, the service attempts to restore assignees and rolls back the matching local claim.",
+        "description": "Atomically claims a Work item, then assigns the mapped Forgejo account and posts an Issue comment containing the claim epoch. The initial assignment preserves assignees read from Forgejo, but Forgejo's whole-set PATCH has no compare-and-swap protection against concurrent remote edits. Work and Forgejo do not share a transaction. If synchronization fails, the service rolls back only the matching local claim. The Work API's current holder, epoch and expiry authorize work; Forgejo assignees/comments are advisory and may require manual reconciliation.",
         "operationId": "claim_api_v1_work__work_id__claim_post",
         "parameters": [
           {
@@ -236,10 +236,10 @@
             }
           },
           "409": {
-            "description": "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`). Codes: `WORK_CLAIMED`, `WORK_COMPLETED`, `SYNC_CONFLICT`, `ISSUE_NOT_OPEN`, or `STALE_CLAIM` when the claim was fenced during Forgejo synchronization."
+            "description": "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`). Codes: `WORK_CLAIMED`, `WORK_COMPLETED`, `SYNC_CONFLICT`, `ISSUE_NOT_OPEN`, or `STALE_CLAIM` when the claim was fenced during Forgejo synchronization. In that case only the comment ID created by this request is deleted, best effort; assignees are left untouched. `details.forgejo_sync` reports remote write/cleanup outcomes and `reconciliation_required`; a stale assignee or comment may remain."
           },
           "503": {
-            "description": "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`); codes are `FORGEJO_CLAIM_NOT_CONFIGURED` or `FORGEJO_CLAIM_SYNC_FAILED`. The request's holder+epoch claim is conditionally reset only while that exact claim remains current. If a concurrent webhook or reclaim changed the lease, its newer state is preserved."
+            "description": "Returns the standard `error` envelope (`code`, `message`, `details`, `request_id`); codes are `FORGEJO_CLAIM_NOT_CONFIGURED` or `FORGEJO_CLAIM_SYNC_FAILED`. The request's holder+epoch claim is conditionally reset only while that exact claim remains current. If a concurrent webhook or reclaim changed the lease, its newer state is preserved. Assignees are never restored from an old snapshot. `FORGEJO_CLAIM_SYNC_FAILED` includes `details.forgejo_sync` with assignee/comment outcomes (`unknown` for ambiguous writes), the known comment ID and `reconciliation_required`. Remote effects require operator verification when this flag is true; automatic remote reconciliation is not implemented."
           },
           "422": {
             "description": "Validation Error",

@@ -161,9 +161,10 @@ class Metrics:
 
 
 class APIError(Exception):
-    def __init__(self, status, code, message, headers=None):
+    def __init__(self, status, code, message, headers=None, details=None):
         self.status, self.code, self.message = status, code, message
         self.headers = headers or {}
+        self.details = details or {}
 
 
 DEFAULT_RATE_LIMITS = {
@@ -579,7 +580,7 @@ def base_app(service, settings=None):
                 "error": {
                     "code": exc.code,
                     "message": exc.message,
-                    "details": {},
+                    "details": exc.details,
                     "request_id": request.state.request_id,
                 }
             },

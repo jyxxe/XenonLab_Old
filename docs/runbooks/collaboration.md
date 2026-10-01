@@ -77,7 +77,27 @@ epoch；过期或被重新认领后 renew/release/complete 一律拒绝，持有
 - 三个账号都能通过 Forgejo REST 完成身份认证，并且对 `xenon-admin/XeonoLab` 只有仓库写权限、没有站点管理员权限。三个 OIDC 身份均能访问平台 Work API，实际 platform scopes 为 `dev:read`、`dev:write`、`desktop:read`，均无 deploy scope；独立 subject 已验证。
 - 私有 `Agent.md` 指引分别保存在本机 `runtime/agent-profiles/{chatgpt-web,zcode,general-agent}/Agent.md`；目录权限 `700`、文件权限 `600`，由 Git 忽略。文件包含各自 Forgejo 密码和 OIDC client secret，不应复制到仓库、Issue、日志或其他 Harness。
 - 真实 LAN API 并发验收用临时 Forgejo Issue #79：ChatGPT Web 与 Zcode 同时 claim，结果恰为一个 `200`、一个 `409 WORK_CLAIMED`；非持有者 release 得到 `409`；释放后 General Agent 以递增 epoch 领取并完成。临时 Issue 已关闭，Work item 已完成；没有创建 release 或取得部署租约。
-- Issue #73 仍开放：Work claim 现实现同步 Forgejo assignee 与带 epoch 的领取评论；配置由 DevAgent 的 `FORGEJO_CLAIM_TOKEN_FILE`（独立 Forgejo 服务账号 token）和 `FORGEJO_AGENT_USERS_FILE`（OIDC subject 到 Forgejo username 的 JSON 映射）提供。发布预检要求本地 `runtime/deploy-secrets/forgejo-claim-token` 与 `forgejo-agent-users.json` 为 owner-only 普通文件，并验证映射格式；VM 111 收到的 token、映射及 `dev-agent.env` 均安装为 `root:xeonolab`、`0640`。生产激活前仍需核验实际映射和 Forgejo API 权限；缺配置时生产 API 会拒绝 claim 并回滚本地租约。评论创建失败会尽力恢复原 assignee；由于 Forgejo 与 Work SQLite 不支持跨服务事务，远端部分失败仍需监控并人工核对。
+- Issue #73 仍开放：Work claim 现实现同步 Forgejo assignee 与带 epoch 的领取评论；配置由 DevAgent 的 `FORGEJO_CLAIM_TOKEN_FILE`（独立 Forgejo 服务账号 token）和 `FORGEJO_AGENT_USERS_FILE`（OIDC subject 到 Forgejo username 的 JSON 映射）提供。发布预检要求本地 `runtime/deploy-secrets/forgejo-claim-token` 与 `forgejo-agent-users.json` 为 owner-only 普通文件，并验证映射格式；VM 111 收到的 token、映射及 `dev-agent.env` 均安装为 `root:xeonolab`、`0640`。生产激活前仍需核验实际映射和 Forgejo API 权限；缺配置时生产 API 会拒绝 claim 并回滚本地租约。
+
+Work claim 与 Forgejo 的一致性边界：Work API 当前 holder、epoch、expiry 才是工作的授权依据，
+Forgejo assignee 与评论只是提示。同步窗口中 webhook 关闭/阻塞 Issue、换 holder、推进同一
+holder 的 epoch 或租约到期后，claim 返回 `409 STALE_CLAIM`，不改写较新的本地状态。
+服务在本地事务之外尽力删除本次 POST 返回的精确评论 ID，保留其他评论；删除失败仍返回 409。
+同步失败返回 `503 FORGEJO_CLAIM_SYNC_FAILED`，只条件回滚仍匹配本次 holder+epoch 的本地 claim。
+这两类错误通过 `error.details.work_id`、`claim_epoch`、`forgejo_sync` 报告远端结果：
+
+- `assignee`：`not_attempted`、`unchanged`、`added` 或 `unknown`。
+- `comment`：`not_attempted`、`created`、`deleted`、`unknown` 或 `cleanup_failed`；
+  `comment_id` 仅在 POST 返回有效正整数 ID 时存在（否则为 null）。
+- `reconciliation_required` 为 true 时，需读取最新 Work 与 Forgejo 状态并人工核对。
+  `unknown` 表示写请求可能已提交（例如响应超时）；没有确定 ID 的评论不自动搜索或删除。
+  状态值描述本次请求确认的操作结果，不是对 Forgejo 当前状态的实时保证。
+
+服务不自动恢复 assignee 快照，避免删掉并发新 holder（包括映射到同一 Forgejo 账号的新 epoch）
+或第三方 assignee。初次 GET→PATCH 会保留读取时的其他 assignee，但当前 Forgejo API 只支持
+整集合替换且没有 CAS 保证，该窗口仍可能覆盖并发远端修改；失败后旧 assignee 也可能保留。
+人工核对时保留第三方 assignee，不用旧快照覆盖远端集合。跨服务原子事务、持久化远端重试/
+对账 worker 与进程崩溃后的自动评论清理均未实现，不能将本接口视为强一致保证。
 
 Issue 关联以 repository 为命名空间；production 默认仅 xenon-admin/XeonoLab；
 自关联和 duplicate_of 环路被拒绝。元数据持久化到 work.sqlite，独立于 Forgejo facts。

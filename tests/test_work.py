@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
 from fastapi.testclient import TestClient
 
 from xeonolab.services import create_app
@@ -49,6 +50,10 @@ def test_claim_openapi_documents_forgejo_sync_side_effects_and_failures(settings
     assert "FORGEJO_CLAIM_SYNC_FAILED" in unavailable
     assert "conditionally reset only while that exact claim remains current" in unavailable
     assert "newer state is preserved" in unavailable
+    assert "only the comment ID created by this request" in conflict
+    assert "assignees are left untouched" in conflict
+    assert "reconciliation_required" in unavailable
+    assert "no compare-and-swap protection" in contract["description"]
 
 
 def test_claim_synchronizes_forgejo_assignee_and_comment(settings, monkeypatch, tmp_path):
@@ -107,11 +112,12 @@ def test_claim_synchronizes_forgejo_assignee_and_comment(settings, monkeypatch, 
     assert [call[0] for call in client.calls] == ["get", "patch", "post"]
     assert client.calls[1][2]["json"] == {"assignees": ["triage", "general-agent"]}
     assert client.calls[2][2]["json"]["body"] == (
-        "Harness claim: @general-agent claimed this Issue (Work epoch 1)."
+        "Harness claim: @general-agent claimed this Issue (Work epoch 1). "
+        "Verify the active holder and epoch via the Work API before working."
     )
 
 
-def test_claim_sync_failure_releases_claim_and_restores_assignees(settings, monkeypatch, tmp_path):
+def test_claim_sync_failure_releases_claim_without_restoring_assignees(settings, monkeypatch, tmp_path):
     import json
 
     import httpx
@@ -171,8 +177,15 @@ def test_claim_sync_failure_releases_claim_and_restores_assignees(settings, monk
     assert current["status"] == "queued" and current["holder"] is None and current["epoch"] == 2
     assert client.patches == [
         {"assignees": ["triage", "general-agent"]},
-        {"assignees": ["triage"]},
     ]
+    assert result.json()["error"]["details"] == {
+        "work_id": item["id"],
+        "claim_epoch": 1,
+        "forgejo_sync": {
+            "assignee": "added", "comment": "unknown", "comment_id": None,
+            "reconciliation_required": True,
+        },
+    }
 
 
 def test_claim_setup_failures_are_safe_api_errors_and_release_claim(settings, monkeypatch, tmp_path):
@@ -243,6 +256,214 @@ def test_claim_does_not_return_success_if_fenced_during_forgejo_sync(settings, m
     assert result.json()["error"]["code"] == "STALE_CLAIM"
     current = next(row for row in api.get("/api/v1/work", headers=auth()).json()["data"] if row["id"] == item["id"])
     assert current["status"] == "claimed" and current["holder"] == "contender" and current["epoch"] == 2
+
+
+@pytest.fixture
+def forgejo_claim_transport(settings, monkeypatch, tmp_path):
+    import json
+
+    import httpx
+
+    from xeonolab import work
+
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    token_file = tmp_path / "forgejo-token"
+    token_file.write_text("test-token")
+    users_file = tmp_path / "forgejo-users.json"
+    users_file.write_text(json.dumps({"alice": "general-agent"}))
+    monkeypatch.setenv("FORGEJO_URL", "https://forgejo.example")
+    monkeypatch.setenv("FORGEJO_CLAIM_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("FORGEJO_AGENT_USERS_FILE", str(users_file))
+    original_client = work.httpx.Client
+
+    def configure(handler):
+        monkeypatch.setattr(
+            work.httpx, "Client",
+            lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+        )
+
+    return configure
+
+
+@pytest.mark.parametrize("fence_at", ["PATCH", "POST"])
+@pytest.mark.parametrize("state", ["closed", "blocked", "other_holder", "same_holder", "expired"])
+@pytest.mark.parametrize("delete_fails", [False, True])
+def test_stale_sync_deletes_only_own_comment_and_preserves_shared_assignees(
+    settings, forgejo_claim_transport, fence_at, state, delete_fails,
+):
+    import json
+    import time
+
+    import httpx
+
+    from xeonolab.common import transaction
+
+    app = create_app("dev-agent", settings)
+    api = TestClient(app)
+    item = api.post(
+        "/api/v1/work", headers=auth(),
+        json={"repository": "xenon-admin/XeonoLab", "issue_id": 73, "title": "Harness claims"},
+    ).json()["data"]
+    assignees, comments, calls = ["triage"], {13: "new holder's comment"}, []
+
+    def fence():
+        with transaction(settings.data_dir / "work.sqlite") as db:
+            if state == "closed":
+                app.state.ingest_forgejo(db, {
+                    "repository": {"full_name": item["repository"]},
+                    "issue": {"number": 73, "title": item["title"], "state": "closed",
+                              "updated_at": "2026-10-01T09:00:00Z"},
+                })
+            else:
+                status = "blocked" if state == "blocked" else "claimed"
+                holder = None if state == "blocked" else "bob" if state == "other_holder" else "alice"
+                db.execute(
+                    "UPDATE work SET status=?,holder=?,epoch=?,expires=? WHERE id=?",
+                    (status, holder, 1 if state == "expired" else 2,
+                     0 if state == "expired" else time.time() + 300, item["id"]),
+                )
+        # Concurrent remote assignments must survive both successful and failed cleanup.
+        assignees.extend(["new-holder", "human-new"])
+
+    def remote(request):
+        calls.append((request.method, request.url.path))
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "number": 73, "state": "open", "assignees": [{"login": name} for name in assignees],
+            })
+        if request.method == "PATCH":
+            assignees[:] = json.loads(request.content)["assignees"]
+            if fence_at == "PATCH":
+                fence()
+            return httpx.Response(201, json={})
+        if request.method == "POST":
+            comments[12] = json.loads(request.content)["body"]
+            if fence_at == "POST":
+                fence()
+            return httpx.Response(201, json={"id": 12})
+        assert request.method == "DELETE"
+        assert request.url.path == "/api/v1/repos/xenon-admin/XeonoLab/issues/comments/12"
+        # Cleanup permits concurrent local writes and must not hold the SQLite transaction.
+        with transaction(settings.data_dir / "work.sqlite") as db:
+            db.execute("UPDATE work SET title='cleanup concurrent update' WHERE id=?", (item["id"],))
+        if delete_fails:
+            return httpx.Response(403, text="provider detail test-token")
+        del comments[12]
+        return httpx.Response(204)
+
+    forgejo_claim_transport(remote)
+    result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth(), json={})
+
+    assert result.status_code == 409
+    assert result.json()["error"]["code"] == "STALE_CLAIM"
+    assert result.json()["error"]["details"] == {
+        "work_id": item["id"], "claim_epoch": 1,
+        "forgejo_sync": {
+            "assignee": "added", "comment": "cleanup_failed" if delete_fails else "deleted",
+            "comment_id": 12, "reconciliation_required": True,
+        },
+    }
+    assert "test-token" not in result.text
+    assert [method for method, _ in calls] == ["GET", "PATCH", "POST", "DELETE"]
+    assert assignees == ["triage", "general-agent", "new-holder", "human-new"]
+    assert 13 in comments and (12 in comments) == delete_fails
+    current = next(row for row in api.get("/api/v1/work", headers=auth()).json()["data"] if row["id"] == item["id"])
+    assert current["title"] == "cleanup concurrent update"
+    assert current["epoch"] == (1 if state == "expired" else 2)
+    assert current["status"] == {"closed": "completed", "blocked": "blocked"}.get(state, "claimed")
+    assert current["holder"] == (None if state in ("closed", "blocked") else "bob" if state == "other_holder" else "alice")
+
+
+@pytest.mark.parametrize("failure", ["patch_timeout", "post_timeout", "missing_comment_id", "invalid_comment_id"])
+def test_ambiguous_remote_writes_do_not_overwrite_new_claim_or_guess_comment_id(
+    settings, forgejo_claim_transport, failure,
+):
+    import json
+    import time
+
+    import httpx
+
+    from xeonolab.common import transaction
+
+    api = TestClient(create_app("dev-agent", settings))
+    item = api.post(
+        "/api/v1/work", headers=auth(),
+        json={"repository": "xenon-admin/XeonoLab", "issue_id": 73, "title": "Harness claims"},
+    ).json()["data"]
+    assignees, calls = ["triage"], []
+
+    def remote(request):
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json={"number": 73, "state": "open", "assignees": [{"login": "triage"}]})
+        if request.method == "PATCH":
+            assignees[:] = json.loads(request.content)["assignees"]
+            if failure != "patch_timeout":
+                return httpx.Response(201, json={})
+        # This newer claim and remote assignments must not be rolled back on any failure.
+        with transaction(settings.data_dir / "work.sqlite") as db:
+            db.execute(
+                "UPDATE work SET holder='bob',epoch=2,expires=? WHERE id=?",
+                (time.time() + 300, item["id"]),
+            )
+        assignees.extend(["new-holder", "human-new"])
+        if failure.endswith("timeout"):
+            raise httpx.ReadTimeout("provider detail test-token", request=request)
+        assert request.method == "POST"
+        return httpx.Response(201, json={} if failure == "missing_comment_id" else {"id": True})
+
+    forgejo_claim_transport(remote)
+    result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth(), json={})
+
+    assert result.status_code == 503
+    assert result.json()["error"]["code"] == "FORGEJO_CLAIM_SYNC_FAILED"
+    assert result.json()["error"]["details"]["forgejo_sync"] == {
+        "assignee": "unknown" if failure == "patch_timeout" else "added",
+        "comment": "not_attempted" if failure == "patch_timeout" else "unknown",
+        "comment_id": None, "reconciliation_required": True,
+    }
+    assert "test-token" not in result.text
+    assert calls == (["GET", "PATCH"] if failure == "patch_timeout" else ["GET", "PATCH", "POST"])
+    assert assignees == ["triage", "general-agent", "new-holder", "human-new"]
+    current = next(row for row in api.get("/api/v1/work", headers=auth()).json()["data"] if row["id"] == item["id"])
+    assert current["holder"] == "bob" and current["epoch"] == 2 and current["status"] == "claimed"
+
+
+@pytest.mark.parametrize("delete_fails", [False, True])
+def test_stale_sync_preserves_preexisting_assignee(settings, forgejo_claim_transport, delete_fails):
+    import httpx
+
+    from xeonolab.common import transaction
+
+    api = TestClient(create_app("dev-agent", settings))
+    item = api.post(
+        "/api/v1/work", headers=auth(),
+        json={"repository": "xenon-admin/XeonoLab", "issue_id": 73, "title": "Harness claims"},
+    ).json()["data"]
+    calls = []
+
+    def remote(request):
+        calls.append(request.method)
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "number": 73, "state": "open", "assignees": [{"login": "general-agent"}],
+            })
+        if request.method == "POST":
+            with transaction(settings.data_dir / "work.sqlite") as db:
+                db.execute("UPDATE work SET epoch=epoch+1 WHERE id=?", (item["id"],))
+            return httpx.Response(201, json={"id": 12})
+        assert request.method == "DELETE"
+        return httpx.Response(403 if delete_fails else 204)
+
+    forgejo_claim_transport(remote)
+    result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth(), json={})
+
+    assert result.status_code == 409
+    assert calls == ["GET", "POST", "DELETE"]
+    assert result.json()["error"]["details"]["forgejo_sync"] == {
+        "assignee": "unchanged", "comment": "cleanup_failed" if delete_fails else "deleted",
+        "comment_id": 12, "reconciliation_required": delete_fails,
+    }
 
 
 def test_expired_claim_cannot_complete_reassigned_task(settings, monkeypatch):
