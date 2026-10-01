@@ -1,7 +1,7 @@
 # Desktop UI 审计（Issue #71, Phase A）
 
-日期：2026-10-01  
-范围：`apps/desktop-web`（React 19 + TypeScript + Vite，无组件库、无路由库）  
+日期：2026-10-01
+范围：`apps/desktop-web`（React 19 + TypeScript + Vite，无组件库、无路由库）
 方法：阅读全部前端源码与既有测试、运行 `npm test`、`npm run build`，并用合成 API 的浏览器夹具（`tests/shell-fixture.html`）在 1920×1080 / 1440×900 / 1366×768 / 1024×768 / 390×844 下截图检查。本文档只描述事实，不声称任何未运行的验证。
 
 ## Existing Components

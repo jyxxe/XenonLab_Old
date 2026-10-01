@@ -427,6 +427,15 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.command-palette'))"), 'palette for capture');
     await capture('desktop-command-palette-dark-1440x900');
     await cdp.key('Escape', 'Escape');
+    // Restore-disabled startup and Dock-only autosave preserve stored windows.
+    const preserved={id:'preserved',app_id:'knowledge',title:'Knowledge',x:80,y:70,width:900,height:600,minimized:false};
+    await cdp.evaluate(`sessionStorage.setItem('shell-fixture:preferences',JSON.stringify({...window.shellFixture.preferences,restore_windows:false}));sessionStorage.setItem('shell-fixture:layout',JSON.stringify({dock:['settings'],windows:[${JSON.stringify(preserved)}],dock_initialized:true}))`);
+    await cdp.call('Page.reload');
+    await waitFor(()=>cdp.evaluate("Boolean(document.querySelector('nav.dock'))"),'restore-disabled desktop');
+    assert.equal(await cdp.evaluate("document.querySelectorAll('.window').length"),0,'no windows restored');
+    await waitFor(()=>cdp.evaluate("window.shellFixture.calls.some(call=>call.method==='PUT')"),'Dock-only startup save');
+    assert.equal(await cdp.evaluate("window.shellFixture.layout.windows[0]?.id"),'preserved','saved window layout remains intact');
+
     // An intentionally unpinned Dock stays empty after reloading.
     await cdp.evaluate("sessionStorage.setItem('shell-fixture:layout',JSON.stringify({dock:[],windows:[],dock_initialized:true}))");
     await cdp.call('Page.reload');

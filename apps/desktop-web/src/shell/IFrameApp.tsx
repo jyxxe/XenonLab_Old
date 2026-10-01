@@ -52,13 +52,16 @@ export function IFrameApp({
   },[windowId,app.origin,active]);
 
   const url = appEntryUrl(app);
+  const frameUrl = new URL(url);
+  if (attempt) frameUrl.searchParams.set('reload',String(attempt));
   return (
     <div className={`iframe-app${phase === 'ready' || phase === 'loaded' ? ' ds-loaded' : ''}`}>
       {phase === 'loading' && <div className="iframe-loading-bar" aria-hidden="true" />}
       <iframe
+        key={attempt}
         id={`frame-${windowId}`}
         title={app.title}
-        src={attempt ? `${url}${url.includes('?') ? '&' : '?'}reload=${attempt}` : url}
+        src={frameUrl.href}
         sandbox={sandboxValue(app)}
         referrerPolicy="no-referrer"
         onError={() => setPhase('timeout')}
@@ -67,7 +70,7 @@ export function IFrameApp({
           setPhase(current => current === 'ready' ? 'ready' : 'loaded');
         }}
       />
-      <div className="iframe-toolbar" role="status"><span>{phase === 'ready' ? '应用已连接' : phase === 'loaded' ? '页面已载入；跨来源认证和连接状态尚未确认。如页面空白或拒绝访问，请在浏览器打开。' : '正在连接外部应用'}</span><Button size="sm" onClick={() => setAttempt(value => value+1)}>重新加载</Button><Button size="sm" onClick={() => window.open(url,'_blank','noopener')}>在浏览器中打开</Button></div>
+      <div className="iframe-toolbar" role="status"><span>{phase === 'ready' ? '应用已连接' : phase === 'loaded' ? '页面已载入；如页面空白或提示登录失败，请在浏览器打开。' : '正在连接外部应用'}</span><Button size="sm" onClick={() => setAttempt(value => value+1)}>重新加载</Button><Button size="sm" onClick={() => window.open(url,'_blank','noopener')}>在浏览器中打开</Button></div>
       {phase === 'loading' && (
         <div className="iframe-app-status" role="status">
           <Spinner size="lg" label={`正在连接 ${app.title}`} />

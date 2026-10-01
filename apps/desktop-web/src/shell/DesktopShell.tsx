@@ -72,6 +72,9 @@ export function DesktopShell({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const [badges, setBadges] = useState<Record<string, number>>({});
+  const storedWindows = useRef<Array<Record<string,unknown>>>([]);
+  const windowsEdited = useRef(false);
+  const editWindows = useCallback((update: React.SetStateAction<WindowState[]>) => {windowsEdited.current = true;setWindows(update)}, []);
   const layoutQueue = useRef<Promise<unknown>>(Promise.resolve());
   const preferenceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const preferenceVersion = useRef(0);
@@ -99,6 +102,8 @@ export function DesktopShell({
       setSubject(me.subject || '');
       setUserLabel(me.subject ? String(me.subject).slice(0, 8) : '本地账户');
       setWindows(prefs.restore_windows === false ? [] : restoreWindows(layout.windows, known, viewport.current));
+      storedWindows.current = Array.isArray(layout.windows) ? layout.windows : [];
+      windowsEdited.current = false;
       setReady(true);
     } catch (error) {
       setLoadError(String(error));
@@ -129,7 +134,7 @@ export function DesktopShell({
       const payload = {
         dock_initialized: true,
         dock: overrides?.dock ?? dockIds,
-        windows: serializeWindows(overrides?.windows ?? windows),
+        windows: overrides?.windows ? serializeWindows(overrides.windows) : windowsEdited.current ? serializeWindows(windows) : storedWindows.current,
       };
       const pending = layoutQueue.current.catch(() => undefined).then(() => api('/users/me/layout', {method: 'PUT', body: JSON.stringify(payload)}));
       layoutQueue.current = pending;
@@ -176,7 +181,7 @@ export function DesktopShell({
         }
         return next;
       });
-      setWindows(current => {
+      editWindows(current => {
         const existing = current.find(win => win.app_id === id);
         if (app.singleton && existing) {
           return focusWindow(
@@ -188,7 +193,7 @@ export function DesktopShell({
         return [...current, {id: crypto.randomUUID(), app_id: id, title: app.title, minimized: false, maximized: false, ...rect}];
       });
     },
-    [apps],
+    [apps, editWindows],
   );
 
   const refreshApps = useCallback(async () => {
@@ -196,9 +201,9 @@ export function DesktopShell({
     const available = mergeApps(registry, me.scopes || []);
     const known = new Set(available.map(app => app.id));
     setApps(available);
-    setWindows(current => current.filter(win => known.has(win.app_id)));
+    editWindows(current => current.filter(win => known.has(win.app_id)));
     setDockIds(current => current.filter(id => known.has(id)));
-  }, [api]);
+  }, [api, editWindows]);
 
   const saveLayoutWithFeedback = useCallback(async () => {
     try {
@@ -209,26 +214,26 @@ export function DesktopShell({
     }
   }, [saveLayout, push]);
 
-  const closeWindow = useCallback((id: string) => setWindows(current => current.filter(win => win.id !== id)), []);
-  const minimizeWindow = useCallback((id: string) => setWindows(current => current.map(win => (win.id === id ? {...win, minimized: true} : win))), []);
+  const closeWindow = useCallback((id: string) => editWindows(current => current.filter(win => win.id !== id)), [editWindows]);
+  const minimizeWindow = useCallback((id: string) => editWindows(current => current.map(win => (win.id === id ? {...win, minimized: true} : win))), [editWindows]);
   const restoreWindow = useCallback(
-    (id: string) => setWindows(current => focusWindow(current.map(win => (win.id === id ? {...win, minimized: false} : win)), id)),
-    [],
+    (id: string) => editWindows(current => focusWindow(current.map(win => (win.id === id ? {...win, minimized: false} : win)), id)),
+    [editWindows],
   );
   const toggleWindowMaximize = useCallback((id: string) => {
-    setWindows(current => current.map(win => (win.id === id ? toggleMaximize(win, viewport.current) : win)));
-  }, []);
+    editWindows(current => current.map(win => (win.id === id ? toggleMaximize(win, viewport.current) : win)));
+  }, [editWindows]);
   const updateRect = useCallback(
     (id: string, rect: {x: number; y: number; width: number; height: number}) => {
-      setWindows(current =>
+      editWindows(current =>
         current.map(win =>
           win.id === id ? {...win, ...clampRect(rect, viewport.current, minSizeOf(apps.find(item => item.id === win.app_id)))} : win,
         ),
       );
     },
-    [apps],
+    [apps, editWindows],
   );
-  const focus = useCallback((id: string) => setWindows(current => focusWindow(current, id)), []);
+  const focus = useCallback((id: string) => editWindows(current => focusWindow(current, id)), [editWindows]);
 
   const applyPreferences = useCallback(
     async (patch: Partial<UserPreferences>) => {
@@ -321,10 +326,10 @@ export function DesktopShell({
         );
       }
       if (event.data.type === 'app.set_title' && typeof event.data.title === 'string') {
-        setWindows(current => current.map(item => (item.id === win.id ? {...item, title: event.data.title.slice(0, 80)} : item)));
+        editWindows(current => current.map(item => (item.id === win.id ? {...item, title: event.data.title.slice(0, 80)} : item)));
       }
       if (event.data.type === 'app.request_resize') {
-        setWindows(current =>
+        editWindows(current =>
           current.map(item =>
             item.id === win.id
               ? {
