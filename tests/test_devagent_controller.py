@@ -74,7 +74,8 @@ def test_exact_commit_is_mandatory(sha):
         controller.head_sha(sha)
 
 
-def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypatch):
+@pytest.mark.parametrize("outcome", ["success", "rejected", "uncertain"])
+def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypatch, outcome):
     sha = "a" * 40
     state = controller.State(tmp_path)
     state.db.execute("INSERT INTO reviews VALUES(1,?,0)", (sha,))
@@ -82,13 +83,27 @@ def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypat
     calls = []
 
     class Fake:
+        merged = False
+
         def __init__(self, config):
             pass
 
         def api(self, method, path, body=None):
             calls.append((method, path, body))
+            if method == "POST" and path.endswith("/merge"):
+                if outcome == "rejected":
+                    raise controller.ForgejoRejected("HTTP 409")
+                if outcome == "uncertain":
+                    raise TimeoutError("unknown merge outcome")
+                self.merged = True
+                return {}
             if path == "/pulls/1":
-                return {"head": {"sha": sha}, "state": "open", "mergeable": True}
+                return {"head": {"sha": sha}, "base": {"ref": controller.RELEASE_BRANCH},
+                        "state": "closed" if self.merged else "open", "mergeable": True,
+                        "merged": self.merged, "merge_commit_sha": "c" * 40}
+            if path.startswith("/branches/"):
+                return {"protected": True, "required_approvals": 1, "enable_status_check": True,
+                        "status_check_contexts": controller.REQUIRED_CHECKS}
             if path.endswith("/status"):
                 return {
                     "state": "success",
@@ -98,7 +113,7 @@ def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypat
                             "state": "success",
                             "creator": {"login": "devagent-validator"},
                         }
-                    ],
+                    ] + [{"context": c, "state": "success"} for c in controller.REQUIRED_CHECKS[:-1]],
                 }
 
         def pages(self, path):
@@ -106,12 +121,42 @@ def test_merge_requires_current_review_and_server_head_guard(tmp_path, monkeypat
 
     monkeypatch.setattr(controller, "Forgejo", Fake)
     config = {"state_dir": str(tmp_path), "identity": "devagent-maintainer"}
+    if outcome != "success":
+        expected = controller.ForgejoRejected if outcome == "rejected" else TimeoutError
+        with pytest.raises(expected):
+            controller.devctl(config, ["merge", "1", sha])
+        publication = state.db.execute("SELECT * FROM publications").fetchone()
+        if outcome == "rejected":
+            assert publication is None  # Refusal must not block unrelated PRs forever.
+            assert state.db.execute("SELECT event FROM audit").fetchone()[0] == "forgejo.merge_rejected"
+        else:
+            assert publication["head"] == sha and publication["commit_sha"] is None
+        return
     controller.devctl(config, ["merge", "1", sha])
-    assert calls[-1][2]["head_commit_id"] == sha
-    assert "force_merge" not in calls[-1][2]
+    merged_call = next(c for c in calls if c[0] == "POST")
+    assert merged_call[2]["head_commit_id"] == sha
+    assert "force_merge" not in merged_call[2]
+    publication = state.db.execute("SELECT * FROM publications").fetchone()
+    assert publication["head"] == sha and publication["commit_sha"] == "c" * 40
 
     with pytest.raises(RuntimeError, match="exact head"):
         controller.devctl({"state_dir": str(tmp_path)}, ["merge", "1", "b" * 40])
+
+
+@pytest.mark.parametrize("code,rejected", [(403, True), (409, True), (422, True), (408, False), (500, False)])
+def test_forgejo_distinguishes_refusal_from_unknown_outcome(code, rejected):
+    class Opener:
+        def open(self, request, timeout):
+            raise controller.urllib.error.HTTPError(request.full_url, code, "private response", {}, None)
+
+    forgejo = controller.Forgejo.__new__(controller.Forgejo)
+    forgejo.base = "https://forgejo.invalid/api/v1/repos/example/repo"
+    forgejo.token = "test-token"
+    forgejo.opener = Opener()
+    with pytest.raises(RuntimeError) as caught:
+        forgejo.api("POST", "/pulls/1/merge", {})
+    assert isinstance(caught.value, controller.ForgejoRejected) == rejected
+    assert "private response" not in str(caught.value) and "test-token" not in str(caught.value)
 
 
 def test_project_config_cannot_override_installed_policy(tmp_path, monkeypatch):
@@ -134,18 +179,21 @@ def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
     manual = json.loads(controller.runtime_environment(config)["OPENCODE_CONFIG_CONTENT"])
     auto = automatic["agent"]["maintainer"]
     assert auto["steps"] == 12 and auto["permission"]["edit"] == "deny"
+    review = json.loads(controller.runtime_environment(config, automatic=True, review=True)["OPENCODE_CONFIG_CONTENT"])
+    assert review["agent"]["maintainer"]["steps"] == 24
+    assert review["agent"]["maintainer"]["permission"]["edit"] == "deny"
     assert "uv run *" not in auto["permission"]["bash"]
     assert "git *" not in auto["permission"]["bash"]
     assert auto["permission"]["bash"]["*auth.json*"] == "deny"
     assert auto["permission"]["bash"]["devctl *"] == "allow"
-    assert auto["permission"]["bash"]["devctl deploy *"] == "deny"
-    assert auto["permission"]["bash"]["devctl merge *"] == "deny"
-    assert auto["permission"]["bash"]["devctl review *"] == "deny"
+    assert auto["permission"]["bash"]["devctl deploy *"] == "allow"
+    assert auto["permission"]["bash"]["devctl merge *"] == "allow"
+    assert auto["permission"]["bash"]["devctl review *"] == "allow"
     assert auto["permission"]["bash"]["devctl pr-create *"] == "deny"
     assert manual["agent"]["maintainer"]["steps"] == 48
     assert manual["agent"]["maintainer"]["permission"]["edit"] == "allow"
-    assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl deploy *"] == "deny"
-    assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl merge *"] == "deny"
+    assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl deploy *"] == "allow"
+    assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl merge *"] == "allow"
 
 
 def test_checkpoint_push_repository_timestamp_does_not_wake_prs():
@@ -224,7 +272,7 @@ def test_closed_pr_events_supersede_old_work_without_starting_model(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 12, "failed"), ("stop", 32, "failed")]
+    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 12, "done"), ("stop", 24, "failed"), ("stop", 32, "failed")]
 )
 def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypatch, reason, steps, expected):
     state = controller.State(tmp_path / "state")
@@ -253,3 +301,117 @@ def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypat
     assert controller.run_model(config, state, task) == expected
     assert state.db.execute("SELECT status FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == expected
     assert "--continue" not in commands[0]
+
+
+@pytest.mark.parametrize('case', [
+    'wrong_target', 'draft', 'changed_head', 'closed', 'conflict', 'unprotected',
+    'missing_required_context', 'failed_ci', 'missing_preflight', 'wrong_validator',
+    'dismissed_approval', 'stale_approval', 'later_rejection', 'other_rejection',
+])
+def test_invalid_pr_never_reaches_merge_endpoint(tmp_path, monkeypatch, case):
+    sha = 'a' * 40
+    state = controller.State(tmp_path)
+    state.db.execute('INSERT INTO reviews VALUES(1,?,0)', (sha,))
+    state.db.commit()
+
+    class Fake:
+        def __init__(self, config):
+            pass
+
+        def api(self, method, path, body=None):
+            assert method == 'GET', 'Rejected PR reached mutation endpoint'
+            if path == '/pulls/1':
+                return {'head': {'sha': 'b' * 40 if case == 'changed_head' else sha},
+                        'base': {'ref': 'main' if case == 'wrong_target' else controller.RELEASE_BRANCH},
+                        'draft': case == 'draft', 'state': 'closed' if case == 'closed' else 'open',
+                        'mergeable': case != 'conflict'}
+            if path.startswith('/branches/'):
+                return {'protected': case != 'unprotected', 'required_approvals': 1,
+                        'enable_status_check': True, 'status_check_contexts': controller.REQUIRED_CHECKS}
+            statuses = [{'context': c, 'state': 'success'} for c in controller.REQUIRED_CHECKS[:-1]]
+            if case == 'missing_required_context':
+                statuses = statuses[:1]
+            if case != 'missing_preflight':
+                statuses.append({'context': 'devagent/preflight', 'state': 'success',
+                                 'creator': {'login': 'other' if case == 'wrong_validator' else 'devagent-validator'}})
+            return {'state': 'failure' if case == 'failed_ci' else 'success', 'statuses': statuses}
+
+        def pages(self, path):
+            rows = [{'id': 1, 'user': {'login': 'devagent-maintainer'}, 'commit_id': sha,
+                     'state': 'APPROVED', 'dismissed': case == 'dismissed_approval',
+                     'stale': case == 'stale_approval'}]
+            if case in ('later_rejection', 'other_rejection'):
+                rows.append({'id': 2, 'user': {'login': 'other' if case == 'other_rejection' else 'devagent-maintainer'},
+                             'commit_id': sha, 'state': 'REQUEST_CHANGES'})
+            return rows
+
+    monkeypatch.setattr(controller, 'Forgejo', Fake)
+    with pytest.raises(RuntimeError):
+        controller.devctl({'state_dir': str(tmp_path), 'identity': 'devagent-maintainer'}, ['merge', '1', sha])
+    assert state.db.execute('SELECT count(*) FROM publications').fetchone()[0] == 0
+
+
+def test_merge_intent_recovers_deployment_and_terminal_result_without_polling_model(tmp_path, monkeypatch):
+    state = controller.State(tmp_path)
+    sha = 'c' * 40
+    state.db.execute('INSERT INTO publications(number,head) VALUES(1,?)', ('a' * 40,))
+    state.db.commit()
+
+    class Fake:
+        def api(self, method, path):
+            if path.startswith('/pulls/'):
+                return {'merged': True, 'head': {'sha': 'a' * 40},
+                        'base': {'ref': controller.RELEASE_BRANCH}, 'merge_commit_sha': sha}
+            return {'commit': {'id': sha}}
+
+    resource, payload = list(controller.publication_events(Fake(), state))[0]
+    assert resource == 'publication:1' and payload['state'] == 'ready'
+    assert state.observe(resource, payload)
+    assert not state.observe('pr:1', {'state': 'closed'}, baseline=True)
+    assert state.pending()['resource'] == resource  # Closed PR suppression does not lose deployment work.
+    state.db.execute('UPDATE publications SET operation_id=?', ('d' * 32,))
+    state.db.commit()
+    monkeypatch.setattr(controller, 'protected_request', lambda *a: {'state': 'running'})
+    assert list(controller.publication_events(Fake(), state)) == []
+    monkeypatch.setattr(controller, 'protected_request', lambda *a: {
+        'state': 'completed', 'result': 'completed', 'verification': {'101': {'ok': True}}})
+    resource, payload = list(controller.publication_events(Fake(), state))[0]
+    assert payload['operation']['verification']['101']['ok']
+    assert state.observe(resource, payload)
+    monkeypatch.setattr(controller, 'protected_request', lambda *a: pytest.fail('Completed operation repolled'))
+    assert not state.observe(*list(controller.publication_events(Fake(), state))[0])
+    assert state.pending()['payload'] == json.dumps(payload)
+
+
+def test_superseded_merged_commit_is_not_a_deployment_candidate(tmp_path):
+    state = controller.State(tmp_path)
+    state.db.execute('INSERT INTO publications(number,head,commit_sha) VALUES(1,?,?)', ('a' * 40, 'b' * 40))
+    state.db.commit()
+
+    class Fake:
+        def api(self, method, path):
+            if path.startswith('/pulls/'):
+                return {'merged': True, 'head': {'sha': 'a' * 40}, 'base': {'ref': controller.RELEASE_BRANCH},
+                        'merge_commit_sha': 'b' * 40}
+            return {'commit': {'id': 'c' * 40}}
+
+    assert list(controller.publication_events(Fake(), state))[0][1]['state'] == 'superseded'
+
+
+@pytest.mark.parametrize('operation_state', ['running', 'completed', 'failed', 'interrupted'])
+def test_repeated_deploy_uses_recorded_operation_instead_of_resubmission(tmp_path, monkeypatch, capsys, operation_state):
+    state = controller.State(tmp_path)
+    state.db.execute('INSERT INTO publications(number,head,commit_sha,operation_id) VALUES(1,?,?,?)',
+                     ('a' * 40, 'b' * 40, 'c' * 32))
+    state.db.commit()
+    monkeypatch.setattr(controller, 'Forgejo', lambda _: object())
+    calls = []
+
+    def protected(action, args):
+        calls.append((action, args))
+        return {'id': args[0], 'state': operation_state}
+
+    monkeypatch.setattr(controller, 'protected_request', protected)
+    controller.devctl({'state_dir': str(tmp_path)}, ['deploy', controller.REPOSITORY, 'b' * 40, 'production'])
+    assert calls == [('operation', ['c' * 32])]
+    assert json.loads(capsys.readouterr().out)['state'] == operation_state

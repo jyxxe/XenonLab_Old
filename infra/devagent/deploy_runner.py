@@ -147,6 +147,17 @@ def append_frontend(bundle, frontend_archive):
             combined.addfile(member, frontend.extractfile(original) if original.isfile() else None)
 
 
+def ensure_release_head(sha, checkout="/var/lib/devagent/checkout"):
+    git = ["/usr/bin/sudo", "-n", "-H", "-u", "devagent", "/usr/bin/git",
+           "--no-replace-objects", "-C", checkout]
+    subprocess.run(git + ["fetch", "origin", "feature/platform-v1"], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+    tip = subprocess.run(git + ["rev-parse", "origin/feature/platform-v1"], check=True,
+                         capture_output=True, text=True, timeout=15).stdout.strip()
+    if tip != sha:
+        raise RuntimeError("deployment commit must equal the current production integration head")
+
+
 def main():
     if os.geteuid() != 0:
         raise ValueError("root broker required")
@@ -186,26 +197,7 @@ def main():
             print(json.dumps({"commit": sha, "validation": report}))
             return
         checkout = "/var/lib/devagent/checkout"
-        subprocess.run(
-            [
-                "/usr/bin/sudo",
-                "-n",
-                "-H",
-                "-u",
-                "devagent",
-                "/usr/bin/git",
-                "--no-replace-objects",
-                "-C",
-                checkout,
-                "merge-base",
-                "--is-ancestor",
-                sha,
-                "origin/feature/platform-v1",
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        ensure_release_head(sha, checkout)
         # Validate actual PVE reachability and target versions before taking any deployment lease.
         pve_request = base64.b64encode(
             json.dumps({"action": "health", "args": [], "task": request["task"]}).encode()
@@ -298,6 +290,8 @@ def main():
                 "devagent-stage release " + sha + " " + artifact_hash + " " + str(bundle.stat().st_size),
                 bundle,
             )
+        # Refuse an older merged release if another publisher advanced the branch while staging.
+        ensure_release_head(sha, checkout)
         # Executor inventory update is a fixed authenticated protocol, not a free shell command.
         inventory = {"commit": sha, "artifacts": [artifact], "targets": ["192.168.0." + n for n in TARGETS]}
         inventory_file = operation / "inventory.json"

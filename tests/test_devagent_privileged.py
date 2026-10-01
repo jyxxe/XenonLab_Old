@@ -271,3 +271,21 @@ def test_gateway_rollout_requires_terminal_exact_activation_and_owned_lease(tmp_
         with pytest.raises(ValueError):
             stage.restart_gateway(old_sha if case == "sha" else expected, identifier)
         assert calls == []
+
+
+def test_deploy_rejects_historical_or_newly_superseded_integration_commit(tmp_path, monkeypatch):
+    runner = load('deploy_runner')
+    calls = []
+    tip = 'a' * 40
+
+    def git(argv, **kwargs):
+        calls.append(argv)
+        assert '--no-replace-objects' in argv
+        return SimpleNamespace(stdout=tip + '\n', returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, 'run', git)
+    runner.ensure_release_head(tip)
+    assert calls[0][-3:] == ['fetch', 'origin', 'feature/platform-v1']
+    tip = 'b' * 40
+    with pytest.raises(RuntimeError, match='current production integration head'):
+        runner.ensure_release_head('a' * 40)
