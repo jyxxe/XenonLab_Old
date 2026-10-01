@@ -1,8 +1,12 @@
-import React, {useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {ContextMenu, type MenuItem} from '../design-system/primitives';
 import type {DesktopApp, WindowState} from './types';
 
 export type DockSize = 'small' | 'medium' | 'large';
+
+// Give the pointer time to travel from the edge trigger to the moving Dock.
+// The reveal animation itself is deliberately slower than the general UI motion.
+const DOCK_HIDE_DELAY_MS = 520;
 
 export function Dock({
   apps,
@@ -35,6 +39,30 @@ export function Dock({
 }) {
   const [context, setContext] = useState<{x: number; y: number; appId: string} | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
+  const [pointerActive, setPointerActive] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+  }, []);
+
+  function revealForPointer(event: React.PointerEvent) {
+    if (event.pointerType === 'touch') return;
+    if (hideTimer.current !== null) {
+      window.clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+    setPointerActive(true);
+  }
+
+  function schedulePointerHide(event: React.PointerEvent) {
+    if (event.pointerType === 'touch') return;
+    if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      setPointerActive(false);
+    }, DOCK_HIDE_DELAY_MS);
+  }
 
   const known = (id: string) => apps.find(app => app.id === id);
   const pinned = dockIds.filter(known);
@@ -78,16 +106,26 @@ export function Dock({
 
   return (
     <>
-      {autoHide && <div className="dock-edge" aria-hidden="true" />}
+      {autoHide && (
+        <div
+          className="dock-edge"
+          aria-hidden="true"
+          onPointerEnter={revealForPointer}
+          onPointerLeave={schedulePointerHide}
+        />
+      )}
       <nav
         className={[
           'dock',
           `dock-size-${size}`,
           autoHide ? 'ds-autohide' : '',
+          pointerActive ? 'ds-pointer-active' : '',
         ]
           .filter(Boolean)
           .join(' ')}
         aria-label="应用程序"
+        onPointerEnter={revealForPointer}
+        onPointerLeave={schedulePointerHide}
       >
         <button type="button" className="dock-item" title="LaunchPad" onClick={onToggleLaunchPad}>
           <span className="dock-icon" aria-hidden="true">▦</span>

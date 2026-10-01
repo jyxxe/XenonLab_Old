@@ -358,6 +358,59 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='true'"), 'reduced motion applied');
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"Dock 自动隐藏\"]').click()");
     await waitFor(() => cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), 'dock autohide applied');
+
+    // A real pointer can leave the tiny bottom-edge trigger before the moving Dock
+    // reaches it. Keep the reveal alive across the user's slow entry path, and let
+    // keyboard focus reveal the same auto-hidden Dock.
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 913, deviceScaleFactor: 1, mobile: false});
+    const movePointer = (x, y) => cdp.call('Input.dispatchMouseEvent', {type: 'mouseMoved', x, y, button: 'none', buttons: 0});
+    const dockState = () => cdp.evaluate(`(() => {
+      const dock = document.querySelector('nav.dock');
+      const style = getComputedStyle(dock);
+      const rect = dock.getBoundingClientRect();
+      return {opacity: style.opacity, pointerEvents: style.pointerEvents, duration: style.transitionDuration, x: rect.x, y: rect.y, width: rect.width, height: rect.height};
+    })()`);
+    const assertDockVisible = async label => {
+      await waitFor(async () => {
+        const state = await dockState();
+        return Number(state.opacity) > 0.98 && state.pointerEvents === 'auto';
+      }, label);
+    };
+    assert.match((await dockState()).duration, /0s/, 'reduced-motion preference removes Dock transition');
+    await movePointer(720, 500);
+    await waitFor(async () => (await dockState()).opacity === '0', 'auto-hidden dock starts closed');
+    await movePointer(720, 905);
+    await sleep(90);
+    await movePointer(720, 899);
+    await sleep(90);
+    await movePointer(720, 889);
+    await sleep(90);
+    await movePointer(720, 873);
+    await sleep(90);
+    await movePointer(720, 860);
+    await assertDockVisible('slow bottom-edge-to-Dock pointer path remains open with reduced motion');
+    await movePointer(720, 600);
+    await waitFor(async () => (await dockState()).opacity === '0', 'Dock hides again after pointer leaves');
+
+    const firstDockButton = await cdp.evaluate("document.querySelector('nav.dock .dock-item').focus(); getComputedStyle(document.querySelector('nav.dock')).opacity");
+    assert.equal(firstDockButton, '1', 'keyboard focus reveals the auto-hidden Dock');
+    await cdp.evaluate("document.activeElement.blur()");
+    await waitFor(async () => (await dockState()).opacity === '0', 'Dock hides after keyboard focus leaves');
+
+    // Restore full motion to verify the longer pop-out and direct, fast entry too.
+    await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"减少动态效果\"]').click()");
+    await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='false'"), 'reduced motion turned off for animation check');
+    assert.match((await dockState()).duration, /0\.42s/, 'Dock uses the slower 420ms transition');
+    await movePointer(720, 500);
+    await movePointer(720, 905);
+    await movePointer(720, 860);
+    await assertDockVisible('fast edge-to-center pointer entry reveals Dock');
+    await movePointer(720, 600);
+    await waitFor(async () => (await dockState()).opacity === '0', 'fast-entry Dock returns to auto-hidden state');
+    await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"减少动态效果\"]').click()");
+    await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='true'"), 'reduced motion preference restored');
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 900, deviceScaleFactor: 1, mobile: false});
+
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"界面动画\"]').click()");
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.animations==='off'"), 'animations disabled');
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"Dock 自动隐藏\"]').click()");

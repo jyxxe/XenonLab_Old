@@ -87,6 +87,7 @@
   --duration-fast: 120ms;
   --duration-base: 180ms;
   --duration-slow: 260ms;
+  --duration-dock: 420ms;
   --ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
   --ease-spring: cubic-bezier(0.32, 1.4, 0.5, 1);
 
@@ -186,6 +187,7 @@
   --duration-fast: 0ms;
   --duration-base: 0ms;
   --duration-slow: 0ms;
+  --duration-dock: 0ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -193,6 +195,7 @@
     --duration-fast: 0ms;
     --duration-base: 0ms;
     --duration-slow: 0ms;
+    --duration-dock: 0ms;
   }
 }
 

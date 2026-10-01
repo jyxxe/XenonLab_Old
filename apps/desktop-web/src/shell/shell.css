@@ -45,9 +45,9 @@
 .window-resize-handle.rs-n{top:0;left:0;height:6px;width:100%;cursor:ns-resize}
 
 /* Dock */
-.dock{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:var(--z-dock);display:flex;align-items:center;gap:var(--dock-gap);padding:7px 12px;background:var(--surface-glass);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow-dock);backdrop-filter:blur(20px);transition:transform var(--duration-base) var(--ease-out),opacity var(--duration-base) var(--ease-out);max-width:calc(100vw - 24px);overflow-x:auto}
+.dock{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:var(--z-dock);display:flex;align-items:center;gap:var(--dock-gap);padding:7px 12px;background:var(--surface-glass);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow-dock);backdrop-filter:blur(20px);transition:transform var(--duration-dock) var(--ease-out),opacity var(--duration-dock) var(--ease-out);max-width:calc(100vw - 24px);overflow-x:auto}
 .dock.ds-autohide{transform:translateX(-50%) translateY(calc(100% + 24px));opacity:0;pointer-events:none}
-.dock.ds-autohide:hover,.dock.ds-autohide:focus-within,.dock-edge:hover + .dock{transform:translateX(-50%);opacity:1;pointer-events:auto}
+.dock.ds-autohide:hover,.dock.ds-autohide:focus-within,.dock.ds-autohide.ds-pointer-active,.dock-edge:hover + .dock{transform:translateX(-50%);opacity:1;pointer-events:auto}
 .dock-edge{position:fixed;left:0;right:0;bottom:0;height:10px;z-index:calc(var(--z-dock) - 1)}
 .dock-item{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;width:52px;padding:4px 2px;margin:0;border:0;border-radius:12px;background:transparent;color:var(--text-primary);cursor:pointer}
 .dock-item:hover{background:var(--control)}
