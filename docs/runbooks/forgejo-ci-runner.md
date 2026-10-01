@@ -59,15 +59,26 @@ configuration include directory, which can load files without a .conf extension.
 
 Job containers need the project's public LAN CA to fetch the repository.
 Build `infra/forgejo/Containerfile` as the rootless runner user, using a context
-that contains only that file and the public CA bundle named `ca-bundle.crt`.
-Use `--network=none --pull=never` against the verified cached base, inspect the
+that contains the public CA bundle named `ca-bundle.crt`, verified official uv
+0.12.1/uvx, the existing root-owned public uv package cache, missing development
+wheels independently checked against the committed `uv.lock` SHA-256 values,
+managed CPython 3.12.13 and the existing protected Chrome
+150.0.7871.186 runtime. Keep registration/auth files out of the context.
+Record artifact hashes before copying public runtimes; the installed root-owned
+validator uses the same Python/browser baseline. The image includes fixed
+tool-cache entries for uv and Node 24.21.0, plus browser system libraries from
+the signed Debian package repositories. Build as the rootless runner with
+`--pull=never`, inspect the
 resulting image ID and substitute it for `LOCAL_BUILT_IMAGE_ID` in the example.
-The installed image ID is recorded in `/etc/forgejo-runner/image-id`.
+The pinned runtime image ID is recorded in `/etc/forgejo-runner/runtime-image-id`.
 The public CA is baked into the image: `valid_volumes: []` remains enforced and
 no host path or runtime socket is mounted into a job. The earlier configured
 read-only CA mount did not reach actual jobs and checkout failed; do not rely on
-that configuration. A standalone image check confirmed the CA is readable and
-Node reports v24.21.0. This still does not prove CI passed: inspect exact-head
+that configuration. The first CA-only image passed actual repository checkout; its fresh uv
+download took about fifteen minutes. Pinning runtimes in the workflow and image
+avoids repeating those downloads in each job. The workflow still runs locked
+dependency preparation, all backend/frontend/browser checks and the build; a
+missing browser remains a hard failure. This still does not prove CI passed: inspect exact-head
 workflow jobs before merging.
 
 ## Operational acceptance

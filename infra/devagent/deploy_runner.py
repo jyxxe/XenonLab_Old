@@ -133,6 +133,20 @@ def status(config, sha, state, description):
         result.read()
 
 
+def append_frontend(bundle, frontend_archive):
+    # Same compiled bytes must yield the same immutable release digest across validations.
+    with tarfile.open(frontend_archive) as frontend, tarfile.open(bundle, "a") as combined:
+        for original in frontend.getmembers():
+            if not original.name.startswith("apps/desktop-web/dist/") and original.name != "apps/desktop-web/dist":
+                raise ValueError("unsafe frontend artifact")
+            if not (original.isfile() or original.isdir()):
+                raise ValueError("unsafe frontend artifact")
+            member = original.replace(mtime=0, uid=0, gid=0, uname="", gname="")
+            member.mode = 0o755 if member.isdir() else 0o644
+            member.pax_headers = {}
+            combined.addfile(member, frontend.extractfile(original) if original.isfile() else None)
+
+
 def main():
     if os.geteuid() != 0:
         raise ValueError("root broker required")
@@ -241,14 +255,7 @@ def main():
                 check=True,
             )
         # Root consumes a root-owned captured frontend archive, rejecting unsafe paths later on every target.
-        with tarfile.open(report_dir / "frontend.tar") as frontend, tarfile.open(bundle, "a") as combined:
-            for member in frontend.getmembers():
-                if not member.name.startswith("apps/desktop-web/dist/") or not (
-                    member.isfile() or member.isdir()
-                ):
-                    if member.name != "apps/desktop-web/dist":
-                        raise ValueError("unsafe frontend artifact")
-                combined.addfile(member, frontend.extractfile(member) if member.isfile() else None)
+        append_frontend(bundle, report_dir / "frontend.tar")
         artifact_hash = hashlib.file_digest(bundle.open("rb"), "sha256").hexdigest()
         artifact = {"name": "platform-release", "digest": "sha256:" + artifact_hash}
         manifest = {

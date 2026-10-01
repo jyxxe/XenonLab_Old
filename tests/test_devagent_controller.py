@@ -26,6 +26,25 @@ def test_baseline_dedup_and_crash_recovery(tmp_path):
     assert not state.observe("pr:1", {"head": "b"})
 
 
+@pytest.mark.parametrize("baseline", [False, True])
+def test_new_event_supersedes_failed_retry_and_old_queue(tmp_path, monkeypatch, baseline):
+    state = controller.State(tmp_path)
+    state.observe("pr:89", {"head": "old"})
+    old = state.pending()["id"]
+    state.db.execute("UPDATE tasks SET status='failed',attempts=1,updated=0 WHERE id=?", (old,))
+    state.db.commit()
+    state.observe("pr:90", {"head": "unrelated"})
+    state.observe("pr:89", {"head": "fresh"}, baseline=baseline)
+    assert state.db.execute("SELECT status FROM tasks WHERE id=?", (old,)).fetchone()[0] == "superseded"
+    assert state.db.execute("SELECT status FROM tasks WHERE resource='pr:90'").fetchone()[0] == "pending"
+    fresh = state.db.execute("SELECT id FROM tasks WHERE resource='pr:89' AND status='pending'").fetchall()
+    assert len(fresh) == (0 if baseline else 1)
+    state.db.execute("UPDATE tasks SET status='done' WHERE status='pending'")
+    state.db.commit()
+    monkeypatch.setattr(controller.time, "time", lambda: 99999999)
+    assert state.pending() is None  # expired retry cooldown cannot resurrect the old PR head
+
+
 def test_kernel_lock_excludes_other_process_and_recovers(tmp_path):
     state = controller.State(tmp_path)
     script = "import fcntl,sys; f=open(sys.argv[1],'a'); fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)"
@@ -105,6 +124,24 @@ def test_project_config_cannot_override_installed_policy(tmp_path, monkeypatch):
     assert json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]["maintainer"]["steps"] == 32
 
 
+def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"agent": {"maintainer": {"steps": 48, "permission": {
+        "edit": "allow", "bash": {"*": "deny", "git *": "allow", "uv run *": "allow",
+                                  "*auth.json*": "deny"}}}}}))
+    config = {"policy_file": str(policy)}
+    automatic = json.loads(controller.runtime_environment(config, automatic=True)["OPENCODE_CONFIG_CONTENT"])
+    manual = json.loads(controller.runtime_environment(config)["OPENCODE_CONFIG_CONTENT"])
+    auto = automatic["agent"]["maintainer"]
+    assert auto["steps"] == 12 and auto["permission"]["edit"] == "deny"
+    assert "uv run *" not in auto["permission"]["bash"]
+    assert "git *" not in auto["permission"]["bash"]
+    assert auto["permission"]["bash"]["*auth.json*"] == "deny"
+    assert auto["permission"]["bash"]["devctl *"] == "allow"
+    assert manual["agent"]["maintainer"]["steps"] == 48
+    assert manual["agent"]["maintainer"]["permission"]["edit"] == "allow"
+
+
 def test_checkpoint_push_repository_timestamp_does_not_wake_prs():
     class Fake:
         updated = "before"
@@ -158,7 +195,7 @@ def test_closed_pr_live_branch_references_do_not_wake_history():
 
 
 @pytest.mark.parametrize(
-    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 32, "failed")]
+    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 12, "failed"), ("stop", 32, "failed")]
 )
 def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypatch, reason, steps, expected):
     state = controller.State(tmp_path / "state")
