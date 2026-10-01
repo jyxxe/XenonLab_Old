@@ -32,7 +32,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24.21.0"
-      - run: npm ci --no-audit --no-fund --fetch-timeout=60000 --fetch-retries=2 --loglevel=verbose
+      - run: npm ci --no-fund --fetch-timeout=60000 --fetch-retries=2 --loglevel=verbose
       - name: Check pinned headless browser
         run: |
           CHROME_BIN=/opt/ci/browser/chrome/chrome
