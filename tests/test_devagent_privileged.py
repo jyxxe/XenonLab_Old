@@ -1,7 +1,9 @@
+import contextlib
 import importlib.util
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import tarfile
 from pathlib import Path
@@ -223,3 +225,49 @@ def test_repeated_build_metadata_does_not_change_release_digest(tmp_path):
         with tarfile.open(bundle) as archive:
             assert archive.extractfile("apps/desktop-web/dist/index.html").read() == b"same"
     assert archives[0] == archives[1]
+
+
+@pytest.mark.parametrize("case", ["completed", "rollback", "inflight", "expired", "holder", "epoch", "release", "sha", "node"])
+def test_gateway_rollout_requires_terminal_exact_activation_and_owned_lease(tmp_path, monkeypatch, case):
+    stage = load("stage_receiver")
+    sha, old_sha, identifier = "a" * 40, "b" * 40, "12345678-1234-1234-1234-123456789012"
+    releases, activations = tmp_path / "releases", tmp_path / "activations"
+    releases.mkdir()
+    activations.mkdir()
+    for version in (sha, old_sha):
+        (releases / version).mkdir()
+    expected = old_sha if case == "rollback" else sha
+    (tmp_path / "current").symlink_to(releases / expected)
+    (activations / (identifier + ".json")).write_text(json.dumps({
+        "new": str(releases / sha), "old": str(releases / old_sha),
+    }))
+    activation, database = tmp_path / "activation.json", tmp_path / "deploy.sqlite"
+    activation.write_text(json.dumps({"address": "192.168.0.104" if case == "node" else "192.168.0.106"}))
+    with sqlite3.connect(database) as db:
+        db.executescript("""
+        CREATE TABLE deployments(id TEXT, holder TEXT, epoch INTEGER, state TEXT, release_id TEXT);
+        CREATE TABLE lease(singleton INTEGER, holder TEXT, epoch INTEGER, expires REAL, release_id TEXT);
+        CREATE TABLE releases(id TEXT, manifest TEXT, approved INTEGER);
+        """)
+        state = "deploying" if case == "inflight" else "rolled_back" if case == "rollback" else "completed"
+        db.execute("INSERT INTO deployments VALUES(?,?,?,?,?)", (identifier, "owner", 7, state, "release"))
+        db.execute("INSERT INTO releases VALUES(?,?,?)", (
+            "release", json.dumps({"commit": sha}), int(case != "release"),
+        ))
+        db.execute("INSERT INTO lease VALUES(?,?,?,?,?)", (
+            1, "another" if case == "holder" else "owner", 8 if case == "epoch" else 7,
+            0 if case == "expired" else 10**12, "another" if case == "release" else "release",
+        ))
+    for key, value in (("ROOT", releases), ("PLATFORM", tmp_path), ("ACTIVATION", activation), ("DEPLOY_DATABASE", database)):
+        monkeypatch.setattr(stage, key, value)
+    calls = []
+    monkeypatch.setattr(stage.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    opener = SimpleNamespace(open=lambda *a, **kw: contextlib.nullcontext(SimpleNamespace(status=200)))
+    monkeypatch.setattr(stage.urllib.request, "build_opener", lambda *a: opener)
+    if case in ("completed", "rollback"):
+        assert stage.restart_gateway(expected, identifier) == {"gateway": expected, "ready": True}
+        assert calls == [["/usr/bin/systemctl", "restart", "xeonolab@deploy-gateway.service"]]
+    else:
+        with pytest.raises(ValueError):
+            stage.restart_gateway(old_sha if case == "sha" else expected, identifier)
+        assert calls == []

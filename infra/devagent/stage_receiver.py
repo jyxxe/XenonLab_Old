@@ -7,14 +7,20 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 ROOT = Path("/opt/xeonolab/releases")
+PLATFORM = Path("/opt/xeonolab")
+ACTIVATION = Path("/etc/xeonolab/activation.json")
+DEPLOY_DATABASE = Path("/var/lib/xeonolab/deploy-gateway/deploy.sqlite")
 
 
 def safe_members(archive):
@@ -30,8 +36,57 @@ def safe_members(archive):
     return members
 
 
+def restart_gateway(sha, deployment_id):
+    # Restart only after the in-flight executor returned, while its lease still excludes others.
+    if not re.fullmatch("[a-f0-9]{40}", sha) or not re.fullmatch("[a-f0-9-]{36}", deployment_id):
+        raise ValueError("exact gateway deployment required")
+    if json.loads(ACTIVATION.read_text())["address"] != "192.168.0.106":
+        raise ValueError("gateway target required")
+    current = PLATFORM / "current"
+    expected = ROOT / sha
+    saved = json.loads((PLATFORM / "activations" / (deployment_id + ".json")).read_text())
+    if current.resolve() != expected or str(expected) not in (saved["new"], saved["old"]):
+        raise ValueError("gateway activation mismatch")
+    with sqlite3.connect("file:" + str(DEPLOY_DATABASE) + "?mode=ro", uri=True) as db:
+        deployment = db.execute(
+            "SELECT holder,epoch,state,release_id FROM deployments WHERE id=?", (deployment_id,)
+        ).fetchone()
+        release = db.execute("SELECT manifest,approved FROM releases WHERE id=?", (deployment[3],)).fetchone() if deployment else None
+        lease = db.execute("SELECT holder,epoch,expires,release_id FROM lease WHERE singleton=1").fetchone()
+        unresolved = db.execute(
+            "SELECT 1 FROM deployments WHERE state NOT IN ('completed','rolled_back','cancelled')"
+        ).fetchone()
+        if (
+            not deployment or deployment[2] not in ("completed", "rolled_back") or unresolved
+            or not release or not release[1]
+            or not lease or lease[:2] != deployment[:2] or lease[3] != deployment[3]
+            or (lease[2] or 0) <= time.time()
+        ):
+            raise ValueError("terminal deployment with its active lease required")
+        manifest = json.loads(release[0])
+        activation_targets = {Path(saved[key]).name for key in ("new", "old") if saved.get(key)}
+        if expected.name not in activation_targets or manifest.get("commit") != Path(saved["new"]).name:
+            raise ValueError("gateway SHA differs from the approved release")
+    subprocess.run(
+        ["/usr/bin/systemctl", "restart", "xeonolab@deploy-gateway.service"], check=True, timeout=60
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    for _ in range(60):
+        try:
+            with opener.open("http://192.168.0.106:8103/health/ready", timeout=1) as response:
+                if response.status == 200:
+                    return {"gateway": sha, "ready": True}
+        except (OSError, urllib.error.URLError):
+            pass
+        time.sleep(0.5)
+    raise RuntimeError("gateway readiness failed")
+
+
 def main():
     parts = os.getenv("SSH_ORIGINAL_COMMAND", "").split()
+    if len(parts) == 4 and parts[:2] == ["devagent-stage", "gateway"]:
+        print(json.dumps(restart_gateway(parts[2], parts[3])))
+        return
     if parts == ["devagent-stage", "status"]:
         current = Path("/opt/xeonolab/current").resolve()
         config = json.loads(Path("/etc/xeonolab/activation.json").read_text())
@@ -165,6 +220,6 @@ if __name__ == "__main__":
         with Path("/var/lock/devagent-stage.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             main()
-    except (ValueError, KeyError, RuntimeError, OSError, subprocess.TimeoutExpired):
+    except (ValueError, KeyError, RuntimeError, OSError, sqlite3.Error, subprocess.TimeoutExpired):
         print("Release staging rejected or failed", file=sys.stderr)
         sys.exit(2)

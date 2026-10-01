@@ -322,6 +322,12 @@ def main():
                 "actual": actual,
                 "ok": actual == expected and target["ready"],
             }
+        if deployment["state"] == "completed" and all(v["ok"] for v in record["verification"].values()):
+            try:
+                result = ssh(config, "106", "devagent-stage gateway " + sha + " " + deployment["deployment_id"])
+                record["verification"]["gateway"] = {"ok": result["ready"] and result["gateway"] == sha}
+            except Exception:
+                record["verification"]["gateway"] = {"ok": False}
         if not all(v["ok"] for v in record["verification"].values()):
             rollback_ok = True
             for node in reversed(TARGETS):
@@ -331,6 +337,13 @@ def main():
                     rollback_ok = (
                         rollback_ok and target["current"] == record["previous"][node] and target["ready"]
                     )
+                except Exception:
+                    rollback_ok = False
+            if "gateway" in record["verification"]:
+                try:
+                    result = ssh(config, "106", "devagent-stage gateway " + record["previous"]["106"]
+                                 + " " + deployment["deployment_id"])
+                    rollback_ok = rollback_ok and result["ready"] and result["gateway"] == record["previous"]["106"]
                 except Exception:
                     rollback_ok = False
             record["rollback_verified"] = rollback_ok

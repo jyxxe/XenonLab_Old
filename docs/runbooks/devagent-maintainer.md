@@ -112,6 +112,13 @@ the existing exclusive Deploy Gateway lease, stages fixed targets and invokes
 the existing activation executor. Frontend archive timestamps/ownership are normalized before hashing, so a
 repeat validation of identical compiled bytes does not change the immutable
 release digest or collide with an already staged exact SHA.
+After the executor confirms a terminal deployment, the fixed staging receiver
+on VM106 restarts and checks Deploy Gateway while the same lease still excludes
+other deployers. It requires the current staged SHA, a matching activation record,
+a terminal database record and the original live holder/epoch. This avoids
+interrupting the Gateway's own activation request and ensures the new Gateway
+code is loaded before releasing the lease. A failed Gateway check also enters
+the existing rollback path and reloads the prior Gateway before lease release.
 Its readiness failure path restores the
 previous immutable release. Protected audits record task, SHA, artifact, lease,
 previous versions, result and verification.
