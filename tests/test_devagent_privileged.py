@@ -1,4 +1,6 @@
 import importlib.util
+import io
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -53,3 +55,27 @@ def test_inventory_and_fixed_pve_commands():
     ]:
         with pytest.raises(ValueError):
             pve.command_for(request)
+
+
+@pytest.mark.parametrize(
+    "name,link",
+    [
+        ("../escape", False),
+        ("/etc/key", False),
+        (".venv/bin/python", False),
+        ("runtime/secret", False),
+        ("app-link", True),
+    ],
+)
+def test_staged_archive_rejects_credentials_paths_and_links(name, link):
+    stage = load("stage_receiver")
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as writer:
+        entry = tarfile.TarInfo(name)
+        if link:
+            entry.type = tarfile.SYMTYPE
+            entry.linkname = "/etc/devagent/secrets/pve-key"
+        writer.addfile(entry)
+    raw.seek(0)
+    with tarfile.open(fileobj=raw) as archive, pytest.raises(ValueError):
+        stage.safe_members(archive)
