@@ -173,6 +173,8 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     chromePath,
     [
       '--headless=new',
+      // Match Playwright's default; the rootless CI job has a 64 MiB /dev/shm.
+      '--disable-dev-shm-usage',
       ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []),
       '--no-first-run',
       '--no-default-browser-check',
