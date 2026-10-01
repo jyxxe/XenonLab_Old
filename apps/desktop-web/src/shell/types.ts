@@ -77,6 +77,8 @@ export type AppViewProps = {
   applyPreferences: (preferences: Partial<UserPreferences>) => void;
   notify: (toast: Omit<Toast, 'id'>) => void;
   windowId: string;
+  saveLayout: () => Promise<void>;
+  refreshApps: () => Promise<void>;
 };
 
 export type SessionPhase = 'restoring' | 'signed-out' | 'retrying' | 'reauthorize' | 'connected';

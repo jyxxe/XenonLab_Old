@@ -1,4 +1,5 @@
-import type React from 'react';
+import React from 'react';
+import {EmptyState} from '../design-system/primitives';
 import {Knowledge} from '../Knowledge';
 import {Work} from '../Work';
 import {Dashboard} from '../Dashboard';
@@ -10,7 +11,11 @@ import type {DesktopApp, RegistryApp} from './types';
 const chatOrigin =
   (globalThis as {__XEONOLAB_CHAT_ORIGIN__?: string}).__XEONOLAB_CHAT_ORIGIN__ ||
   (import.meta.env?.VITE_CHAT_ORIGIN as string | undefined) ||
-  'https://chat.xenon.lan';
+  '';
+
+function ChatUnavailable() {
+  return <EmptyState icon="✦" title="AI 对话尚未配置" description="OpenWebUI 未提供可用入口。管理员部署服务后，可在系统设置的应用中登记 chat 或 openwebui。" />;
+}
 
 export function forgejoBase(): string {
   return location.hostname === 'xenon.jyxxe.com' ? 'https://xenon.jyxxe.com/dev' : 'https://192.168.0.101:9445';
@@ -36,8 +41,9 @@ export function builtinApps(): DesktopApp[] {
       id: 'chat',
       title: 'AI 对话',
       icon: '✦',
-      kind: 'iframe',
-      origin: chatOrigin,
+      kind: chatOrigin ? 'iframe' : 'native',
+      component: chatOrigin ? undefined : ChatUnavailable,
+      origin: chatOrigin || undefined,
       entry: '/',
       sandbox: {allow_scripts: true, allow_forms: true, allow_downloads: false},
       permissions: [],
@@ -121,10 +127,11 @@ export function toDesktopApp(entry: RegistryApp): DesktopApp {
 }
 
 export function mergeApps(registry: RegistryApp[], scopes: string[]): DesktopApp[] {
-  const builtins = builtinApps().filter(app => app.permissions.every(scope => scopes.includes(scope)));
+  const configuredChat = registry.find(entry => ['chat', 'openwebui'].includes(entry.id) && (entry.permissions || []).every(scope => scopes.includes(scope)));
+  const builtins = builtinApps().map(app => app.id === 'chat' && configuredChat ? {...toDesktopApp(configuredChat), id: 'chat', title: app.title, dock: true} : app).filter(app => app.permissions.every(scope => scopes.includes(scope)));
   const builtinIds = new Set(builtins.map(app => app.id));
   const external = registry
-    .filter(entry => !builtinIds.has(entry.id))
+    .filter(entry => !builtinIds.has(entry.id) && entry !== configuredChat)
     .map(toDesktopApp)
     .filter(app => app.permissions.every(scope => scopes.includes(scope)));
   return [...builtins, ...external];

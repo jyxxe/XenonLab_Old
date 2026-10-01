@@ -87,6 +87,7 @@ class PreferencePatch(BaseModel):
 
 
 class Layout(BaseModel):
+    dock_initialized: bool = False
     dock: list[str] = Field(default_factory=list, max_length=30)
     windows: list[dict] = Field(default_factory=list, max_length=30)
 

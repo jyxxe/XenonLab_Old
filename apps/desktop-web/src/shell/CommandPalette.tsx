@@ -1,4 +1,5 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
+import {useFocusTrap} from '../design-system/primitives';
 
 export type Command = {
   id: string;
@@ -29,6 +30,9 @@ export function CommandPalette({
   const [commands, setCommands] = useState<Command[]>([]);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const trap = useFocusTrap(open, onClose);
+  const [loading, setLoading] = useState(false);
+  const [providerErrors, setProviderErrors] = useState<string[]>([]);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -46,11 +50,14 @@ export function CommandPalette({
   useEffect(() => {
     if (!open) return;
     const current = ++generation.current;
-    Promise.all(providers.map(provider => Promise.resolve(provider.provide(query)).catch(() => [])))
+    setLoading(true);
+    Promise.allSettled(providers.map(provider => Promise.resolve().then(() => provider.provide(query))))
       .then(results => {
-        if (current === generation.current) setCommands(results.flat().slice(0, 60));
-      })
-      .catch(() => undefined);
+        if (current !== generation.current) return;
+        setCommands(results.flatMap(result => result.status === 'fulfilled' ? result.value : []).slice(0,60));
+        setProviderErrors(results.flatMap((result,index) => result.status === 'rejected' ? [`${providers[index].group}：${String(result.reason)}`] : []));
+        setLoading(false);
+      });
     return () => {
       generation.current += 1;
     };
@@ -79,7 +86,7 @@ export function CommandPalette({
   return (
     <>
       <div className="command-backdrop" onPointerDown={onClose} />
-      <div className="command-palette" role="dialog" aria-modal="true" aria-label="命令面板">
+      <div ref={trap} className="command-palette" role="dialog" aria-modal="true" aria-label="命令面板">
         <input
           ref={inputRef}
           className="command-input"
@@ -87,6 +94,7 @@ export function CommandPalette({
           role="combobox"
           aria-expanded="true"
           aria-controls="command-results"
+          aria-activedescendant={commands[active] ? `command-${commands[active].id}` : undefined}
           aria-label="搜索命令与应用"
           placeholder="搜索应用、窗口或命令…"
           value={query}
@@ -115,6 +123,7 @@ export function CommandPalette({
                 const index = commands.indexOf(command);
                 return (
                   <button
+                    id={`command-${command.id}`}
                     key={command.id}
                     type="button"
                     role="option"
@@ -131,7 +140,9 @@ export function CommandPalette({
               })}
             </div>
           ))}
-          {!commands.length && <p className="launchpad-empty">没有匹配的命令</p>}
+          {loading && <p role="status" className="launchpad-empty">正在搜索命令…</p>}
+          {providerErrors.map(error => <p role="alert" key={error} className="launchpad-empty">{error}</p>)}
+          {!loading && !commands.length && <p className="launchpad-empty">没有匹配的命令</p>}
         </div>
       </div>
     </>

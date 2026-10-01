@@ -1167,6 +1167,11 @@
       },
       "Layout": {
         "properties": {
+          "dock_initialized": {
+            "type": "boolean",
+            "title": "Dock Initialized",
+            "default": false
+          },
           "dock": {
             "items": {
               "type": "string"

@@ -132,3 +132,17 @@ test('restoreWindows caps the number of restored windows', () => {
   }));
   assert.equal(restoreWindows(raw, id => (id === 'knowledge' ? app : null), viewport).length, 30);
 });
+
+
+test('maximized geometry survives save/reload and restores after viewport changes', () => {
+  const original={id:'max',app_id:'knowledge',title:'K',x:75,y:82,width:930,height:620,minimized:false};
+  const saved=serializeWindows([toggleMaximize(original,viewport)]);
+  const resized={width:1366,height:768};
+  const [loaded]=restoreWindows(saved,()=>app,resized);
+  assert.equal(loaded.maximized,true);
+  assert.deepEqual({x:loaded.x,y:loaded.y,width:loaded.width,height:loaded.height},workArea(resized));
+  const restored=toggleMaximize(loaded,resized);
+  assert.equal(restored.x,original.x);
+  assert.equal(restored.width,original.width);
+  assert.equal(restored.maximized,false);
+});

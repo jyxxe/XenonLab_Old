@@ -50,6 +50,7 @@ export function Issues({apiPage, notify}: AppViewProps) {
   async function refresh() {
     const current = ++generation.current;
     setLoading(true);
+    setLoadingMore(false);
     setMessage('');
     try {
       const page = await apiPage('/work?limit=100');
@@ -65,9 +66,11 @@ export function Issues({apiPage, notify}: AppViewProps) {
 
   async function loadMore() {
     if (!cursor || loadingMore) return;
+    const current = generation.current;
     setLoadingMore(true);
     try {
       const page = await apiPage(`/work?limit=100&cursor=${encodeURIComponent(cursor)}`);
+      if (current !== generation.current) return;
       const incoming = page.data as WorkItem[];
       setItems(old => {
         const seen = new Set(old.map(item => item.id));
@@ -75,14 +78,17 @@ export function Issues({apiPage, notify}: AppViewProps) {
       });
       setCursor(page.meta.next_cursor || null);
     } catch (error) {
-      setMessage(String(error));
+      if (current === generation.current) setMessage(String(error));
     } finally {
-      setLoadingMore(false);
+      if (current === generation.current) setLoadingMore(false);
     }
   }
 
   useEffect(() => {
     void refresh();
+    const refreshListener = () => void refresh();
+    addEventListener('xeonolab.app.refresh', refreshListener);
+    return () => {generation.current += 1; removeEventListener('xeonolab.app.refresh', refreshListener)};
   }, []);
 
   const visible = useMemo(() => {

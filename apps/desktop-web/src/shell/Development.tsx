@@ -28,6 +28,8 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
   const [work, setWork] = useState<WorkItem[] | null>(null);
   const [workError, setWorkError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [tick, setTick] = useState(0);
+  const [truncated, setTruncated] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -36,6 +38,7 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
       .then(page => {
         if (!active) return;
         setWork(page.data);
+        setTruncated(Boolean(page.meta.next_cursor));
         setWorkError('');
       })
       .catch(error => {
@@ -47,10 +50,12 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [tick, apiPage]);
+
+  useEffect(() => {const refresh = () => setTick(value => value+1); addEventListener('xeonolab.app.refresh',refresh); return () => removeEventListener('xeonolab.app.refresh',refresh)},[]);
 
   const activeWork = work?.filter(item => item.status === 'queued' || item.status === 'claimed') ?? [];
-  const recent = [...(work ?? [])].slice(0, 6);
+  const recent = [...(work ?? [])].sort((a,b) => b.issue_id-a.issue_id).slice(0, 6);
 
   return (
     <div className="development-app">
@@ -59,8 +64,8 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
           <h2>开发</h2>
           <p>仓库、任务与协作入口</p>
         </div>
-        <div className="app-head-actions">
-          <Button onClick={() => openApp('forgejo')}>在桌面打开 Forgejo</Button>
+        <div className="app-head-actions"><Button disabled={loading} onClick={() => setTick(value => value+1)}>刷新</Button>
+
           <Button variant="primary" onClick={() => window.open(base + '/' + REPOSITORY, '_blank', 'noopener')}>
             打开仓库
           </Button>
@@ -80,11 +85,11 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
           </div>
         </Panel>
 
-        <Panel title="Harness 任务" actions={<Badge tone={activeWork.length ? 'accent' : 'neutral'}>{activeWork.length} 进行中</Badge>} className="dev-card">
+        <Panel title="Harness 任务" actions={<Badge tone={activeWork.length ? 'accent' : 'neutral'}>{activeWork.length}{truncated ? '+' : ''} 进行中</Badge>} className="dev-card">
           {loading ? (
             <div className="dev-lines"><Skeleton height={16} /><Skeleton height={16} width="70%" /><Skeleton height={16} width="84%" /></div>
           ) : workError ? (
-            <ErrorState title="任务队列不可用" message={workError} />
+            <ErrorState title="任务队列不可用" message={workError} onRetry={() => setTick(value => value+1)} />
           ) : activeWork.length ? (
             <ul className="dev-list">
               {activeWork.slice(0, 5).map(item => (
@@ -98,10 +103,11 @@ export function Development({apiPage, openApp, notify}: AppViewProps) {
           ) : (
             <EmptyState icon="✓" title="队列为空" description="当前没有排队或进行中的 Harness 任务。" />
           )}
+          {truncated && <p className="muted">状态仅覆盖已载入的 1000 项；完整列表请打开任务中心。</p>}
           <Button size="sm" onClick={() => openApp('issues')}>打开任务中心</Button>
         </Panel>
 
-        <Panel title="最近活动" className="dev-card">
+        <Panel title="最近同步的任务" className="dev-card">
           {loading ? (
             <Skeleton height={16} />
           ) : recent.length ? (

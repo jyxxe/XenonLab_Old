@@ -18,6 +18,7 @@ import {
   restoreWindows,
   serializeWindows,
   toggleMaximize,
+  workArea,
 } from './window-manager.js';
 import type {API, APIPage, APIRaw, DesktopApp, RegistryApp, UserPreferences, WindowState} from './types';
 
@@ -71,6 +72,9 @@ export function DesktopShell({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const [badges, setBadges] = useState<Record<string, number>>({});
+  const layoutQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const preferenceQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const preferenceVersion = useRef(0);
   const viewport = useRef({width: innerWidth, height: innerHeight});
 
   const activeId = activeWindow(windows)?.id ?? null;
@@ -88,7 +92,7 @@ export function DesktopShell({
       const prefs: UserPreferences = {...defaultPreferences, ...stored};
       const known = (id: string) => available.find(app => app.id === id);
       const storedDock = Array.isArray(layout.dock) ? layout.dock.filter((id: string) => known(id)) : [];
-      const nextDock = storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
+      const nextDock = layout.dock_initialized || storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
       setApps(available);
       setDockIds(nextDock);
       setPreferences(prefs);
@@ -123,10 +127,13 @@ export function DesktopShell({
   const saveLayout = useCallback(
     async (overrides?: {windows?: WindowState[]; dock?: string[]}) => {
       const payload = {
+        dock_initialized: true,
         dock: overrides?.dock ?? dockIds,
         windows: serializeWindows(overrides?.windows ?? windows),
       };
-      await api('/users/me/layout', {method: 'PUT', body: JSON.stringify(payload)});
+      const pending = layoutQueue.current.catch(() => undefined).then(() => api('/users/me/layout', {method: 'PUT', body: JSON.stringify(payload)}));
+      layoutQueue.current = pending;
+      await pending;
     },
     [api, dockIds, windows],
   );
@@ -134,12 +141,11 @@ export function DesktopShell({
   // Persist window geometry and dock order shortly after the user stops changing them.
   useEffect(() => {
     if (!ready) return;
-    if (preferences.restore_windows === false) return;
     const timer = setTimeout(() => {
-      void saveLayout().catch(() => undefined);
+      void saveLayout().catch(error => push({tone: 'danger', title: '布局未保存', description: String(error)}));
     }, 900);
     return () => clearTimeout(timer);
-  }, [windows, dockIds, ready, preferences.restore_windows, saveLayout]);
+  }, [windows, dockIds, ready, saveLayout, push]);
 
   useEffect(() => {
     const onResize = () => {
@@ -147,7 +153,7 @@ export function DesktopShell({
       setWindows(current =>
         current.map(win => {
           const app = apps.find(item => item.id === win.app_id);
-          return {...win, ...clampRect(win, viewport.current, minSizeOf(app))};
+          return {...win, ...(win.maximized ? workArea(viewport.current) : clampRect(win, viewport.current, minSizeOf(app)))};
         }),
       );
     };
@@ -185,6 +191,24 @@ export function DesktopShell({
     [apps],
   );
 
+  const refreshApps = useCallback(async () => {
+    const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
+    const available = mergeApps(registry, me.scopes || []);
+    const known = new Set(available.map(app => app.id));
+    setApps(available);
+    setWindows(current => current.filter(win => known.has(win.app_id)));
+    setDockIds(current => current.filter(id => known.has(id)));
+  }, [api]);
+
+  const saveLayoutWithFeedback = useCallback(async () => {
+    try {
+      await saveLayout();
+      push({tone: 'success', title: '布局已保存'});
+    } catch (error) {
+      push({tone: 'danger', title: '布局未保存', description: String(error)});
+    }
+  }, [saveLayout, push]);
+
   const closeWindow = useCallback((id: string) => setWindows(current => current.filter(win => win.id !== id)), []);
   const minimizeWindow = useCallback((id: string) => setWindows(current => current.map(win => (win.id === id ? {...win, minimized: true} : win))), []);
   const restoreWindow = useCallback(
@@ -208,12 +232,16 @@ export function DesktopShell({
 
   const applyPreferences = useCallback(
     async (patch: Partial<UserPreferences>) => {
+      const version = ++preferenceVersion.current;
       setPreferences(current => ({...current, ...patch}));
+      const pending = preferenceQueue.current.catch(() => undefined).then(() => api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch)}));
+      preferenceQueue.current = pending;
       try {
-        const saved = await api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch)});
-        setPreferences(current => ({...current, ...saved}));
+        const saved = await pending;
+        if (version === preferenceVersion.current) setPreferences(current => ({...current, ...saved}));
       } catch (error) {
         push({tone: 'danger', title: '偏好保存失败', description: String(error)});
+        throw error;
       }
     },
     [api, push],
@@ -387,8 +415,8 @@ export function DesktopShell({
             {id: 'cmd-settings', title: '打开设置', group: '系统命令', icon: '⚙', run: () => openApp('settings')},
             {id: 'cmd-system', title: '打开系统状态', group: '系统命令', icon: '◎', run: () => openApp('system')},
             {id: 'cmd-launchpad', title: '打开 LaunchPad', group: '系统命令', icon: '▦', run: () => setLaunchpadOpen(true)},
-            {id: 'cmd-theme', title: '切换浅色 / 深色外观', group: '系统命令', icon: '◐', run: () => void applyPreferences({theme: preferences.theme === 'dark' ? 'light' : 'dark'})},
-            {id: 'cmd-save-layout', title: '保存窗口布局', group: '系统命令', icon: '⇩', run: () => void saveLayout().then(() => push({tone: 'success', title: '布局已保存'}))},
+            {id: 'cmd-theme', title: '切换浅色 / 深色外观', group: '系统命令', icon: '◐', run: () => void applyPreferences({theme: preferences.theme === 'dark' ? 'light' : 'dark'}).catch(() => undefined)},
+            {id: 'cmd-save-layout', title: '保存窗口布局', group: '系统命令', icon: '⇩', run: () => void saveLayoutWithFeedback()},
             {id: 'cmd-logout', title: '退出登录', group: '系统命令', icon: '⏻', run: () => void onLogout()},
           ];
           if (activeApp) {
@@ -411,8 +439,11 @@ export function DesktopShell({
         },
       },
     ],
-    [apps, windows, activeApp, activeId, openApp, restoreWindow, applyPreferences, preferences.theme, saveLayout, push, onLogout, closeWindow, minimizeWindow],
+    [apps, windows, activeApp, activeId, openApp, restoreWindow, applyPreferences, preferences.theme, saveLayoutWithFeedback, push, onLogout, closeWindow, minimizeWindow],
   );
+
+  const closeLaunchPad = useCallback(() => setLaunchpadOpen(false), []);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
 
   const userWithoutWork = !subject;
   if (loadError) {
@@ -427,12 +458,13 @@ export function DesktopShell({
           onOpenApp={() => undefined}
           onOpenLaunchPad={() => undefined}
           onOpenPalette={() => undefined}
+          onRestoreWindow={() => undefined}
           onCloseWindow={() => undefined}
           onMinimizeWindow={() => undefined}
           onToggleMaximize={() => undefined}
           onSaveLayout={() => undefined}
           onLogout={() => void onLogout()}
-          onApplyPreferences={patch => void applyPreferences(patch)}
+          onApplyPreferences={patch => void applyPreferences(patch).catch(() => undefined)}
           clock={<MenuClock timezone={preferences.timezone} />}
         />
         <div className="desktop-error">
@@ -467,12 +499,13 @@ export function DesktopShell({
         onOpenApp={openApp}
         onOpenLaunchPad={toggleLaunchPad}
         onOpenPalette={() => setPaletteOpen(true)}
+        onRestoreWindow={restoreWindow}
         onCloseWindow={closeWindow}
         onMinimizeWindow={minimizeWindow}
         onToggleMaximize={toggleWindowMaximize}
-        onSaveLayout={() => void saveLayout().then(() => push({tone: 'success', title: '布局已保存'}))}
+        onSaveLayout={() => void saveLayoutWithFeedback()}
         onLogout={() => void onLogout()}
-        onApplyPreferences={patch => void applyPreferences(patch)}
+        onApplyPreferences={patch => void applyPreferences(patch).catch(() => undefined)}
         clock={<MenuClock timezone={preferences.timezone} />}
         status={
           <>
@@ -507,13 +540,15 @@ export function DesktopShell({
               ) : app.component ? (
                 <app.component
                   api={api}
+                  saveLayout={saveLayout}
+                  refreshApps={refreshApps}
                   apiPage={apiPage}
                   apiRaw={apiRaw}
                   app={app}
                   apps={apps}
                   openApp={openApp}
                   preferences={preferences}
-                  applyPreferences={patch => void applyPreferences(patch)}
+                  applyPreferences={applyPreferences}
                   notify={push}
                   windowId={win.id}
                 />
@@ -558,8 +593,8 @@ export function DesktopShell({
         onCloseWindow={closeWindow}
       />
 
-      {launchpadOpen && <LaunchPad apps={apps} recentIds={recent} onLaunch={openApp} onClose={() => setLaunchpadOpen(false)} />}
-      <CommandPalette open={paletteOpen} providers={providers} onClose={() => setPaletteOpen(false)} />
+      {launchpadOpen && <LaunchPad apps={apps} recentIds={recent} onLaunch={openApp} onClose={closeLaunchPad} />}
+      <CommandPalette open={paletteOpen} providers={providers} onClose={closePalette} />
     </div>
   );
 }

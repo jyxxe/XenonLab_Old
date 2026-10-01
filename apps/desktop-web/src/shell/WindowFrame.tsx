@@ -100,10 +100,11 @@ export function WindowFrame({
         pointerEvents: win.minimized ? 'none' : undefined,
       }}
       onPointerDown={onFocus}
+      onFocusCapture={onFocus}
       aria-label={`${win.title} 窗口`}
     >
       <header className="bar" onPointerDown={drag} onDoubleClick={event => !(event.target as HTMLElement).closest('button') && onToggleMaximize()}>
-        <div className="traffic" aria-hidden="true">
+        <div className="traffic">
           <button className="close" aria-label={`关闭 ${win.title}`} title="关闭" onClick={onClose} />
           <button className="min" aria-label={`最小化 ${win.title}`} title="最小化" onClick={onMinimize} />
           <button className="max" aria-label={`${win.maximized ? '还原' : '最大化'} ${win.title}`} title={win.maximized ? '还原' : '最大化'} onClick={onToggleMaximize} />

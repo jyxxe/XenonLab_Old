@@ -18,7 +18,7 @@ export function Settings({
   api: API;
   saveLayout: () => Promise<void>;
   preferences: UserPreferences;
-  applyPreferences: (preferences: UserPreferences) => void;
+  applyPreferences: (preferences: Partial<UserPreferences>) => Promise<void>;
   refreshApps: () => Promise<void>;
 }) {
   const [tab, setTab] = useState('appearance');

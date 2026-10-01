@@ -106,3 +106,14 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
         assert client.patch(url, headers=auth(), json=invalid).status_code == 422
     restarted = TestClient(create_app("desktop-web", settings))
     assert restarted.get(url, headers=auth()).json()["data"] == changed
+
+
+def test_layout_remembers_explicitly_empty_dock(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/layout"
+    saved = client.put(url, headers=auth(), json={"dock": [], "windows": [], "dock_initialized": True})
+    assert saved.status_code == 200
+    assert saved.json()["data"]["dock_initialized"] is True
+    restarted = TestClient(create_app("desktop-web", settings))
+    assert restarted.get(url, headers=auth()).json()["data"]["dock_initialized"] is True

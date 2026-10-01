@@ -3,7 +3,7 @@ import {Button, Spinner} from '../design-system/primitives';
 import {appEntryUrl, sandboxValue} from './apps';
 import type {DesktopApp} from './types';
 
-type FramePhase = 'loading' | 'ready' | 'timeout';
+type FramePhase = 'loading' | 'loaded' | 'ready' | 'timeout';
 
 /**
  * Wraps every external application in consistent loading / timeout / failure states.
@@ -40,9 +40,20 @@ export function IFrameApp({
     if (app.origin) frame?.contentWindow?.postMessage({type: 'theme.changed', theme}, app.origin);
   }, [theme, windowId, app.origin, attempt]);
 
+  useEffect(() => {
+    const handle = (event: MessageEvent) => {
+      const frame = document.getElementById(`frame-${windowId}`) as HTMLIFrameElement | null;
+      if (event.source === frame?.contentWindow && event.origin === app.origin && event.data?.type === 'app.ready') setPhase('ready');
+    };
+    const reload = () => {if (active) setAttempt(value => value+1)};
+    addEventListener('message',handle);
+    addEventListener('xeonolab.app.reload',reload);
+    return () => {removeEventListener('message',handle);removeEventListener('xeonolab.app.reload',reload)};
+  },[windowId,app.origin,active]);
+
   const url = appEntryUrl(app);
   return (
-    <div className={`iframe-app${phase === 'ready' ? ' ds-loaded' : ''}`}>
+    <div className={`iframe-app${phase === 'ready' || phase === 'loaded' ? ' ds-loaded' : ''}`}>
       {phase === 'loading' && <div className="iframe-loading-bar" aria-hidden="true" />}
       <iframe
         id={`frame-${windowId}`}
@@ -50,11 +61,13 @@ export function IFrameApp({
         src={attempt ? `${url}${url.includes('?') ? '&' : '?'}reload=${attempt}` : url}
         sandbox={sandboxValue(app)}
         referrerPolicy="no-referrer"
+        onError={() => setPhase('timeout')}
         onLoad={() => {
           if (timer.current) window.clearTimeout(timer.current);
-          setPhase('ready');
+          setPhase(current => current === 'ready' ? 'ready' : 'loaded');
         }}
       />
+      <div className="iframe-toolbar" role="status"><span>{phase === 'ready' ? '应用已连接' : phase === 'loaded' ? '页面已载入；跨来源认证和连接状态尚未确认。如页面空白或拒绝访问，请在浏览器打开。' : '正在连接外部应用'}</span><Button size="sm" onClick={() => setAttempt(value => value+1)}>重新加载</Button><Button size="sm" onClick={() => window.open(url,'_blank','noopener')}>在浏览器中打开</Button></div>
       {phase === 'loading' && (
         <div className="iframe-app-status" role="status">
           <Spinner size="lg" label={`正在连接 ${app.title}`} />

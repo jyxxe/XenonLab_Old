@@ -296,6 +296,43 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     const preferenceCalls = await cdp.evaluate("window.shellFixture.calls.filter(call=>call.path==='/users/me/preferences'&&call.method==='PATCH').map(call=>call.body)");
     assert.ok(preferenceCalls.some(body => body.reduced_motion === true), 'preference patch recorded');
 
+    // Settings receives working callbacks for explicit layout saving.
+    const savedBefore=await cdp.evaluate("window.shellFixture.calls.filter(call=>call.method==='PUT').length");
+    await cdp.evaluate("[...document.querySelectorAll('.preference-form button')].find(button=>button.innerText==='立即保存当前布局').click()");
+    await waitFor(()=>cdp.evaluate(`window.shellFixture.calls.filter(call=>call.method==='PUT').length>${savedBefore}`),'explicit layout save');
+    assert.ok((await cdp.evaluate("document.querySelector('.preference-form [role=status]').innerText")).includes('已保存'));
+    // Dock preferences still persist when window restoration is switched off.
+    await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"恢复上次窗口\"]').click()");
+    await waitFor(()=>cdp.evaluate("window.shellFixture.preferences.restore_windows===false"),'restore preference off');
+    const layoutBefore=await cdp.evaluate("window.shellFixture.calls.filter(call=>call.method==='PUT').length");
+    await cdp.evaluate("document.querySelector('.window[data-app-id=settings] .bar .max').click()");
+    await waitFor(()=>cdp.evaluate(`window.shellFixture.calls.filter(call=>call.method==='PUT').length>${layoutBefore}`),'layout saves with restore off');
+    await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"恢复上次窗口\"]').click()");
+
+    // Failed settings writes remain visible and are never labelled saved.
+    await cdp.evaluate("window.shellFixture.control.failPreferences=true;document.querySelector('button[role=switch][aria-label=\"界面动画\"]').click()");
+    await waitFor(()=>cdp.evaluate("document.querySelector('.preference-form [role=status]').innerText.includes('保存失败')"),'preference save failure');
+    await cdp.evaluate("window.shellFixture.control.failPreferences=false;document.querySelector('button[role=switch][aria-label=\"界面动画\"]').click()");
+    await waitFor(()=>cdp.evaluate("document.querySelector('.preference-form [role=status]').innerText.includes('已应用并保存')"),'preference save recovery');
+    await cdp.evaluate("window.shellFixture.control.failLayout=true;[...document.querySelectorAll('.preference-form button')].find(button=>button.innerText==='立即保存当前布局').click()");
+    await waitFor(()=>cdp.evaluate("document.querySelector('.preference-form [role=status]').innerText.includes('synthetic layout save failure')"),'layout save failure');
+    await cdp.evaluate("window.shellFixture.control.failLayout=false");
+    // Application changes refresh registry without resetting the workspace.
+    await cdp.evaluate("[...document.querySelectorAll('.settings-tabs button')].find(button=>button.innerText==='应用').click()");
+    await waitFor(()=>cdp.evaluate("Boolean(document.querySelector('.registry-panel form'))"),'registry settings');
+    await cdp.evaluate(`(() => {
+      const form=document.querySelector('.registry-panel form');
+      const inputs=[...form.querySelectorAll('input')];
+      for(const [index,value] of [[0,'example'],[1,'Synthetic Editor'],[3,'https://example.invalid']]) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(inputs[index],value);
+        inputs[index].dispatchEvent(new Event('input',{bubbles:true}));
+      }
+    })()`);
+    await cdp.evaluate("document.querySelector('.registry-panel form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))");
+    await waitFor(()=>cdp.evaluate("document.querySelector('.registry-panel [role=status]').innerText.includes('应用目录已更新')"),'registry callback success');
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=settings]'))"),true,'registry refresh retains settings window');
+    await cdp.evaluate("[...document.querySelectorAll('.settings-tabs button')].find(button=>button.innerText==='外观与桌面').click()");
+
     // Iframe failure state: the stalled origin must surface an explicit error UI.
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"AI 对话\"]').click()");
     await waitFor(() => cdp.evaluate("document.querySelector('.iframe-app-status')?.innerText.includes('无法加载')"), 'iframe timeout state');
@@ -327,10 +364,12 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
 
     // Accessibility: icon-only controls carry labels and every dock entry has a title.
     const a11y = await cdp.evaluate(`(() => ({
+      hiddenControls: [...document.querySelectorAll('.bar .traffic button')].filter(button=>button.closest('[aria-hidden=\"true\"]')).length,
       unlabeled: [...document.querySelectorAll('.ds-icon-button')].filter(button=>!button.getAttribute('aria-label')).length,
       dockTitles: [...document.querySelectorAll('nav.dock .dock-item')].every(button=>button.title),
       switches: [...document.querySelectorAll('button[role=switch]')].every(button=>button.getAttribute('aria-checked')!==null),
     }))()`);
+    assert.equal(a11y.hiddenControls,0,'window controls exposed to assistive technology');
     assert.equal(a11y.unlabeled, 0, 'icon buttons have aria-labels');
     assert.equal(a11y.dockTitles, true, 'dock items expose titles');
     assert.equal(a11y.switches, true, 'switches expose aria-checked');
@@ -379,6 +418,10 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.command-palette'))"), 'palette for capture');
     await capture('desktop-command-palette-dark-1440x900');
     await cdp.key('Escape', 'Escape');
+    // An intentionally unpinned Dock stays empty after reloading.
+    await cdp.evaluate("sessionStorage.setItem('shell-fixture:layout',JSON.stringify({dock:[],windows:[],dock_initialized:true}))");
+    await cdp.call('Page.reload');
+    await waitFor(()=>cdp.evaluate("document.querySelectorAll('nav.dock .dock-item').length===1"),'explicitly empty Dock restored');
   } finally {
     cdp?.socket.close();
     try {

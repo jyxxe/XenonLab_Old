@@ -11,6 +11,8 @@ import {DesktopShell} from '../src/shell/DesktopShell';
 // same surface with deterministic, synthetic data so browser acceptance runs offline.
 type Call = {method: string; path: string; body: any};
 const calls: Call[] = [];
+const registry:any[]=[];
+const control={failLayout:false,failPreferences:false};
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -31,7 +33,7 @@ const preferences = stored('preferences', {
   animations: true,
   reduced_motion: false,
 });
-const layout: {dock: string[]; windows: any[]} = stored('layout', {dock: [], windows: []});
+const layout: {dock: string[]; windows: any[];dock_initialized?:boolean} = stored('layout', {dock: [], windows: []});
 const work = Array.from({length: 5}, (_, index) => ({
   id: `fixture-${index + 1}`,
   repository: 'xenon-admin/XeonoLab',
@@ -49,11 +51,13 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
   calls.push({method, path, body});
   if (path === '/users/me') {
-    return {subject: 'fixture-user-0001', kind: 'human', scopes: ['xelibrary:read', 'dev:read', 'desktop:read']};
+    return {subject: 'fixture-user-0001', kind: 'human', scopes: ['xelibrary:read', 'dev:read', 'desktop:read','desktop:admin']};
   }
-  if (path === '/apps') return [];
+  if(path==='/apps?include_unavailable=true')return [...registry];
+  if (path === '/apps') {if(method==='POST'){const saved={...body,revision:1};registry.push(saved);return saved}return [...registry]}
   if (path === '/users/me/preferences') {
     if (method === 'PATCH' && body) {
+      if(control.failPreferences)throw Error('synthetic preferences save failure');
       Object.assign(preferences, body);
       sessionStorage.setItem('shell-fixture:preferences', JSON.stringify(preferences));
     }
@@ -61,11 +65,13 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   }
   if (path === '/users/me/layout') {
     if (method === 'PUT' && body) {
+      if(control.failLayout)throw Error('synthetic layout save failure');
+      layout.dock_initialized = body.dock_initialized;
       layout.dock = body.dock || [];
       layout.windows = body.windows || [];
       sessionStorage.setItem('shell-fixture:layout', JSON.stringify(layout));
     }
-    return {dock: [...layout.dock], windows: layout.windows.map(win => ({...win}))};
+    return {dock_initialized:layout.dock_initialized,dock: [...layout.dock], windows: layout.windows.map(win => ({...win}))};
   }
   if (path.startsWith('/work')) {
     const url = new URL(path, 'http://fixture.local');
@@ -88,6 +94,8 @@ const apiRaw = async (path: string, init?: RequestInit) => {
 
 (window as any).shellFixture = {
   calls,
+  control,
+  registry,
   preferences,
   layout,
   loggedOut: false,

@@ -48,3 +48,14 @@
 - XeLibrary 应用仍为旧两栏布局，Issue §13–§16（Sidebar/Content/Inspector、表格排序筛选多选、Search Fast/Quality/Structured、Query Console）未完成。
 - System App 分页（Storage/Network/HF Cache/Agents/Audit）与原生 Forgejo Dashboard 数据源未实现（后者需要独立的后端只读代理 Issue）。
 - 注意：本机 inotify 实例接近上限时 Vite watcher 会 EMFILE；既有 Work 浏览器夹具已改为 `watch:null`，新夹具同样禁用 watcher。
+
+
+## GPT-6.1 Sol 接管增量（Issue #71 epoch 2）
+
+基线 `cc2f546` 加 OpenCode `eef287d`。在独立 worktree 修复 Settings 的布局保存与应用注册表刷新回调；窗口恢复开关不再禁用 Dock 保存；新增 `dock_initialized` 保留完全取消固定的 Dock；布局与偏好写入按顺序发送、失败可见；最大化窗口保存原尺寸并在重新载入或视口变化后正确还原；Menu Bar 选择具体窗口；移动端一次显示一个活跃应用；LaunchPad 与命令面板加入焦点陷阱；窗口控制按钮不再从无障碍树隐藏；陈旧 Issues 分页响应被丢弃。
+
+Development 使用可达的 Forgejo 外链，不再启动不存在的内置 Forgejo id。AI 对话优先使用应用注册表或明确的配置；OpenWebUI 生产依赖未部署时展示“尚未配置”，不再尝试不存在的 `chat.xenon.lan`。iframe 的页面 load 不被宣称为认证/业务连接成功；只有经过 origin 与 source 校验的 `app.ready` 确认连接，并持续提供重载/外开入口。
+
+实际验证：235 后端测试通过（19 个已有依赖/临时目录清理警告）；前端 25 项测试通过；TypeScript/Vite production build、Scoped Ruff、OpenAPI 导出通过。Chrome 合成 API 核心路径新增显式保存、保存失败/恢复、注册应用后保持桌面、禁用窗口恢复时仍保存布局、空 Dock、System unavailable/permission 状态。截图在 `runtime/verification/issue-71-takeover/`，已查看明暗 1440x900 与 390x844；也生成 1920x1080、1366x768、1024x768、LaunchPad 与命令面板截图。这些是真实 Chrome 渲染的合成夹具，不能替代部署后的真实账号与 API 验收。
+
+仍待：#72 Library 交付整合与独立回归；实际部署后的浏览器核心路径；OpenWebUI 实际服务上线；原生 Forgejo dashboard API。未关闭 #71，未推送或部署。

@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {Input} from '../design-system/primitives';
+import {Input, useFocusTrap} from '../design-system/primitives';
 import type {DesktopApp} from './types';
 
 export function LaunchPad({
@@ -15,6 +15,7 @@ export function LaunchPad({
 }) {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const trap = useFocusTrap(true, onClose);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const ordered = useMemo(() => {
@@ -48,7 +49,7 @@ export function LaunchPad({
   }, [onClose]);
 
   return (
-    <section className="launchpad" aria-label="LaunchPad" onPointerDown={event => event.target === event.currentTarget && onClose()}>
+    <div ref={trap} className="launchpad" role="dialog" aria-modal="true" aria-label="LaunchPad" onPointerDown={event => event.target === event.currentTarget && onClose()}>
       <Input
         ref={searchRef}
         className="launchpad-search"
@@ -92,6 +93,6 @@ export function LaunchPad({
         <p className="launchpad-empty">没有匹配的应用</p>
       )}
       <p className="launchpad-hint">方向键选择 · Enter 打开 · Esc 关闭</p>
-    </section>
+    </div>
   );
 }

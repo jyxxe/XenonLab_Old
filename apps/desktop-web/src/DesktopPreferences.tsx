@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
 import type {UserPreferences} from './shell/types';
 
@@ -28,17 +28,20 @@ export function DesktopPreferences({
 }: {
   api: (path: string, init?: RequestInit) => Promise<any>;
   preferences: UserPreferences;
-  apply: (preferences: UserPreferences) => void;
+  apply: (preferences: Partial<UserPreferences>) => Promise<void>;
   saveLayout: () => Promise<void>;
 }) {
+  const changeVersion = useRef(0);
   const [message, setMessage] = useState('');
   const [timezone, setTimezone] = useState(preferences.timezone);
 
   // Appearance changes apply immediately and the shell persists them; macOS-style
   // settings have no separate confirmation step for display options.
-  const update = (patch: Partial<UserPreferences>) => {
-    apply({...preferences, ...patch});
-    setMessage('已应用并保存');
+  const update = async (patch: Partial<UserPreferences>) => {
+    const version=++changeVersion.current;
+    setMessage('保存中…');
+    try {await apply(patch);if(version===changeVersion.current)setMessage('已应用并保存')}
+    catch (error) {if(version===changeVersion.current)setMessage('保存失败：'+String(error))}
   };
 
   return (

@@ -136,6 +136,7 @@ export function restoreWindows(raw, knownApp, viewport) {
       title: typeof item.title === 'string' && item.title ? item.title : app.title,
       minimized: Boolean(item.minimized),
       maximized: Boolean(item.maximized),
+      ...(item.maximized ? {restore: clampRect(item.restore && ['x','y','width','height'].every(key => Number.isFinite(item.restore[key])) ? item.restore : defaultRect(app, viewport), viewport, min)} : {}),
       ...clampRect(
         {
           x: Number.isFinite(item.x) ? item.x : WINDOW_MARGIN,
@@ -146,6 +147,7 @@ export function restoreWindows(raw, knownApp, viewport) {
         viewport,
         min,
       ),
+      ...(item.maximized ? workArea(viewport) : {}),
     });
   }
   return windows;
@@ -163,5 +165,6 @@ export function serializeWindows(windows) {
     height: Math.round(win.height),
     minimized: Boolean(win.minimized),
     maximized: Boolean(win.maximized),
+    ...(win.maximized && win.restore ? {restore: {x: Math.round(win.restore.x), y: Math.round(win.restore.y), width: Math.round(win.restore.width), height: Math.round(win.restore.height)}} : {}),
   }));
 }

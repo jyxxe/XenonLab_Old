@@ -11,6 +11,7 @@ export function MenuBar({
   onOpenApp,
   onOpenLaunchPad,
   onOpenPalette,
+  onRestoreWindow,
   onCloseWindow,
   onMinimizeWindow,
   onToggleMaximize,
@@ -28,6 +29,7 @@ export function MenuBar({
   onOpenApp: (id: string) => void;
   onOpenLaunchPad: () => void;
   onOpenPalette: () => void;
+  onRestoreWindow: (id: string) => void;
   onCloseWindow: (id: string) => void;
   onMinimizeWindow: (id: string) => void;
   onToggleMaximize: (id: string) => void;
@@ -70,7 +72,7 @@ export function MenuBar({
       id: `win-${win.id}`,
       label: win.title,
       checked: win.id === activeWindowId,
-      onSelect: () => onOpenApp(win.app_id),
+      onSelect: () => onRestoreWindow(win.id),
     })),
     ...(windows.length ? [{separator: true} as MenuItem] : []),
     {id: 'minimize', label: '最小化当前窗口', shortcut: 'Ctrl+M', disabled: !active, onSelect: () => active && onMinimizeWindow(active.id)},
