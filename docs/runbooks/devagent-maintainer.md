@@ -15,7 +15,7 @@ edit/commit/push test. The latter commit is
 
 Use existing management SSH, then `sudo -iu devagent`. Run `devagent` for an
 interactive TUI, or `devagent-msg "检查 PR #123"` for an independent manual
-session. No wrapper uses `--continue`. Automatic and manual work share a kernel
+session. An actual SSH PTY opened the Maintainer / DeepSeek V4.1 Flash TUI and exited cleanly. No wrapper uses `--continue`. Automatic and manual work share a kernel
 `flock` protecting the checkout. The runtime uses ephemeral CLI sessions; a
 persistent, publicly listening OpenCode server is unnecessary.
 
@@ -92,7 +92,7 @@ This runbook records bootstrap progress, **not completed production handoff**.
 Automatic timers are deliberately not enabled until the deployment and merge
 acceptance is complete. Outstanding acceptance includes full protected
 preflight/PR review/merge, production staging/activation/rollback verification,
-interactive TUI, actual restart recovery, final secret/log audit and updated
+actual restart recovery, final secret/log audit and updated
 operator handover evidence. Keep the Goal active until those checks pass.
 
 For human takeover, stop both timers and any current model unit, preserve root
