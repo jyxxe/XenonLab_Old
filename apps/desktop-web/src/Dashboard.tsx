@@ -1,5 +1,6 @@
 import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Bars,Legend,Meter,Ring,chartColor} from './MacCharts';
+import {ErrorState} from './design-system/primitives';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{request_id?:string;next_cursor?:string|null;[key:string]:any}}>;
 type WorkItem={id:string;repository:string;issue_id:number;title:string;status:string;holder:string|null;claim_active:boolean};
 type Job={job_id:string;owner:string;table_id:string;status:string;created_at?:string;updated_at?:string;error?:string};
@@ -33,6 +34,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
   const [notes,setNotes]=useState<Record<string,string>>({}),[health,setHealth]=useState<{service:string;ready:boolean;latency:number}|null>(null);
   const [stamp,setStamp]=useState(0),[tick,setTick]=useState(0);
   const gridRef=useRef<HTMLDivElement>(null);
+  const retry=()=>setTick(value=>value+1);
   useEffect(()=>{
     let active=true;
     const optional=async(key:string,load:()=>Promise<void>)=>{try{await load();if(active)setNotes(old=>{const next={...old};delete next[key];return next})}catch(error){if(active)setNotes(old=>({...old,[key]:String(error)}))}};
@@ -75,10 +77,10 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
   const pathData=Object.entries(pathCounts).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([label,value])=>({label:label.length>6?label.slice(0,6)+'…':label,value}));
   return <section className="dashboard">
     <header className="dashboard-head"><div><h2>系统面板</h2><p>Embedding 索引队列、Harness 任务与知识库概览</p></div>
-      <div className="dashboard-actions"><small>{stamp?`更新于 ${new Date(stamp).toLocaleTimeString('zh-CN')}`:'加载中…'}</small><button onClick={()=>setTick(value=>value+1)}>刷新</button></div></header>
-    <div className="dashboard-grid" ref={gridRef}>
+      <div className="dashboard-actions"><small>{stamp?`更新于 ${new Date(stamp).toLocaleTimeString('zh-CN')}`:'加载中…'}</small><button onClick={retry}>刷新</button></div></header>
+      <div className="dashboard-grid" ref={gridRef}>
       <article className="mac-card"><header><h3>我的 Embedding 索引</h3><span className="mac-badge">最近 {jobs.length} 条</span></header>
-        {notes.jobs?<p className="muted">{notes.jobs}</p>:<>
+        {notes.jobs?<ErrorState title="无法读取索引队列" message={notes.jobs} onRetry={retry}/>:<>
           <Meter segments={jobSegments}/>
           <Legend items={jobSegments}/>
           {jobs.length>0&&<ul className="job-list">{jobs.slice(0,6).map(job=><li key={job.job_id}>
@@ -90,7 +92,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
         </>}
       </article>
       <article className="mac-card"><header><h3>Harness 任务队列</h3><span className="mac-badge">{workTruncated?`${work.length}+ 项`:`共 ${work.length} 项`}</span></header>
-        {notes.work?<p className="muted">{notes.work}</p>:<div className="card-split">
+        {notes.work?<ErrorState title="无法读取任务队列" message={notes.work} onRetry={retry}/>:<div className="card-split">
           <Ring segments={workSegments} center={{value: work.length, label: workTruncated?'已载入':'任务'}}/>
           <Legend items={workSegments}/>
         </div>}
@@ -103,12 +105,12 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
         <button onClick={()=>openApp('work')}>打开任务中心</button>
       </article>
       <article className="mac-card"><header><h3>知识库概览</h3><span className="mac-badge">{tablesTruncated?`${tables.length}+ 张表`:`${tables.length} 张表`}</span></header>
-        {notes.tables?<p className="muted">{notes.tables}</p>:pathData.length?<Bars data={pathData} unit=" 张表"/>:<p className="muted">暂无可见知识表。</p>}
+        {notes.tables?<ErrorState title="无法读取知识库概览" message={notes.tables} onRetry={retry}/>:pathData.length?<Bars data={pathData} unit=" 张表"/>:<p className="muted">暂无可见知识表。</p>}
         {!notes.tables&&tablesTruncated&&<p className="muted">路径统计仅覆盖当前载入的前 1000 张表。</p>}
         <button onClick={()=>openApp('knowledge')}>打开知识库</button>
       </article>
       <article className="mac-card"><header><h3>服务状态</h3></header>
-        {notes.health?<p className="muted">{notes.health}</p>:health&&<div className="check-list">
+        {notes.health?<ErrorState title="无法读取服务状态" message={notes.health} onRetry={retry}/>:health&&<div className="check-list">
           <div className="status-line"><i className={`status-dot${health.ready?'':' bad'}`}/><span>{health.service}</span><em className="muted">{health.ready?'ready':'不可用'} · {health.latency} ms</em></div>
           <div className="status-line"><i className={`status-dot${notes.jobs?' bad':''}`}/><span>我的索引队列</span><em className="muted">{notes.jobs?'需要管理员权限查看':`${(jobCounts?.queued??jobs.filter(job=>job.status==='queued').length)+(jobCounts?.running??jobs.filter(job=>job.status==='running').length)} 项进行中`}</em></div>
         </div>}

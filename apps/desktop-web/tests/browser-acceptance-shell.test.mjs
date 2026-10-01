@@ -310,8 +310,23 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"恢复上次窗口\"]').click()");
 
     // System pages expose true missing-data and permission states.
+    await cdp.evaluate('window.shellFixture.control.failWork=true');
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统状态\"]').click()");
     await waitFor(()=>cdp.evaluate("Boolean(document.querySelector('.system-app'))"),'System app');
+    await waitFor(()=>cdp.evaluate("Boolean([...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.querySelector('[role=alert]'))"),'dashboard queue error state');
+    const queueError = await cdp.evaluate(`(() => {
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('Harness 任务队列'));
+      return {message:card?.querySelector('[role=alert]')?.innerText, retry:card?.querySelector('[role=alert] button')?.innerText};
+    })()`);
+    assert.match(queueError.message, /无法读取任务队列/);
+    assert.equal(queueError.retry, '重试');
+    await cdp.evaluate(`(() => {
+      window.shellFixture.control.failWork=false;
+      const card=[...document.querySelectorAll('.mac-card')].find(item=>item.innerText.includes('Harness 任务队列'));
+      card.querySelector('[role=alert] button').click();
+    })()`);
+    await waitFor(()=>cdp.evaluate("!([...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.querySelector('[role=alert]'))"),'dashboard queue retry recovery');
+    assert.ok(await cdp.evaluate("[...document.querySelectorAll('.mac-card')].find(card=>card.innerText.includes('Harness 任务队列'))?.innerText.includes('打开任务中心')"));
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='存储').click()");
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('容量信息尚未接入')"),'Storage unavailable');
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='审计').click()");

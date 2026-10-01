@@ -12,7 +12,7 @@ import {DesktopShell} from '../src/shell/DesktopShell';
 type Call = {method: string; path: string; body: any};
 const calls: Call[] = [];
 const registry:any[]=[];
-const control={failLayout:false,failPreferences:false};
+const control={failLayout:false,failPreferences:false,failWork:false};
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -74,23 +74,31 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     return {dock_initialized:layout.dock_initialized,dock: [...layout.dock], windows: layout.windows.map(win => ({...win}))};
   }
   if (path.startsWith('/work')) {
+    if (control.failWork) throw new Error('synthetic work read failure');
     const url = new URL(path, 'http://fixture.local');
     const cursor = url.searchParams.get('cursor');
     if (cursor === 'page-2') return {data: work.slice(3), meta: {next_cursor: null}};
     return {data: work.slice(0, 3), meta: {next_cursor: 'page-2'}};
   }
+  if (path === '/jobs?limit=50') return {data: [], meta: {counts: {queued: 0, running: 0, completed: 0, failed: 0}}};
+  if (path === '/tables?limit=1000') return {data: [], meta: {next_cursor: null}};
   throw new Error(`unexpected fixture request ${method} ${path}`);
 }
 
 const apiPage = async (path: string, init?: RequestInit) => {
   const data = await api(path, init);
-  if (path.startsWith('/work')) return {data: data.data, meta: data.meta};
+  if (data && Array.isArray(data.data)) return {data: data.data, meta: data.meta || {}};
   return {data, meta: {}};
 };
 const apiRaw = async (path: string, init?: RequestInit) => {
   const data = await api(path, init);
   return new Response(JSON.stringify({data}), {status: 200, headers: {'Content-Type': 'application/json'}});
 };
+
+const browserFetch = window.fetch.bind(window);
+window.fetch = (input, init) => String(input) === '/health/ready'
+  ? Promise.resolve(new Response(JSON.stringify({service: 'desktop-web'}), {status: 200, headers: {'Content-Type': 'application/json'}}))
+  : browserFetch(input, init);
 
 (window as any).shellFixture = {
   calls,
