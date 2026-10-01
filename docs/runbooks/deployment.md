@@ -1,5 +1,17 @@
 # PVE LAN 上线记录 — 2026-10-01
 
+2026-10-01 更新：Issue #71 Shell、键盘操作、Settings 与会话续期体验增量已通过 Deploy Gateway 发布。
+代码 commit `296a55e98cb2ede4095ed46c3035a30dfc0bc154`，release
+`c570bb5a-c455-4de8-b54f-ceebd349fa08`，deployment
+`24a41dc8-b2d5-4e2c-89a3-9d2e34decd93`，状态 `completed`，发布租约已释放。此增量为前端
+更新，无 API 或数据库 schema 变更。上线前 Desktop DB 快照位于
+`runtime/backups/2026-10-01-issue71-final/predeploy-desktop.sqlite`，SQLite
+`integrity_check` 为 `ok`。279 项后端测试、39 项前端测试、TypeScript/Vite build、OpenAPI
+无 diff 与 `git diff --check` 通过。五个入口 readiness 均为 200，VM 101/104/106/107/111
+当前 release symlink 均指向该 commit。LAN 与公网首页及 JS/CSS 均为 200，静态资源 SHA-256
+与本地生产构建一致；公网未认证 `/api/v1/work` 返回预期 401。此次没有运行真实生产账号的完整
+浏览器登录流程；#71 仍开放，尚未完成项见 `docs/acceptance/ui-refactor-2026-10-01.md`。
+
 2026-10-01 更新：Issue #73 Forgejo claim 同步及 `assignees: null` 修复已上线。代码 commit
 `b0e56a9d60061f234451c9bbeeb315b8ad838553`，Deploy Gateway release
 `add884bb-6a4f-4ca1-9372-936f23cd9c08` / deployment `85480820-d168-4fac-ba61-997db8b3d828`

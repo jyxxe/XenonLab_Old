@@ -157,4 +157,15 @@ Development 使用可达的 Forgejo 外链，不再启动不存在的内置 Forg
 5. Error UX 尚未对全部 API 错误贯穿真实 request_id：Library 的既有错误展示有将 error code 用作“请求编号”的位置；本轮未扩大到该独立传输/错误格式修复。大表/多窗口性能有有限本地回归，未进行全天真实数据压力、完整对比度/读屏器审计。
 6. root 仍需部署后使用真实用户/账号完成完整核心路径、Forgejo 外链、跨服务权限和公网/LAN 登录、真实浏览器视觉与人工作业验收；缺这些证据前不能关闭 #71。
 
-未推送、未合并发布分支、未 stage release、未部署、未创建 release/lease、未修改 Forgejo Issue 状态或评论；生产变更与最终验收由 root 执行。
+Sol 子 Agent 交付时未推送、未 stage release、未部署或修改 Forgejo Issue 状态/评论；后续发布与验收由 root 执行，记录如下。
+
+## 生产发布后验收：键盘、设置与会话续期增量（2026-10-01）
+
+- 代码 commit：`296a55e98cb2ede4095ed46c3035a30dfc0bc154`；已由 root 推送至 `feature/platform-v1`。
+- Deploy Gateway release：`c570bb5a-c455-4de8-b54f-ceebd349fa08`；deployment：`24a41dc8-b2d5-4e2c-89a3-9d2e34decd93`，状态 `completed`，租约已释放。
+- 发布前 Desktop DB 快照 `runtime/backups/2026-10-01-issue71-final/predeploy-desktop.sqlite` 的 SQLite `integrity_check` 为 `ok`；本次无 schema/API migration。
+- 后端 279 项、前端 39 项测试通过；TypeScript/Vite production build、OpenAPI 导出无 diff、`git diff --check` 通过。
+- 五个服务入口 readiness 返回 200；VM 101/104/106/107/111 的 active release symlink 均指向该 commit。
+- LAN 与公网首页、JS/CSS 均返回 200，JS/CSS SHA-256 与生产构建一致；公网未认证 `/api/v1/work` 返回预期 401。
+- 本次未运行真实生产账号的完整浏览器登录流程。新增浏览器自动化使用合成身份/API route，不能证明当前公网 Keycloak、Tunnel 与用户会话流程；旧版 IP 入口 PKCE 验收记录仍见 deployment runbook。
+- Issue #71 保持开放。OpenWebUI 服务、原生 Forgejo Dashboard 与受控只读 API、System 受控数据源、真实账号浏览器验收及其他剩余 DoD 仍未完成；不得将本次增量发布视为 Issue 完成。
