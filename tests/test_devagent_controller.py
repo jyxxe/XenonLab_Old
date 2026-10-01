@@ -138,8 +138,14 @@ def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
     assert "git *" not in auto["permission"]["bash"]
     assert auto["permission"]["bash"]["*auth.json*"] == "deny"
     assert auto["permission"]["bash"]["devctl *"] == "allow"
+    assert auto["permission"]["bash"]["devctl deploy *"] == "deny"
+    assert auto["permission"]["bash"]["devctl merge *"] == "deny"
+    assert auto["permission"]["bash"]["devctl review *"] == "deny"
+    assert auto["permission"]["bash"]["devctl pr-create *"] == "deny"
     assert manual["agent"]["maintainer"]["steps"] == 48
     assert manual["agent"]["maintainer"]["permission"]["edit"] == "allow"
+    assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl deploy *"] == "deny"
+    assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl merge *"] == "deny"
 
 
 def test_checkpoint_push_repository_timestamp_does_not_wake_prs():
@@ -192,6 +198,29 @@ def test_closed_pr_live_branch_references_do_not_wake_history():
     before = list(controller.project_events(forgejo, {"identity": "devagent-maintainer"}))
     forgejo.head = "b" * 40
     assert before == list(controller.project_events(forgejo, {"identity": "devagent-maintainer"}))
+
+
+def test_closed_pr_events_supersede_old_work_without_starting_model(tmp_path):
+    state = controller.State(tmp_path)
+    state.observe("pr:97", {"state": "open", "head": "a" * 40})
+    old_task = state.pending()["id"]
+
+    closed = {"state": "closed", "merged": True, "merge_commit_sha": "c" * 40}
+    assert state.observe("pr:97", closed)
+    assert state.db.execute("SELECT status FROM tasks WHERE id=?", (old_task,)).fetchone()[0] == "superseded"
+    assert state.pending() is None
+
+    # A previous release could have persisted an already-closed event as pending work.
+    state.db.execute(
+        "INSERT INTO tasks(id,resource,fingerprint,payload,status,updated) VALUES(?,?,?,?,?,?)",
+        ("stale-closed-pr", "pr:97", controller.digest(closed), json.dumps(closed), "failed", 0),
+    )
+    state.db.commit()
+    assert not state.observe("pr:97", closed)
+    assert state.db.execute(
+        "SELECT status FROM tasks WHERE id='stale-closed-pr'"
+    ).fetchone()[0] == "superseded"
+    assert state.pending() is None
 
 
 @pytest.mark.parametrize(
