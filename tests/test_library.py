@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from xeonolab.backup import validate_data_root
@@ -684,6 +685,206 @@ def test_request_acl_preserves_precedence_inheritance_and_freshness(library):
             "/api/v1/search/text", headers=child_auth, json={"query": "secret", "limit": 10}
         ).json()["data"]
     ) == 1
+
+
+def test_cjk_text_search_merges_new_index_and_bounded_legacy_scan(library, settings, monkeypatch):
+    tid, _ = seed(library)
+    # A normally written row is indexed in the additive segmented CJK index.
+    indexed = library.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"title": "积分换元", "confidence": 0.8}},
+    )
+    assert indexed.status_code == 201, indexed.text
+    indexed_id = indexed.json()["data"]["_row_id"]
+
+    # Emulate a row from a pre-CJK-index .xl file: the legacy FTS body is raw
+    # CJK text and there is deliberately no corresponding __xl_fts_cjk row.
+    legacy_id = str(uuid4())
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    stamp = "2026-10-01T00:00:00Z"
+    with sqlite3.connect(table_file) as db:
+        db.execute(
+            "INSERT INTO data VALUES(?,?,?,?,?,?)",
+            (legacy_id, 1, stamp, stamp, None, json.dumps({"title": "旧式前缀积分交换", "confidence": 0.7})),
+        )
+        db.execute("INSERT INTO __xl_fts VALUES(?,?)", (legacy_id, "旧式前缀积分交换 0.7"))
+
+    response = library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"})
+    assert response.status_code == 200, response.text
+    hits = {hit["row_id"]: hit for hit in response.json()["data"]}
+    assert set(hits) == {indexed_id, legacy_id}
+    assert hits[indexed_id]["score_type"] == "sqlite_fts_cjk"
+    assert hits[indexed_id]["approximate"] is False
+    assert hits[legacy_id]["score_type"] == "substring_scan"
+    assert hits[legacy_id]["approximate"] is True
+    assert response.json()["meta"]["partial"] is False
+
+    # The scan budget is still applied with an indexed hit already present.
+    monkeypatch.setenv("XELIBRARY_CJK_SCAN_ROWS", "1")
+    capped = library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"})
+    assert capped.status_code == 200, capped.text
+    assert capped.json()["meta"]["partial"] is True
+    assert any(hit["row_id"] == indexed_id for hit in capped.json()["data"])
+    monkeypatch.setenv("XELIBRARY_CJK_SCAN_ROWS", "3")
+    exact = library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"})
+    assert exact.json()["meta"]["partial"] is False
+    other_tid = create_empty_table(library, "CJK scan boundary")
+    other_row = library.post(
+        f"/api/v1/tables/{other_tid}/rows", headers=auth(), json={"values": {"body": "无关行"}}
+    )
+    assert other_row.status_code == 201, other_row.text
+    across_tables = library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"})
+    assert across_tables.json()["meta"]["partial"] is True
+
+    # Literal FTS escaping, filters and path scope remain enforced.
+    literal = library.post(
+        "/api/v1/search/text", headers=auth(), json={"query": '积分 OR "*', "limit": 10}
+    )
+    assert literal.status_code == 200, literal.text
+    assert literal.json()["data"] == []
+    filtered = library.post(
+        "/api/v1/search/text",
+        headers=auth(),
+        json={"query": "积分", "filters": {"confidence": 0.8}},
+    )
+    assert {hit["row_id"] for hit in filtered.json()["data"]} == {indexed_id}
+    outside = library.post(
+        "/api/v1/search/text", headers=auth(), json={"query": "积分", "path": "/does-not-match/**"}
+    )
+    assert outside.json()["data"] == []
+
+    english = library.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"title": "plain english phrase", "confidence": 0.5}},
+    )
+    english_hit = library.post(
+        "/api/v1/search/text", headers=auth(), json={"query": "phrase"}
+    ).json()["data"]
+    assert [hit["row_id"] for hit in english_hit] == [english.json()["data"]["_row_id"]]
+    assert english_hit[0]["score_type"] == "sqlite_fts_bm25"
+    assert english_hit[0]["approximate"] is False
+
+
+def test_cjk_index_tracks_patch_delete_restore_and_schema_rebuild(library):
+    tid, rid = seed(library)
+    row_url = f"/api/v1/tables/{tid}/rows/{rid}"
+    before = library.get(row_url, headers=auth())
+    assert before.status_code == 200
+    assert library.post("/api/v1/search/text", headers=auth(), json={"query": "一致收敛"}).json()["data"]
+
+    changed = library.patch(
+        row_url, headers=auth(**{"If-Match": before.headers["ETag"]}), json={"values": {"title": "积分交换"}}
+    )
+    assert changed.status_code == 200, changed.text
+    assert not library.post(
+        "/api/v1/search/text", headers=auth(), json={"query": "一致收敛"}
+    ).json()["data"]
+    assert library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"}).json()["data"]
+
+    deleted = library.delete(row_url, headers=auth(**{"If-Match": changed.headers["ETag"]}))
+    assert deleted.status_code == 200, deleted.text
+    assert not library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"}).json()["data"]
+    with sqlite3.connect(library.app.state.settings.data_dir / "tables" / f"{tid}.xl") as db:
+        assert db.execute("SELECT 1 FROM __xl_fts_cjk WHERE row_id=?", (rid,)).fetchone() is None
+    restored = library.post(
+        row_url + "/restore",
+        headers=auth(**{"If-Match": '"revision:3"'}),
+        json={"revision": 2},
+    )
+    assert restored.status_code == 200, restored.text
+    assert library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"}).json()["data"]
+
+    # Simulate an existing .xl created before this feature; schema migration
+    # installs and rebuilds the additive index in the same transaction.
+    with sqlite3.connect(library.app.state.settings.data_dir / "tables" / f"{tid}.xl") as db:
+        db.execute("DROP TABLE __xl_fts_cjk")
+    schema = library.get(f"/api/v1/tables/{tid}/schema", headers=auth("admin"))
+    rebuilt = library.patch(
+        f"/api/v1/tables/{tid}/schema",
+        headers=auth("admin", **{"If-Match": schema.headers["ETag"]}),
+        json={"columns": [
+            {"name": "title", "type": "string", "nullable": False},
+            {"name": "confidence", "type": "float64"},
+            {"name": "note", "type": "text", "nullable": True},
+        ]},
+    )
+    assert rebuilt.status_code == 200, rebuilt.text
+    assert library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"}).json()["data"]
+
+    # The raw legacy index remains readable by the pre-change literal search
+    # strategy after mutations/rebuild, so code rollback needs no data rollback.
+    with sqlite3.connect(library.app.state.settings.data_dir / "tables" / f"{tid}.xl") as db:
+        legacy_body = db.execute("SELECT body FROM __xl_fts WHERE row_id=?", (rid,)).fetchone()[0]
+        cjk_body = db.execute("SELECT body FROM __xl_fts_cjk WHERE row_id=?", (rid,)).fetchone()[0]
+        legacy_hit = db.execute(
+            "SELECT 1 FROM __xl_fts WHERE __xl_fts MATCH ? AND row_id=?",
+            ('"积分交换"', rid),
+        ).fetchone()
+    assert legacy_body == "积分交换 0.92 None"
+    assert "积 分 交 换" in cjk_body
+    assert legacy_hit is not None  # an old binary can still search the unchanged legacy index
+
+    # Simulate an old binary changing only the source row and legacy index. The
+    # CJK table is stale, but current-source validation prevents a stale match.
+    with sqlite3.connect(library.app.state.settings.data_dir / "tables" / f"{tid}.xl") as db:
+        values = {"title": "回滚后二进制写入", "confidence": 0.92, "note": None}
+        db.execute("UPDATE data SET values_json=?,_revision=_revision+1 WHERE _row_id=?", (json.dumps(values), rid))
+        db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
+        db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, "回滚后二进制写入 0.92 None"))
+    stale = library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"})
+    fresh = library.post("/api/v1/search/text", headers=auth(), json={"query": "回滚"})
+    assert rid not in {hit["row_id"] for hit in stale.json()["data"]}
+    assert rid in {hit["row_id"] for hit in fresh.json()["data"]}
+
+    current = library.get(row_url, headers=auth("admin"))
+    purged = library.delete(
+        row_url + "?purge=true",
+        headers=auth("admin", **{"If-Match": current.headers["ETag"]}),
+    )
+    assert purged.status_code == 200, purged.text
+    with sqlite3.connect(library.app.state.settings.data_dir / "tables" / f"{tid}.xl") as db:
+        assert db.execute("SELECT 1 FROM __xl_fts_cjk WHERE row_id=?", (rid,)).fetchone() is None
+
+
+def test_cjk_search_scans_an_older_table_with_no_additive_index(library, settings):
+    tid, rid = seed(library)
+    with sqlite3.connect(settings.data_dir / "tables" / f"{tid}.xl") as db:
+        db.execute("DROP TABLE __xl_fts_cjk")
+    response = library.post("/api/v1/search/text", headers=auth(), json={"query": "一致收"})
+    assert response.status_code == 200, response.text
+    assert [hit["row_id"] for hit in response.json()["data"]] == [rid]
+    hit = response.json()["data"][0]
+    assert hit["score_type"] == "substring_scan"
+    assert hit["approximate"] is True
+
+
+def test_cjk_index_mutation_failure_rolls_back_row_and_both_indexes(library, settings, monkeypatch):
+    tid, rid = seed(library)
+    row_url = f"/api/v1/tables/{tid}/rows/{rid}"
+    before = library.get(row_url, headers=auth())
+    import xeonolab.library as library_module
+
+    def fail_index(*_args, **_kwargs):
+        raise RuntimeError("injected CJK index failure")
+
+    monkeypatch.setattr(library_module, "index_cjk_row", fail_index)
+    with pytest.raises(RuntimeError, match="injected CJK index failure"):
+        library.patch(
+            row_url,
+            headers=auth(**{"If-Match": before.headers["ETag"]}),
+            json={"values": {"title": "积分交换"}},
+        )
+
+    current = library.get(row_url, headers=auth())
+    assert current.status_code == 200
+    assert current.json()["data"]["values"]["title"] == "一致收敛"
+    with sqlite3.connect(settings.data_dir / "tables" / f"{tid}.xl") as db:
+        legacy = db.execute("SELECT body FROM __xl_fts WHERE row_id=?", (rid,)).fetchone()[0]
+        cjk = db.execute("SELECT body FROM __xl_fts_cjk WHERE row_id=?", (rid,)).fetchone()[0]
+    assert legacy == "一致收敛 0.92"
+    assert "一 致 收 敛" in cjk
 
 
 def test_row_acl_catalogue_connections_are_bounded_per_request(library, settings, monkeypatch):

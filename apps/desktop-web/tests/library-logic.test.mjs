@@ -11,6 +11,7 @@ import {
   flattenTree,
   formatBytes,
   indexStatusFromJobs,
+  isKeywordResult,
   libraryPrefsStorageKey,
   mergeRecent,
   parseFieldFilters,
@@ -122,6 +123,13 @@ test('searchWarnings never hide partial or approximate results', () => {
   const warnings = searchWarnings({partial: true, missing_embeddings: 2341, approximate: true, index_backend: 'sqlite_exact_bootstrap'});
   assert.equal(warnings.length, 4);
   assert.ok(warnings.some(warning => warning.includes('2341')));
+});
+
+test('search result type groups both CJK indexing and legacy substring hits as keywords', () => {
+  assert.equal(isKeywordResult('sqlite_fts_bm25'), true);
+  assert.equal(isKeywordResult('sqlite_fts_cjk'), true);
+  assert.equal(isKeywordResult('substring_scan'), true);
+  assert.equal(isKeywordResult('d100m_cosine'), false);
 });
 
 test('indexStatusFromJobs maps real job states without inventing progress', () => {
