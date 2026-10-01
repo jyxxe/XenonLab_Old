@@ -860,6 +860,64 @@ def test_cjk_search_scans_an_older_table_with_no_additive_index(library, setting
     assert hit["approximate"] is True
 
 
+def test_cjk_indexed_mixed_language_hit_bypasses_single_table_scan_budget(library, monkeypatch):
+    tid = create_empty_table(library, "CJK mixed query in one table")
+    url = f"/api/v1/tables/{tid}/rows"
+    created = [
+        library.post(url, headers=auth(), json={"values": {"body": "placeholder"}})
+        for _ in range(2)
+    ]
+    assert all(result.status_code == 201 for result in created)
+    earlier, target = sorted(created, key=lambda result: result.json()["data"]["_row_id"])
+    unrelated_patch = library.patch(
+        f"{url}/{earlier.json()['data']['_row_id']}",
+        headers=auth(**{"If-Match": earlier.headers["ETag"]}),
+        json={"values": {"body": "unrelated row"}},
+    )
+    target_patch = library.patch(
+        f"{url}/{target.json()['data']['_row_id']}",
+        headers=auth(**{"If-Match": target.headers["ETag"]}),
+        json={"values": {"body": "前缀积分后缀 convergence"}},
+    )
+    assert unrelated_patch.status_code == target_patch.status_code == 200
+
+    monkeypatch.setenv("XELIBRARY_CJK_SCAN_ROWS", "1")
+    result = library.post(
+        "/api/v1/search/text", headers=auth(), json={"query": "积分 convergence"}
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["meta"]["partial"] is True
+    assert [hit["row_id"] for hit in result.json()["data"]] == [target.json()["data"]["_row_id"]]
+    assert result.json()["data"][0]["score_type"] == "sqlite_fts_cjk"
+
+
+def test_cjk_indexed_hit_in_later_table_is_independent_of_scan_budget(library, monkeypatch):
+    first_tid = create_empty_table(library, "CJK lower id table")
+    second_tid = create_empty_table(library, "CJK higher id table")
+    unrelated_tid, target_tid = sorted((first_tid, second_tid))
+    unrelated = library.post(
+        f"/api/v1/tables/{unrelated_tid}/rows",
+        headers=auth(),
+        json={"values": {"body": "unrelated row"}},
+    )
+    target = library.post(
+        f"/api/v1/tables/{target_tid}/rows",
+        headers=auth(),
+        json={"values": {"body": "前缀积分后缀 convergence"}},
+    )
+    assert unrelated.status_code == target.status_code == 201
+
+    monkeypatch.setenv("XELIBRARY_CJK_SCAN_ROWS", "1")
+    result = library.post(
+        "/api/v1/search/text", headers=auth(), json={"query": "积分 convergence"}
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["meta"]["partial"] is True
+    assert [hit["row_id"] for hit in result.json()["data"]] == [target.json()["data"]["_row_id"]]
+    assert result.json()["data"][0]["table_id"] == target_tid
+    assert result.json()["data"][0]["score_type"] == "sqlite_fts_cjk"
+
+
 def test_cjk_index_mutation_failure_rolls_back_row_and_both_indexes(library, settings, monkeypatch):
     tid, rid = seed(library)
     row_url = f"/api/v1/tables/{tid}/rows/{rid}"

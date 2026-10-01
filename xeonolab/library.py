@@ -72,7 +72,9 @@ def cjk_fts_body(values):
 def cjk_fts_query(query):
     clauses = []
     for term in query.split():
-        tokens = cjk_fts_body(term)
+        # The serialized body is already tokenized: CJK characters are
+        # separated, while contiguous Latin text remains one unicode61 token.
+        tokens = cjk_fts_body(term).split()
         if tokens:
             clauses.append('"' + " ".join(token.replace('"', '""') for token in tokens) + '"')
     return " AND ".join(clauses)
@@ -1360,6 +1362,44 @@ def create_app(settings=None):
             remaining = scan_budget
             partial = False
             search_terms = [term.casefold() for term in terms]
+
+            # Query the additive index for every eligible table independently
+            # of the legacy-row scan budget. An indexed hit must not disappear
+            # just because an earlier table exhausted that fallback budget.
+            query = cjk_fts_query(body.query)
+            for table, permits in eligible_tables:
+                with table_connect(table["id"]) as db:
+                    if not cjk_fts_exists(db):
+                        continue
+                    for hit in db.execute(
+                        "SELECT row_id,bm25(__xl_fts_cjk) AS rank FROM __xl_fts_cjk WHERE __xl_fts_cjk MATCH ?",
+                        (query,),
+                    ):
+                        key = (table["id"], hit["row_id"])
+                        if key in results_by_row or not permits("read", hit["row_id"]):
+                            continue
+                        try:
+                            row = load_row(db, hit["row_id"])
+                        except APIError:
+                            continue
+                        if any(row["values"].get(k) != v for k, v in body.filters.items()):
+                            continue
+                        current_text = " ".join(str(v) for v in row["values"].values()).casefold()
+                        if not all(term.casefold() in current_text for term in terms):
+                            # A previous binary may have updated the source
+                            # row while leaving this additive index stale.
+                            continue
+                        results_by_row[key] = {
+                            "table_id": table["id"],
+                            "row_id": hit["row_id"],
+                            "row_revision": row["_revision"],
+                            "path": table["path"],
+                            "score": -hit["rank"],
+                            "score_type": "sqlite_fts_cjk",
+                            "snippet": " ".join(str(v) for v in row["values"].values())[:240],
+                            "approximate": False,
+                        }
+
             for table_index, (table, permits) in enumerate(eligible_tables):
                 if remaining <= 0:
                     # One-row lookahead avoids an unbounded COUNT(*) over
@@ -1374,37 +1414,6 @@ def create_app(settings=None):
                                 break
                     break
                 with table_connect(table["id"]) as db:
-                    # New segmented index hits are hints only; every row still
-                    # passes current ACL, active-row, and structured-filter gates.
-                    if cjk_fts_exists(db):
-                        for hit in db.execute(
-                            "SELECT row_id,bm25(__xl_fts_cjk) AS rank FROM __xl_fts_cjk WHERE __xl_fts_cjk MATCH ?",
-                            (cjk_fts_query(body.query),),
-                        ):
-                            key = (table["id"], hit["row_id"])
-                            if key in results_by_row or not permits("read", hit["row_id"]):
-                                continue
-                            try:
-                                row = load_row(db, hit["row_id"])
-                            except APIError:
-                                continue
-                            if any(row["values"].get(k) != v for k, v in body.filters.items()):
-                                continue
-                            current_text = " ".join(str(v) for v in row["values"].values()).casefold()
-                            if not all(term.casefold() in current_text for term in terms):
-                                # A previous binary may have updated the source
-                                # row while leaving this additive index stale.
-                                continue
-                            results_by_row[key] = {
-                                "table_id": table["id"],
-                                "row_id": hit["row_id"],
-                                "row_revision": row["_revision"],
-                                "path": table["path"],
-                                "score": -hit["rank"],
-                                "score_type": "sqlite_fts_cjk",
-                                "snippet": " ".join(str(v) for v in row["values"].values())[:240],
-                                "approximate": False,
-                            }
                     scan_rows = db.execute(
                         "SELECT * FROM data WHERE _deleted_at IS NULL ORDER BY _row_id LIMIT ?",
                         (remaining + 1,),
