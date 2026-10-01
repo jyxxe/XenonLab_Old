@@ -53,6 +53,9 @@ VM 111 提供 DevAgent 8106，仅 VM 101 代理与本机可访问，防火墙设
 `runtime/deploy-secrets/harness-clients.json`（600），不得共用或提交。ChatGPT Web、Zcode、
 General Agent 的私有说明和各自账号凭据位于 `runtime/agent-profiles/<harness>/Agent.md`，目录权限
 700、文件权限 600；只读取当前 Harness 的文件。这些 OIDC 身份与 Forgejo 本地账户没有自动绑定。
+Keycloak `client_credentials` token 请求应省略 `scope` 参数；`dev:read`、`dev:write` 与
+`desktop:read` 是客户端的默认平台授权，不是可直接请求的 Keycloak scope。额外传入这些值会得到
+`invalid_scope`。Access token 当前有效期约 300 秒，应在过期后重新获取。
 
 经过桌面入口访问以下接口，Authorization Bearer 必须携带对应 OIDC access token：
 
@@ -67,6 +70,15 @@ General Agent 的私有说明和各自账号凭据位于 `runtime/agent-profiles
 领取原子互斥、带 TTL 和递增 epoch；续租仅当前 holder、当前 epoch 且未过期时成功，且不改变
 epoch；过期或被重新认领后 renew/release/complete 一律拒绝，持有者必须停止写入并重新 claim
 （epoch+1），旧 epoch 不再有效。
+
+## 新 Harness 身份与并发认领验收（2026-10-01）
+
+- ChatGPT Web 使用 Forgejo `chatgpt-web` 与 OIDC `chatgpt-web-dev-01`；Zcode 使用 `zcode` 与 `zcode-dev-01`；General Agent 使用 `general-agent` 与 `general-agent-dev-01`。
+- 三个账号都能通过 Forgejo REST 完成身份认证，并且对 `xenon-admin/XeonoLab` 只有仓库写权限、没有站点管理员权限。三个 OIDC 身份均能访问平台 Work API，实际 platform scopes 为 `dev:read`、`dev:write`、`desktop:read`，均无 deploy scope；独立 subject 已验证。
+- 私有 `Agent.md` 指引分别保存在本机 `runtime/agent-profiles/{chatgpt-web,zcode,general-agent}/Agent.md`；目录权限 `700`、文件权限 `600`，由 Git 忽略。文件包含各自 Forgejo 密码和 OIDC client secret，不应复制到仓库、Issue、日志或其他 Harness。
+- 真实 LAN API 并发验收用临时 Forgejo Issue #79：ChatGPT Web 与 Zcode 同时 claim，结果恰为一个 `200`、一个 `409 WORK_CLAIMED`；非持有者 release 得到 `409`；释放后 General Agent 以递增 epoch 领取并完成。临时 Issue 已关闭，Work item 已完成；没有创建 release 或取得部署租约。
+- Issue #73 仍开放：当前 Work claim API 不会自动同步 Forgejo assignee 或写领取评论；该联动与后续验收仍待实现。
+
 Issue 关联以 repository 为命名空间；production 默认仅 xenon-admin/XeonoLab；
 自关联和 duplicate_of 环路被拒绝。元数据持久化到 work.sqlite，独立于 Forgejo facts。
 Forgejo 签名 webhook 已同步 Issue 状态与 work queue；自动评论/标签联动仍待实现。
