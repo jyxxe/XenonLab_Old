@@ -222,3 +222,18 @@ Keycloak dump 可被 pg_restore 读取目录。模型原始权重仍位于操作
 尚未上线：Qwen worker、Library Agent、OpenWebUI 和完整监控。HF-cache API 与预取水位保护代码已部署，
 但物理池 telemetry collector/receiver 尚未完成生产接线；PVE 池映射、VM103 接收、防火墙和真实下载验收仍待完成。
 这些功能不能从当前部署成功推断为已完成。
+
+## Issue #75 Dock release (2026-10-01)
+
+Actual merge commit `01ed6911294f803a12b9f7b85a9649ab8b903739`, release
+`87f3d9b2-43d9-43b1-9aaa-72c3b8436edd`, deployment
+`fd3dee47-4c3b-462e-9a34-48f55efd1b55`: completed; exclusive lease inactive.
+Five VM current links, LAN/IP/public readiness and LAN/public HTML/JS/CSS match
+were verified. Auth config was 200; anonymous tables were 401 with request IDs.
+Root authenticated public Chrome confirmed normal 420ms Dock reveal across the
+90ms step path, retained hover, hide on leave, fast re-entry, keyboard/reduced
+motion and mobile-touch viewport behavior. Original QA preferences/layout were
+restored and verified, then temporary QA user/config/NSS trust were removed.
+Issue #75 closed; details: `docs/acceptance/issue-75-dock-2026-10-01.md`.
+The subsequent #82 changes are CI/test-only; application build assets remain
+identical. No separate application activation is implied by a CI source push.

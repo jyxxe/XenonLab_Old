@@ -1,0 +1,21 @@
+[Unit]
+Description=XeonoLab repository CI runner
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/forgejo-runner/runner-token
+ConditionPathExists=/etc/forgejo-runner/config.yaml
+
+[Service]
+User=forgejo-runner
+Group=forgejo-runner
+WorkingDirectory=/var/lib/forgejo-runner
+EnvironmentFile=/etc/forgejo-runner/environment
+ExecStart=/usr/local/bin/forgejo-runner daemon --config /etc/forgejo-runner/config.yaml
+Restart=on-failure
+RestartSec=10
+UMask=0077
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target
