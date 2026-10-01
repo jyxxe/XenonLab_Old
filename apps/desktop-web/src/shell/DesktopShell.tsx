@@ -69,6 +69,7 @@ export function DesktopShell({
   const [userLabel, setUserLabel] = useState('');
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const loadedRef = useRef(false);
   const [launchpadOpen, setLaunchpadOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -104,9 +105,12 @@ export function DesktopShell({
       setPreferences(prefs);
       setSubject(me.subject || '');
       setUserLabel(me.subject ? String(me.subject).slice(0, 8) : '本地账户');
-      setWindows(prefs.restore_windows === false ? [] : restoreWindows(layout.windows, known, viewport.current));
-      storedWindows.current = Array.isArray(layout.windows) ? layout.windows : [];
-      windowsEdited.current = false;
+      if (!loadedRef.current) {
+        setWindows(prefs.restore_windows === false ? [] : restoreWindows(layout.windows, known, viewport.current));
+        storedWindows.current = Array.isArray(layout.windows) ? layout.windows : [];
+        windowsEdited.current = false;
+        loadedRef.current = true;
+      }
       setReady(true);
     } catch (error) {
       setLoadError(String(error));

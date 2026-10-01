@@ -6,13 +6,29 @@ import './shell/shell.css';
 import './style.css';
 import {login, callback, sessionToken, logout, SessionFailure} from './auth';
 import {initialSessionState, transitionSession, mayUseCachedToken} from './session-state.js';
+import {emptyAccess, accessExpired, classifyFailure, DEFAULT_RETRY_DELAY_MS, failureMessage, rememberAccess, retryAfterDelayMs, shouldRefresh} from './session-policy.js';
 import {ToastProvider} from './design-system/primitives';
 import {DesktopShell} from './shell/DesktopShell';
 import {Knowledge} from './Knowledge';
 import {APIRequestError} from './api-error.js';
 
 type APIPage<T = any> = {data: T; meta: {request_id?: string; next_cursor?: string | null; [key: string]: any}};
+type PendingRequest = {generation:number; replay:()=>Promise<unknown>; resolve:(value:unknown)=>void; reject:(reason:unknown)=>void};
 const libraryView = location.hostname === 'library.xenon.lan';
+
+function isRetryable(error:unknown){
+  if(error instanceof SessionFailure)return error.kind==='temporary';
+  if(error instanceof APIRequestError)return error.status===0||error.status===429||error.status>=500;
+  return false;
+}
+
+function canReplayRequest(path:string,method:string){
+  if(method==='GET')return true;
+  if(method!=='POST')return false;
+  const route=path.split('?')[0];
+  return ['/query','/query/validate','/query/explain','/search/text','/search/hybrid'].includes(route)
+    || /^\/tables\/[^/]+\/query$/.test(route);
+}
 
 function App() {
   const [token, setToken] = useState('');
@@ -20,8 +36,32 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
   const [sessionStatus, setSessionStatus] = useState(initialSessionState);
+  const sessionStatusRef = useRef(initialSessionState);
+  const accessRef = useRef(emptyAccess());
+  const refreshRef = useRef<Promise<{token: string}> | null>(null);
+  const sessionGenerationRef = useRef(0);
+  const pendingRequestsRef = useRef<PendingRequest[]>([]);
+  const retryRunningRef = useRef(false);
+  const retryNotBeforeRef = useRef(0);
+  const retryPendingRef = useRef<()=>void>(()=>{});
+  const [retryNotBefore, setRetryNotBefore] = useState(0);
+  const [retrySignal, setRetrySignal] = useState(0);
+  // Stable identities for the API functions: a token refresh must not recreate them,
+  // otherwise every refresh would re-run the desktop bootstrap and reload windows.
+  const persistentRef = useRef(false);
+  const tokenRef = useRef('');
+  useEffect(() => {
+    persistentRef.current = persistent;
+  }, [persistent]);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
 
-  const transition = (event: {type: string; message?: string}) => setSessionStatus(old => transitionSession(old, event));
+  const transition = (event: {type: string; message?: string}) => {
+    const next=transitionSession(sessionStatusRef.current,event);
+    sessionStatusRef.current=next;
+    setSessionStatus(next);
+  };
 
   useEffect(() => {
     if (!libraryView) return;
@@ -36,139 +76,275 @@ function App() {
 
   useEffect(() => {
     let active = true;
-    callback()
-      .then(async result => result || (await sessionToken()))
-      .then(result => {
-        if (!active) return;
+    const generation=sessionGenerationRef.current;
+    (async () => {
+      try {
+        const loginResult = await callback();
+        const result = loginResult || (await sessionToken());
+        if (!active||generation!==sessionGenerationRef.current) return;
         if (result) {
+          const next = rememberAccess(emptyAccess(), result, Date.now());
+          accessRef.current = next;
+          persistentRef.current = true;
+          tokenRef.current = next.token;
           setPersistent(true);
-          setToken(result.token);
+          setToken(next.token);
           transition({type: 'restored'});
         } else transition({type: 'no-session'});
-      })
-      .catch(e => {
-        if (!active) return;
+      } catch (e) {
+        if (!active||generation!==sessionGenerationRef.current) return;
         const failure = e instanceof SessionFailure ? e : new SessionFailure('temporary', String(e));
         transition({type: failure.kind === 'reauthorize' ? 'reauthorization-required' : 'temporary-failure', message: failure.message});
         setError(failure.message);
-      });
+      }
+    })();
     return () => {
       active = false;
     };
   }, []);
 
   useEffect(() => {
-    if (!persistent && sessionStatus.phase !== 'retrying') return;
-    let busy = false;
-    const renew = async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        const result = await sessionToken();
-        if (result) {
-          setPersistent(true);
-          setToken(result.token);
-          transition({type: 'restored'});
-        } else if (persistent) transition({type: 'reauthorization-required', message: '登录凭据已失效，需要重新授权'});
-        else transition({type: 'no-session'});
-      } catch (e) {
-        const failure = e instanceof SessionFailure ? e : new SessionFailure('temporary', String(e));
-        transition({type: failure.kind === 'reauthorize' ? 'reauthorization-required' : 'temporary-failure', message: failure.message});
-      } finally {
-        busy = false;
-      }
-    };
-    const timer = setInterval(renew, sessionStatus.phase === 'retrying' ? 12000 : 60000);
-    const visible = () => {
-      if (document.visibilityState === 'visible') void renew();
-    };
-    document.addEventListener('visibilitychange', visible);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener('visibilitychange', visible);
-    };
-  }, [persistent, sessionStatus.phase]);
+    if(sessionStatus.phase!=='retrying')return;
+    const remaining=retryNotBefore-Date.now();
+    const delay=remaining>0?Math.min(remaining,2_147_000_000):DEFAULT_RETRY_DELAY_MS;
+    const timer=setTimeout(()=>{
+      if(retryNotBeforeRef.current>Date.now())setRetrySignal(value=>value+1);
+      else retryPendingRef.current();
+    },delay);
+    const visible=()=>{if(document.visibilityState==='visible')retryPendingRef.current()};
+    document.addEventListener('visibilitychange',visible);
+    return()=>{clearTimeout(timer);document.removeEventListener('visibilitychange',visible)};
+  },[sessionStatus.phase,retryNotBefore,retrySignal]);
 
   useEffect(() => {
     if (token && !connected) setConnected(true);
   }, [token]);
 
-  async function accessToken() {
-    if (!persistent) return token ? {token} : null;
-    try {
-      const current = await sessionToken();
-      if (current) {
-        setToken(current.token);
-        return current;
+  /**
+   * Single-flight access-token refresh. Parallel API calls share one refresh so a
+   * burst of requests cannot amplify the identity service load or the rate limiter.
+   */
+  const applyRetryState = useCallback((generation:number,detail:string,retryAfterMs=0) => {
+    if(generation!==sessionGenerationRef.current)return;
+    const now=Date.now();
+    const notBefore=Math.max(retryNotBeforeRef.current,retryAfterMs>0?now+retryAfterMs:0);
+    retryNotBeforeRef.current=notBefore;
+    setRetryNotBefore(notBefore);
+    setRetrySignal(value=>value+1);
+    const waitSeconds=Math.max(0,(notBefore-now)/1000);
+    transition({type:'temporary-failure',message:failureMessage('retry',waitSeconds,detail)});
+  },[]);
+
+  const refreshAccess = useCallback(async (): Promise<{token: string}> => {
+    const generation=sessionGenerationRef.current;
+    if (refreshRef.current) return refreshRef.current;
+    const pending = (async () => {
+      let result: {token: string; expires: number} | null;
+      try {
+        result = await sessionToken();
+      } catch (e) {
+        const failure = e instanceof SessionFailure ? e : new SessionFailure('temporary', String(e));
+        if(generation===sessionGenerationRef.current){
+          if(failure.kind==='reauthorize')transition({type:'reauthorization-required',message:failure.message});
+          else applyRetryState(generation,failure.message,failure.retryAfterMs);
+        }
+        throw failure;
       }
-      const failure = new SessionFailure('reauthorize', '登录凭据已失效，需要重新授权');
-      transition({type: 'reauthorization-required', message: failure.message});
-      throw failure;
+      if(generation!==sessionGenerationRef.current)throw new SessionFailure('temporary','会话已结束');
+      if (!result) {
+        const failure = new SessionFailure('reauthorize', '登录凭据已失效，需要重新授权');
+        transition({type: 'reauthorization-required', message: failure.message});
+        throw failure;
+      }
+      const next = rememberAccess(accessRef.current, result, Date.now());
+      accessRef.current = next;
+      persistentRef.current = true;
+      tokenRef.current = next.token;
+      setPersistent(true);
+      setToken(next.token);
+      return {token: next.token};
+    })();
+    let wrapped:Promise<{token:string}>;
+    wrapped = pending.finally(() => {if(refreshRef.current===wrapped)refreshRef.current=null});
+    refreshRef.current = wrapped;
+    return wrapped;
+  }, [applyRetryState]);
+
+  const accessToken = useCallback(async (): Promise<{token: string} | null> => {
+    const generation=sessionGenerationRef.current;
+    if (!persistentRef.current) return tokenRef.current ? {token: tokenRef.current} : null;
+    const access = accessRef.current;
+    if (!shouldRefresh(access, Date.now())) return {token: access.token};
+    try {
+      const result=await refreshAccess();
+      if(generation!==sessionGenerationRef.current)throw new SessionFailure('temporary','会话已结束');
+      return result;
     } catch (e) {
       const failure = e instanceof SessionFailure ? e : new SessionFailure('temporary', String(e));
-      transition({type: failure.kind === 'reauthorize' ? 'reauthorization-required' : 'temporary-failure', message: failure.message});
-      if (mayUseCachedToken(failure.kind, Boolean(token))) return {token};
+      // A transient refresh failure keeps a still-valid cached token; an expired
+      // token must fail as temporary instead of producing a spurious 401 that
+      // would force the user back to the login page.
+      if (generation===sessionGenerationRef.current&&failure.kind === 'temporary' && mayUseCachedToken(failure.kind, Boolean(access.token)) && !accessExpired(access, Date.now())) {
+        return {token: access.token};
+      }
       throw failure;
     }
-  }
+  }, [refreshAccess]);
 
-  async function apiPage<T = any>(path: string, init: RequestInit = {}): Promise<APIPage<T>> {
-    const current = await accessToken();
-    if (!current) throw Error('需要登录后访问工作空间');
-    const headers = new Headers(init.headers);
-    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
-    headers.set('Authorization', `Bearer ${current.token}`);
-    const response = await fetch(`/api/v1${path}`, {...init, headers});
-    const result = await response.json();
-    if (!response.ok) {
-      if (response.status === 401) transition({type: 'reauthorization-required', message: '工作空间需要重新授权'});
-      throw new APIRequestError(result.error?.message || `HTTP ${response.status}`, response.status, result.error?.code);
+  /**
+   * Only an explicit 401 moves the user to reauthorization. Rate limits and
+   * upstream failures keep the workspace and surface a retryable banner.
+   */
+  const applyFailureState = useCallback((status:number, headers:Headers|undefined, error: {code?: string; message?: string} | undefined,generation:number) => {
+    if(generation!==sessionGenerationRef.current)return;
+    const outcome = classifyFailure(status, error?.code);
+    if (outcome === 'reauthorize') {
+      transition({type: 'reauthorization-required', message: '工作空间需要重新授权'});
+      return;
     }
-    return {data: result.data, meta: result.meta || {}};
-  }
+    if (status===0||status===429||status>=500) {
+      const retryAfter=retryAfterDelayMs(headers?.get('Retry-After'));
+      applyRetryState(generation,error?.message|| (status===0?'网络连接暂时中断':`HTTP ${status}`),retryAfter);
+    }
+  }, [applyRetryState]);
 
-  async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+  const apiPage = useCallback(async <T = any>(path: string, init: RequestInit = {}): Promise<APIPage<T>> => {
+    const generation=sessionGenerationRef.current;
+    const method=(init.method||'GET').toUpperCase();
+    const perform=async():Promise<APIPage<T>>=>{
+      const current = await accessToken();
+      if (!current) throw Error('需要登录后访问工作空间');
+      if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+      const headers = new Headers(init.headers);
+      if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+      headers.set('Authorization', `Bearer ${current.token}`);
+      let response:Response;
+      try{response=await fetch(`/api/v1${path}`, {...init, headers})}
+      catch(cause){
+        const failure=new APIRequestError('网络连接暂时中断，请稍后重试',0,'NETWORK_ERROR');
+        applyFailureState(0,undefined,{message:failure.message},generation);
+        throw failure;
+      }
+      let raw:string;
+      try{raw=await response.text()}
+      catch(cause){
+        const failure=new APIRequestError('网络连接暂时中断，请稍后重试',0,'NETWORK_ERROR');
+        applyFailureState(0,undefined,{message:failure.message},generation);
+        throw failure;
+      }
+      let result:any=null;
+      try{result=raw?JSON.parse(raw):null}catch{}
+      if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
+      if (!response.ok) {
+        applyFailureState(response.status,response.headers,result?.error,generation);
+        throw new APIRequestError(result?.error?.message || `HTTP ${response.status}`, response.status, result?.error?.code);
+      }
+      if(!result||typeof result!=='object'){
+        const failure=new APIRequestError('服务返回了无法读取的数据',502,'INVALID_RESPONSE');
+        applyFailureState(502,response.headers,{message:failure.message,code:failure.code},generation);
+        throw failure;
+      }
+      if(sessionStatusRef.current.phase==='retrying'&&pendingRequestsRef.current.length===0)transition({type:'restored'});
+      return {data: result.data, meta: result.meta || {}};
+    };
+    const defer=()=>new Promise<APIPage<T>>((resolve,reject)=>pendingRequestsRef.current.push({generation,replay:perform as ()=>Promise<unknown>,resolve:resolve as (value:unknown)=>void,reject}));
+    if(generation===sessionGenerationRef.current&&sessionStatusRef.current.phase==='retrying'&&Date.now()<retryNotBeforeRef.current){
+      if(canReplayRequest(path,method))return await defer();
+      throw new APIRequestError('服务要求稍后重试',429,'RETRY_AFTER');
+    }
+    try{return await perform()}
+    catch(cause){
+      if(generation===sessionGenerationRef.current&&canReplayRequest(path,method)&&isRetryable(cause))return await defer();
+      throw cause;
+    }
+  }, [accessToken, applyFailureState]);
+
+  const api = useCallback(async <T = any>(path: string, init: RequestInit = {}): Promise<T> => {
     return (await apiPage<T>(path, init)).data;
-  }
+  }, [apiPage]);
 
-  async function apiRaw(path: string, init: RequestInit = {}): Promise<Response> {
+  const apiRaw = useCallback(async (path: string, init: RequestInit = {}): Promise<Response> => {
+    const generation=sessionGenerationRef.current;
+    if(sessionStatusRef.current.phase==='retrying'&&Date.now()<retryNotBeforeRef.current)throw new APIRequestError('服务要求稍后重试',429,'RETRY_AFTER');
     const current = await accessToken();
     if (!current) throw Error('需要登录后访问工作空间');
     const headers = new Headers(init.headers);
     if (typeof FormData !== 'undefined' && init.body instanceof FormData) headers.delete('Content-Type');
     else if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     headers.set('Authorization', `Bearer ${current.token}`);
-    const response = await fetch(`/api/v1${path}`, {...init, headers});
+    let response:Response;
+    try{response=await fetch(`/api/v1${path}`, {...init, headers})}
+    catch(cause){
+      const failure=new APIRequestError('网络连接暂时中断，请稍后重试',0,'NETWORK_ERROR');
+      applyFailureState(0,undefined,{message:failure.message},generation);
+      throw failure;
+    }
     if (!response.ok) {
-      const result = await response.clone().json().catch(() => null);
-      if (response.status === 401) transition({type: 'reauthorization-required', message: '工作空间需要重新授权'});
+      const raw=await response.clone().text().catch(()=> '');
+      let result:any=null;try{result=raw?JSON.parse(raw):null}catch{}
+      applyFailureState(response.status,response.headers,result?.error,generation);
       throw new APIRequestError(result?.error?.message || result?.detail?.[0]?.msg || `HTTP ${response.status}`, response.status, result?.error?.code);
     }
+    if(generation===sessionGenerationRef.current&&sessionStatusRef.current.phase==='retrying'&&pendingRequestsRef.current.length===0)transition({type:'restored'});
     return response;
-  }
+  }, [accessToken, applyFailureState]);
+
+  const retryPendingRequests=useCallback(async()=>{
+    const now=Date.now();
+    if(retryRunningRef.current||now<retryNotBeforeRef.current)return;
+    retryRunningRef.current=true;
+    if(retryNotBeforeRef.current){retryNotBeforeRef.current=0;setRetryNotBefore(0)}
+    const generation=sessionGenerationRef.current;
+    try{
+      try{await refreshAccess()}catch{return}
+      if(generation!==sessionGenerationRef.current)return;
+      for(const pending of [...pendingRequestsRef.current]){
+        if(pending.generation!==generation){
+          pendingRequestsRef.current=pendingRequestsRef.current.filter(item=>item!==pending);
+          pending.reject(new APIRequestError('会话已结束',0,'SESSION_ENDED'));
+          continue;
+        }
+        try{
+          const result=await pending.replay();
+          if(generation!==sessionGenerationRef.current)return;
+          pendingRequestsRef.current=pendingRequestsRef.current.filter(item=>item!==pending);
+          pending.resolve(result);
+        }catch(cause){
+          if(!isRetryable(cause)){
+            pendingRequestsRef.current=pendingRequestsRef.current.filter(item=>item!==pending);
+            pending.reject(cause);
+          }
+          if(retryNotBeforeRef.current>Date.now()||isRetryable(cause))break;
+        }
+      }
+      if(generation===sessionGenerationRef.current&&pendingRequestsRef.current.length===0){
+        retryNotBeforeRef.current=0;setRetryNotBefore(0);
+        if(sessionStatusRef.current.phase==='retrying')transition({type:'restored'});
+      }
+    }finally{retryRunningRef.current=false}
+  },[refreshAccess]);
+  retryPendingRef.current=()=>{void retryPendingRequests()};
 
   async function handleLogout() {
-    try {
-      if (persistent) await logout();
-    } catch {
-      /* the local session is cleared even when the provider is unreachable */
-    }
+    const wasPersistent=persistentRef.current;
+    sessionGenerationRef.current+=1;
+    persistentRef.current=false;
+    tokenRef.current='';
+    accessRef.current=emptyAccess();
+    refreshRef.current=null;
+    retryNotBeforeRef.current=0;
+    setRetryNotBefore(0);
+    for(const pending of pendingRequestsRef.current)pending.reject(new APIRequestError('会话已结束',0,'SESSION_ENDED'));
+    pendingRequestsRef.current=[];
     setPersistent(false);
     setToken('');
     setConnected(false);
     transition({type: 'user-logout'});
+    try {if(wasPersistent)await logout()}
+    catch {/* the local session is cleared even when the provider is unreachable */}
   }
 
-  // Session renewal and status banners re-render App. Preserve the API boundary
-  // identity so child effects do not reconnect/reset an active workspace.
-  // Requests still use the latest session/auth implementation.
-  const transport = useRef({api, apiPage, apiRaw});
-  transport.current = {api, apiPage, apiRaw};
-  const stableApi = useCallback((path: string, init?: RequestInit) => transport.current.api(path, init), []);
-  const stableApiPage = useCallback((path: string, init?: RequestInit) => transport.current.apiPage(path, init), []);
-  const stableApiRaw = useCallback((path: string, init?: RequestInit) => transport.current.apiRaw(path, init), []);
-
-  if (libraryView) return <Knowledge api={stableApi} apiPage={stableApiPage} apiRaw={stableApiRaw} />;
+  if (libraryView) return <Knowledge api={api} apiPage={apiPage} apiRaw={apiRaw} />;
 
   const sessionBanner =
     connected && (sessionStatus.phase === 'retrying' || sessionStatus.phase === 'reauthorize') ? (
@@ -183,21 +359,8 @@ function App() {
           <button
             type="button"
             data-testid="session-retry"
-            onClick={() =>
-              sessionToken()
-                .then(result => {
-                  if (result) {
-                    setToken(result.token);
-                    transition({type: 'restored'});
-                  }
-                })
-                .catch(e =>
-                  transition({
-                    type: e instanceof SessionFailure && e.kind === 'reauthorize' ? 'reauthorization-required' : 'temporary-failure',
-                    message: String(e),
-                  }),
-                )
-            }
+            disabled={retryNotBefore>Date.now()}
+            onClick={() => retryPendingRef.current()}
           >
             重试
           </button>
@@ -233,23 +396,8 @@ function App() {
               <button
                 type="button"
                 data-testid="session-retry"
-                onClick={() => {
-                  transition({type: 'restore-started'});
-                  sessionToken()
-                    .then(result => {
-                      if (result) {
-                        setPersistent(true);
-                        setToken(result.token);
-                        transition({type: 'restored'});
-                      } else transition({type: 'no-session'});
-                    })
-                    .catch(e =>
-                      transition({
-                        type: e instanceof SessionFailure && e.kind === 'reauthorize' ? 'reauthorization-required' : 'temporary-failure',
-                        message: String(e),
-                      }),
-                    );
-                }}
+                disabled={retryNotBefore>Date.now()}
+                onClick={() => retryPendingRef.current()}
               >
                 重试恢复
               </button>
@@ -288,7 +436,7 @@ function App() {
 
   return (
     <ToastProvider>
-      <DesktopShell api={stableApi} apiPage={stableApiPage} apiRaw={stableApiRaw} token={token} onLogout={handleLogout} />
+      <DesktopShell api={api} apiPage={apiPage} apiRaw={apiRaw} token={token} onLogout={handleLogout} />
       <output hidden data-testid="session-status" data-phase={sessionStatus.phase} />
       {sessionBanner}
     </ToastProvider>

@@ -1,5 +1,6 @@
+import {retryAfterDelayMs} from './session-policy.js';
 type Config = {issuer:string;client_id:string};
-export class SessionFailure extends Error { constructor(public kind:'temporary'|'reauthorize', message:string){super(message);this.name='SessionFailure';} }
+export class SessionFailure extends Error { constructor(public kind:'temporary'|'reauthorize', message:string, public retryAfterMs=0){super(message);this.name='SessionFailure';} }
 const encode=(bytes:Uint8Array)=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 async function config():Promise<Config>{const r=await fetch('/api/v1/auth/config?origin='+encodeURIComponent(location.origin));if(!r.ok)throw Error('身份服务配置不可用');return r.json();}
 async function discovery(c:Config){
@@ -24,11 +25,11 @@ export async function callback():Promise<{token:string;expires:number}|null>{
  if(parameters.has('error'))throw Error('登录未完成');if(!saved)throw Error('登录请求已失效');
  const data=JSON.parse(saved);const age=Date.now()-data.created;if(typeof data.state!=='string'||typeof data.verifier!=='string'||data.verifier.length<43||data.verifier.length>128||data.redirect!==location.origin+'/'||!Number.isFinite(data.created)||age<0||age>600000||parameters.get('state')!==data.state)throw Error('登录状态校验失败');
  let r:Response;try{r=await fetch('/api/v1/auth/session/exchange',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:parameters.get('code'),redirect:data.redirect,verifier:data.verifier})})}catch{throw new SessionFailure('temporary','身份服务暂时不可用，请重试')}
- const result=await r.json().catch(()=>({}));if(!r.ok){if(r.status>=500||r.status===429)throw new SessionFailure('temporary',result.error?.message||'身份服务暂时不可用，请重试');throw new SessionFailure('reauthorize',result.error?.message||'登录令牌交换失败，请重新授权')}return result;
+ const result=await r.json().catch(()=>({}));if(!r.ok){if(r.status>=500||r.status===429)throw new SessionFailure('temporary',result.error?.message||'身份服务暂时不可用，请重试',retryAfterDelayMs(r.headers.get('Retry-After')));throw new SessionFailure('reauthorize',result.error?.message||'登录令牌交换失败，请重新授权')}return result;
 }
 export async function sessionToken():Promise<{token:string;expires:number}|null>{
  let r:Response;try{r=await fetch('/api/v1/auth/session/token',{method:'POST'})}catch{throw new SessionFailure('temporary','登录续期暂不可用，正在重试')}
  const result=await r.json().catch(()=>({}));if(r.status===401){if(result.error?.code==='NO_SESSION')return null;throw new SessionFailure('reauthorize',result.error?.message||'登录已撤销，需要重新授权')}
- if(!r.ok)throw new SessionFailure('temporary',result.error?.message||'登录续期暂不可用，正在重试');return result;
+ if(!r.ok)throw new SessionFailure('temporary',result.error?.message||'登录续期暂不可用，正在重试',retryAfterDelayMs(r.headers.get('Retry-After')));return result;
 }
 export async function logout(){const r=await fetch('/api/v1/auth/session/logout',{method:'POST'});if(!r.ok)throw Error('退出失败，请重试');}
