@@ -3,7 +3,8 @@
 import subprocess
 from pathlib import Path
 
-from xeonolab.deployment_staging import stage_qdrant_runtime_config
+from xeonolab.deploy_secrets import validate_forgejo_claim_inputs
+from xeonolab.deployment_staging import stage_dev_agent_claim_config, stage_qdrant_runtime_config
 
 
 def command(*args):
@@ -13,6 +14,9 @@ def command(*args):
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 if subprocess.check_output(["git", "status", "--porcelain"], text=True).strip():
     raise SystemExit("Commit tracked changes before staging")
+claim_token = Path("runtime/deploy-secrets/forgejo-claim-token")
+agent_users = Path("runtime/deploy-secrets/forgejo-agent-users.json")
+validate_forgejo_claim_inputs(claim_token, agent_users)
 key = str(Path.home() / ".ssh/xenon_v2_ed25519")
 command("git", "archive", "--format=tar", "HEAD", "-o", "runtime/xeonolab-release.tar")
 command("tar", "-rf", "runtime/xeonolab-release.tar", "apps/desktop-web/dist")
@@ -56,6 +60,14 @@ for node in (107, 104, 101, 111, 106):
             identity=key,
             environment=Path("runtime/deploy-secrets/104/xelibrary.env"),
             api_key=Path("runtime/deploy-secrets/104/qdrant-api-key"),
+        )
+    if node == 111:
+        stage_dev_agent_claim_config(
+            host=host,
+            identity=key,
+            environment=Path("runtime/deploy-secrets/111/dev-agent.env"),
+            token=claim_token,
+            users=agent_users,
         )
 oidc_payload.unlink(missing_ok=True)
 command("scp", "-i", key, "runtime/deploy-secrets/executor.json", "xenon@192.168.0.106:/tmp/executor.json")

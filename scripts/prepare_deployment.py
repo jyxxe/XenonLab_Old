@@ -6,10 +6,19 @@ import os
 import subprocess
 from pathlib import Path
 
-from xeonolab.deploy_secrets import copy_qdrant_api_key
+from xeonolab.deploy_secrets import (
+    copy_forgejo_claim_inputs,
+    copy_qdrant_api_key,
+    validate_forgejo_claim_inputs,
+)
 from xeonolab.role_scopes import OIDC_ROLE_SCOPES
 
 root = Path("runtime/deploy-secrets")
+forgejo_claim_token = root / "forgejo-claim-token"
+forgejo_agent_users = root / "forgejo-agent-users.json"
+# Validate before generating any payload, so a release cannot be staged with a
+# DevAgent that accepts claims but cannot synchronize Forgejo assignment/comment.
+validate_forgejo_claim_inputs(forgejo_claim_token, forgejo_agent_users)
 credentials = json.loads((root / "credentials.json").read_text())
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 public = (root / "deploy-key.pub").read_text().strip()
@@ -91,7 +100,15 @@ for node, entries in services.items():
                 "FORGEJO_WEBHOOK_SECRET_FILE=/etc/xeonolab/forgejo-webhook-secret",
                 "FORGEJO_URL=https://192.168.0.101:9445",
                 "FORGEJO_CA_FILE=/etc/xeonolab/lan-root-ca.crt",
+                "FORGEJO_CLAIM_TOKEN_FILE=/etc/xeonolab/forgejo-claim-token",
+                "FORGEJO_AGENT_USERS_FILE=/etc/xeonolab/forgejo-agent-users.json",
             ]
+            copy_forgejo_claim_inputs(
+                forgejo_claim_token,
+                forgejo_agent_users,
+                dest / "forgejo-claim-token",
+                dest / "forgejo-agent-users.json",
+            )
         if service == "tool-gateway":
             lines += ["XELIBRARY_URL=http://192.168.0.104:8100"]
         if service == "deploy-gateway":

@@ -77,13 +77,14 @@ def sync_forgejo_claim(item, actor, settings):
     if not token or not isinstance(username, str) or not username:
         raise APIError(503, "FORGEJO_CLAIM_NOT_CONFIGURED", "Issue claim synchronization is unavailable")
 
-    context = ssl.create_default_context()
-    if os.getenv("FORGEJO_CA_FILE"):
-        context.load_verify_locations(Path(os.environ["FORGEJO_CA_FILE"]))
     root = endpoint.rstrip("/") + "/api/v1/repos/" + item["repository"] + "/issues/" + str(item["issue_id"])
     headers = {"Authorization": "token " + token}
-    client = httpx.Client(verify=context, trust_env=False, timeout=10)
+    client = None
     try:
+        context = ssl.create_default_context()
+        if os.getenv("FORGEJO_CA_FILE"):
+            context.load_verify_locations(Path(os.environ["FORGEJO_CA_FILE"]))
+        client = httpx.Client(verify=context, trust_env=False, timeout=10)
         issue_response = client.get(root, headers=headers)
         issue_response.raise_for_status()
         issue = issue_response.json()
@@ -102,18 +103,22 @@ def sync_forgejo_claim(item, actor, settings):
         comment.raise_for_status()
     except APIError:
         raise
-    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+    except Exception:
         # If comment creation fails after assignment, best-effort restore the exact
         # prior assignee set. Never include remote response bodies or credentials in
         # the public error.
         try:
-            if "old_assignees" in locals() and username not in old_assignees:
+            if client is not None and "old_assignees" in locals() and username not in old_assignees:
                 client.patch(root, headers=headers, json={"assignees": old_assignees}).raise_for_status()
-        except httpx.HTTPError:
+        except Exception:
             pass
         raise APIError(503, "FORGEJO_CLAIM_SYNC_FAILED", "Issue claim could not be synchronized") from None
     finally:
-        client.close()
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def install(app):
@@ -320,7 +325,18 @@ def install(app):
             request, rows[:limit], next_cursor=rows[limit - 1]["id"] if len(rows) > limit else None
         )
 
-    @app.post("/api/v1/work/{work_id}/claim")
+    @app.post(
+        "/api/v1/work/{work_id}/claim",
+        responses={
+            409: {"description": "Work is already claimed/completed, source is blocked, or Forgejo Issue is closed."},
+            503: {"description": "Forgejo claim synchronization is not configured or failed; local claim is rolled back."},
+        },
+        description=(
+            "Atomically claims a Work item, then assigns the mapped Forgejo account and posts an Issue comment "
+            "containing the claim epoch. Existing assignees are preserved. If synchronization fails, the service "
+            "attempts to restore assignees and rolls back the matching local claim."
+        ),
+    )
     def claim(work_id: str, body: Claim, request: Request, actor=Depends(scope("dev:write"))):
         with transaction(database) as db:
             item = load(db, work_id)

@@ -77,7 +77,7 @@ epoch；过期或被重新认领后 renew/release/complete 一律拒绝，持有
 - 三个账号都能通过 Forgejo REST 完成身份认证，并且对 `xenon-admin/XeonoLab` 只有仓库写权限、没有站点管理员权限。三个 OIDC 身份均能访问平台 Work API，实际 platform scopes 为 `dev:read`、`dev:write`、`desktop:read`，均无 deploy scope；独立 subject 已验证。
 - 私有 `Agent.md` 指引分别保存在本机 `runtime/agent-profiles/{chatgpt-web,zcode,general-agent}/Agent.md`；目录权限 `700`、文件权限 `600`，由 Git 忽略。文件包含各自 Forgejo 密码和 OIDC client secret，不应复制到仓库、Issue、日志或其他 Harness。
 - 真实 LAN API 并发验收用临时 Forgejo Issue #79：ChatGPT Web 与 Zcode 同时 claim，结果恰为一个 `200`、一个 `409 WORK_CLAIMED`；非持有者 release 得到 `409`；释放后 General Agent 以递增 epoch 领取并完成。临时 Issue 已关闭，Work item 已完成；没有创建 release 或取得部署租约。
-- Issue #73 仍开放：Work claim 现实现同步 Forgejo assignee 与带 epoch 的领取评论；配置由 DevAgent 的 `FORGEJO_CLAIM_TOKEN_FILE`（独立 Forgejo 服务账号 token）和 `FORGEJO_AGENT_USERS_FILE`（OIDC subject 到 Forgejo username 的 JSON 映射）提供。生产配置尚未安装或验证，缺配置时生产 API 会拒绝 claim 并回滚本地租约。评论创建失败会尽力恢复原 assignee；由于 Forgejo 与 Work SQLite 不支持跨服务事务，远端部分失败仍需监控并人工核对。
+- Issue #73 仍开放：Work claim 现实现同步 Forgejo assignee 与带 epoch 的领取评论；配置由 DevAgent 的 `FORGEJO_CLAIM_TOKEN_FILE`（独立 Forgejo 服务账号 token）和 `FORGEJO_AGENT_USERS_FILE`（OIDC subject 到 Forgejo username 的 JSON 映射）提供。发布预检要求本地 `runtime/deploy-secrets/forgejo-claim-token` 与 `forgejo-agent-users.json` 为 owner-only 普通文件，并验证映射格式；VM 111 收到的 token、映射及 `dev-agent.env` 均安装为 `root:xeonolab`、`0640`。生产激活前仍需核验实际映射和 Forgejo API 权限；缺配置时生产 API 会拒绝 claim 并回滚本地租约。评论创建失败会尽力恢复原 assignee；由于 Forgejo 与 Work SQLite 不支持跨服务事务，远端部分失败仍需监控并人工核对。
 
 Issue 关联以 repository 为命名空间；production 默认仅 xenon-admin/XeonoLab；
 自关联和 duplicate_of 环路被拒绝。元数据持久化到 work.sqlite，独立于 Forgejo facts。

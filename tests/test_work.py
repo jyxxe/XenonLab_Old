@@ -38,6 +38,14 @@ def test_claim_fencing_persistence_and_permissions(settings):
     assert restarted.post(path + "/release", headers=auth(owner), json={"epoch": epoch}).status_code == 409
 
 
+def test_claim_openapi_documents_forgejo_sync_side_effects_and_failures(settings):
+    contract = create_app("dev-agent", settings).openapi()["paths"]["/api/v1/work/{work_id}/claim"]["post"]
+
+    assert "assigns the mapped Forgejo account" in contract["description"]
+    assert "409" in contract["responses"]
+    assert "503" in contract["responses"]
+
+
 def test_claim_synchronizes_forgejo_assignee_and_comment(settings, monkeypatch, tmp_path):
     import json
 
@@ -160,6 +168,47 @@ def test_claim_sync_failure_releases_claim_and_restores_assignees(settings, monk
         {"assignees": ["triage", "general-agent"]},
         {"assignees": ["triage"]},
     ]
+
+
+def test_claim_setup_failures_are_safe_api_errors_and_release_claim(settings, monkeypatch, tmp_path):
+    import json
+
+    from xeonolab import work
+
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    token_file = tmp_path / "forgejo-token"
+    token_file.write_text("test-token")
+    users_file = tmp_path / "forgejo-users.json"
+    users_file.write_text(json.dumps({"alice": "general-agent"}))
+    monkeypatch.setenv("FORGEJO_URL", "https://forgejo.example")
+    monkeypatch.setenv("FORGEJO_CLAIM_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("FORGEJO_AGENT_USERS_FILE", str(users_file))
+
+    for index, failure in enumerate(("missing-ca", "invalid-ca", "client-constructor"), start=73):
+        api = TestClient(create_app("dev-agent", settings))
+        item = api.post(
+            "/api/v1/work", headers=auth(),
+            json={"repository": "xenon-admin/XeonoLab", "issue_id": index, "title": "Harness claims"},
+        ).json()["data"]
+        if failure == "missing-ca":
+            monkeypatch.setenv("FORGEJO_CA_FILE", str(tmp_path / "missing-ca.pem"))
+        elif failure == "invalid-ca":
+            bad_ca = tmp_path / "invalid-ca.pem"
+            bad_ca.write_text("not a certificate")
+            monkeypatch.setenv("FORGEJO_CA_FILE", str(bad_ca))
+        else:
+            monkeypatch.delenv("FORGEJO_CA_FILE", raising=False)
+            monkeypatch.setattr(
+                work.httpx, "Client", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("setup failure"))
+            )
+
+        result = api.post(f"/api/v1/work/{item['id']}/claim", headers=auth("alice"), json={})
+        assert result.status_code == 503
+        assert "test-token" not in result.text
+        current = next(
+            row for row in api.get("/api/v1/work", headers=auth()).json()["data"] if row["id"] == item["id"]
+        )
+        assert current["status"] == "queued" and current["holder"] is None and current["epoch"] == 2
 
 
 def test_expired_claim_cannot_complete_reassigned_task(settings, monkeypatch):
