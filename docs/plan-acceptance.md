@@ -7,10 +7,10 @@
 | § | 章节 | 状态 | 源码/记录证据及实际缺口 |
 |---:|---|---|---|
 | 0 | 项目摘要 | 整体未达 V1 | 现有服务覆盖桌面、XeLibrary、D100M、网关、DevAgent 与 Deploy；《实施状态》声明 V1 未完成。 |
-| 1 | 固定硬件条件 | 外部实测待证 | 盘点与部署记录涉及 PVE，但仓库无当前硬件实测清单可证全项一致。 |
-| 2 | VM 规划 | 外部实测待证 | `infra/pve/desired-vms.json` 与部署记录覆盖部分 VM；不是计划中的完整 VM 拓扑。 |
-| 3 | SSD 与 HDD 布局 | 外部实测待证 | XeLibrary 备份/恢复脚本和 PVE 文档存在；盘/池水位与全部磁盘布局未自动验收。 |
-| 4 | 逻辑网络分区 | 外部实测待证 | 有 Network Server 防火墙配置与区间部署记录；计划四区隔离仍未逐条证明。 |
+| 1 | 固定硬件条件 | 部分实测 / 关键型号待核 | [PVE 盘点](runbooks/pve-inventory.md)记录 36 CPU 线程和约 126 GiB 可见 RAM；CPU 型号、物理磁盘型号/容量、SSD/HDD 健康与完整宿主余量尚未逐项实测，不能据此认定与本节固定硬件完全一致。 |
+| 2 | VM 规划 | 实测与目标有差异 | PVE 盘点确认 VM 100–111 共 12 台运行，其中单独的 `auth` VM 不在计划 11 台内；VM RAM 总量约 116 GiB，计划值为 114 GiB，多个系统盘也与 `infra/pve/desired-vms.json` 不同。目标 vCPU、数据盘映射和 auth 是否合并尚未全部对齐。 |
+| 3 | SSD 与 HDD 布局 | 部分实测 / 水位和恢复待验 | PVE 盘点确认 `zfs-mirror-18t` 与 `aux-10t` 在线，HF-cache 与 fnOS 的逻辑卷共享 `aux-10t`，VM 103 的 HF-cache 卷挂载于 `/srv/hf-cache`。完整物理盘容量/健康、SSD 热数据布局、ARC/池级保护、备份健康和隔离恢复尚未全部验证；共享池可用空间不能按两个卷相加。 |
+| 4 | 逻辑网络分区 | 部分实现 / 分区验收待做 | `infra/network/backend-firewall.py`、Network Server 配置和部署记录存在，但仍缺 Management/Application/Development/NAS 四区的逐源/目的路径验证、规则与实际网卡/VLAN 对照，以及阻断路径实测。 |
 | 5 | 逻辑组件关系 | 部分实现 / 未做生产验收 | 代码有 FastAPI 服务调用边界、Tool Gateway 与 Deploy Gateway；多项计划服务仍是 skeleton。 |
 | 6 | 推荐代码仓库结构 | 部分实现 / 未做生产验收 | 当前 Python package、React app、infra、docs、tests 可见；计划 package/service 布局未全部拆分。 |
 | 7 | 初始技术栈 | 部分实现 / 未做生产验收 | FastAPI/React/SQLite/OIDC 与生产 Qdrant 已使用；PostgreSQL 与通用异步队列等计划栈尚缺。 |
