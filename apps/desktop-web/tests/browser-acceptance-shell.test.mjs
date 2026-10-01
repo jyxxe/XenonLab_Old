@@ -368,29 +368,39 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
       const dock = document.querySelector('nav.dock');
       const style = getComputedStyle(dock);
       const rect = dock.getBoundingClientRect();
-      return {opacity: style.opacity, pointerEvents: style.pointerEvents, duration: style.transitionDuration, x: rect.x, y: rect.y, width: rect.width, height: rect.height};
+      return {opacity: style.opacity, pointerEvents: style.pointerEvents, hovered: dock.matches(':hover'), duration: style.transitionDuration, reducedMotion: document.documentElement.dataset.reducedMotion === 'true', x: rect.x, y: rect.y, width: rect.width, height: rect.height};
     })()`);
     const assertDockVisible = async label => {
       await waitFor(async () => {
         const state = await dockState();
-        return Number(state.opacity) > 0.98 && state.pointerEvents === 'auto';
+        return Number(state.opacity) > 0.98 && state.pointerEvents === 'auto' && state.hovered;
       }, label);
+    };
+    const dockPointerTrace = [];
+    const recordDockPointer = async (point, dwellMs) => {
+      dockPointerTrace.push({point, requestedDwellMs: dwellMs, observedAt: new Date().toISOString(), ...(await dockState())});
     };
     assert.match((await dockState()).duration, /0s/, 'reduced-motion preference removes Dock transition');
     await movePointer(720, 500);
     await waitFor(async () => (await dockState()).opacity === '0', 'auto-hidden dock starts closed');
     await movePointer(720, 905);
     await sleep(90);
+    await recordDockPointer('slow path y=905 (edge)', 90);
     await movePointer(720, 899);
     await sleep(90);
+    await recordDockPointer('slow path y=899', 90);
     await movePointer(720, 889);
     await sleep(90);
+    await recordDockPointer('slow path y=889', 90);
     await movePointer(720, 873);
     await sleep(90);
+    await recordDockPointer('slow path y=873', 90);
     await movePointer(720, 860);
     await assertDockVisible('slow bottom-edge-to-Dock pointer path remains open with reduced motion');
+    await recordDockPointer('slow path y=860 (Dock center)', 90);
     await movePointer(720, 600);
     await waitFor(async () => (await dockState()).opacity === '0', 'Dock hides again after pointer leaves');
+    await recordDockPointer('slow path leave y=600 (hidden)', 520);
 
     const firstDockButton = await cdp.evaluate("document.querySelector('nav.dock .dock-item').focus(); getComputedStyle(document.querySelector('nav.dock')).opacity");
     assert.equal(firstDockButton, '1', 'keyboard focus reveals the auto-hidden Dock');
@@ -405,8 +415,16 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await movePointer(720, 905);
     await movePointer(720, 860);
     await assertDockVisible('fast edge-to-center pointer entry reveals Dock');
+    await recordDockPointer('fast path y=860 (Dock center)', 0);
     await movePointer(720, 600);
     await waitFor(async () => (await dockState()).opacity === '0', 'fast-entry Dock returns to auto-hidden state');
+    await recordDockPointer('fast path leave y=600 (hidden)', 520);
+    const verificationRoot = path.resolve(appRoot, '..', '..', 'runtime', 'verification', 'issue-75');
+    await fs.mkdir(verificationRoot, {recursive: true});
+    await fs.writeFile(
+      path.join(verificationRoot, 'dock-hover-path.json'),
+      `${JSON.stringify({browser: 'Chrome/Chromium via CDP', viewport: '1440x913', trace: dockPointerTrace}, null, 2)}\n`,
+    );
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"减少动态效果\"]').click()");
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='true'"), 'reduced motion preference restored');
     await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 900, deviceScaleFactor: 1, mobile: false});
