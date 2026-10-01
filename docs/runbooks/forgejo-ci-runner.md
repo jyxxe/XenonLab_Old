@@ -58,12 +58,17 @@ The temporary OpenCode hosts pin was removed. Keep DNS backups outside dnsmasq's
 configuration include directory, which can load files without a .conf extension.
 
 Job containers need the project's public LAN CA to fetch the repository.
-The reviewed runner configuration mounts only `/etc/forgejo-runner/ca-bundle.crt`
-read-only at the same container path and sets SSL_CERT_FILE, GIT_SSL_CAINFO and
-NODE_EXTRA_CA_CERTS. Arbitrary workflow host volumes remain denied; credentials
-and runtime sockets are not mounted. See the nonsecret runner configuration
-example. DNS/CA repair and starting the daemon do not prove CI passed: inspect
-the exact-head jobs before merging.
+Build `infra/forgejo/Containerfile` as the rootless runner user, using a context
+that contains only that file and the public CA bundle named `ca-bundle.crt`.
+Use `--network=none --pull=never` against the verified cached base, inspect the
+resulting image ID and substitute it for `LOCAL_BUILT_IMAGE_ID` in the example.
+The installed image ID is recorded in `/etc/forgejo-runner/image-id`.
+The public CA is baked into the image: `valid_volumes: []` remains enforced and
+no host path or runtime socket is mounted into a job. The earlier configured
+read-only CA mount did not reach actual jobs and checkout failed; do not rely on
+that configuration. A standalone image check confirmed the CA is readable and
+Node reports v24.21.0. This still does not prove CI passed: inspect exact-head
+workflow jobs before merging.
 
 ## Operational acceptance
 

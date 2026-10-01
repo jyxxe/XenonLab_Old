@@ -1,0 +1,3 @@
+FROM docker.io/library/node@sha256:64af3819f9275802414d7cdc38c27e9d82bd564dec4d4da87d008255d36c63b4
+COPY ca-bundle.crt /etc/forgejo-runner/ca-bundle.crt
+ENV SSL_CERT_FILE=/etc/forgejo-runner/ca-bundle.crt GIT_SSL_CAINFO=/etc/forgejo-runner/ca-bundle.crt NODE_EXTRA_CA_CERTS=/etc/forgejo-runner/ca-bundle.crt
