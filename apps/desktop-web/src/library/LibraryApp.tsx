@@ -36,7 +36,7 @@ export function LibraryApp({
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
   const search = useSearch(apiPage);
-  const query = useQueryConsole(apiPage);
+  const query = useQueryConsole(apiPage, subject);
   const theorems = useTheorems(apiPage);
   const prefs = useLibraryPrefs(subject);
 
@@ -445,7 +445,14 @@ export function LibraryApp({
             running={query.running}
             validating={query.validating}
             duration={query.duration}
-            onRun={text => void query.run(text)}
+            recent={query.recent}
+            draftStatus={query.draftStatus}
+            draftMessage={query.draftMessage}
+            onLoadRecent={query.loadRecent}
+            onDeleteRecent={query.deleteRecent}
+            onClearRecent={query.clearRecent}
+            onRetryStorage={query.retryStorage}
+            onRun={(text, remember) => void query.run(text, remember)}
             onValidate={text => void query.validate(text)}
             onOpenRow={(tableId, rowId) => void openRow(tableId, rowId)}
             tableName={tableName}

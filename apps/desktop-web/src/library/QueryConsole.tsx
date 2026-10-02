@@ -1,6 +1,7 @@
 import React, {useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Skeleton, Textarea} from '../design-system/primitives';
 import {describeError, formatNumber, withQueryPagination} from './logic.js';
+import {QUERY_EXPRESSION_LIMIT, queryExpressionLength} from './query-drafts.js';
 import type {QueryExplain} from './types';
 
 const KNOWN_UNSUPPORTED = [
@@ -21,9 +22,16 @@ export function QueryConsole({
   running,
   validating,
   duration,
+  recent,
+  draftStatus,
+  draftMessage,
   onRun,
   onValidate,
   onOpenRow,
+  onLoadRecent,
+  onDeleteRecent,
+  onClearRecent,
+  onRetryStorage,
   tableName,
 }: {
   expression: string;
@@ -35,9 +43,16 @@ export function QueryConsole({
   running: boolean;
   validating: boolean;
   duration: number | null;
-  onRun: (expression: string) => void;
+  recent: Array<{expression: string; updated_at: string}>;
+  draftStatus: string;
+  draftMessage: string;
+  onRun: (expression: string, remember?: boolean) => void;
   onValidate: (expression: string) => Promise<boolean> | void;
   onOpenRow: (tableId: string, rowId: string) => void;
+  onLoadRecent: (item: {expression: string}) => void;
+  onDeleteRecent: (expression: string) => void;
+  onClearRecent: () => void;
+  onRetryStorage: () => void;
   tableName: (tableId: string) => string;
 }) {
   const [showUnsupported, setShowUnsupported] = useState(false);
@@ -67,6 +82,25 @@ export function QueryConsole({
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') onRun(expression);
         }}
       />
+
+      <div className="library-query-history" aria-label="查询草稿与历史">
+        <p>当前表达式 {queryExpressionLength(expression)} / {QUERY_EXPRESSION_LIMIT} 个字符。草稿按已验证账号保存在本机；校验通过后加入最近查询，最多保留 20 条并按表达式去重。载入只恢复表达式，不会执行查询。</p>
+        {draftStatus === 'unverified' && <p role="status">正在确认当前账号；确认前不会读取或保存查询记录。</p>}
+        {draftStatus === 'loading' && <p role="status">正在读取当前账号的查询草稿…</p>}
+        {draftStatus === 'read-error' || draftStatus === 'write-error' ? <div role="alert"><span>{draftMessage}</span> <Button size="sm" onClick={onRetryStorage}>重试本地存储</Button></div> : draftMessage && <p role="status">{draftMessage}</p>}
+        <details>
+          <summary>最近查询（{recent.length} / 20）</summary>
+          {recent.length ? <>
+            <ol>{recent.map(item => <li key={item.expression}>
+              <code title={item.expression}>{item.expression.length > 180 ? `${item.expression.slice(0, 180)}…` : item.expression}</code>
+              <time>{item.updated_at ? new Date(item.updated_at).toLocaleString() : ''}</time>
+              <Button size="sm" onClick={() => onLoadRecent(item)}>载入草稿</Button>
+              <Button size="sm" variant="ghost" aria-label="删除这条最近查询" onClick={() => onDeleteRecent(item.expression)}>删除</Button>
+            </li>)}</ol>
+            <Button size="sm" variant="ghost" onClick={onClearRecent}>清空最近查询</Button>
+          </> : <p>没有最近查询。</p>}
+        </details>
+      </div>
 
       <div className="library-query-toolbar">
         <Button variant="primary" onClick={() => onRun(expression)} disabled={running}>{running ? '执行中…' : '运行'}</Button>
@@ -136,14 +170,14 @@ export function QueryConsole({
             </table>
           </div>
           <div className="library-query-pagination">
-            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); setOffset(next); onRun(pageQuery(next)); }}>
+            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); setOffset(next); onRun(pageQuery(next), false); }}>
               上一页
             </Button>
             <span className="muted">OFFSET {offset}</span>
             <Button
               size="sm"
               disabled={rows.length < (plan?.limit ?? 100) || running}
-              onClick={() => { const next = offset + (plan?.limit ?? 100); setOffset(next); onRun(pageQuery(next)); }}
+              onClick={() => { const next = offset + (plan?.limit ?? 100); setOffset(next); onRun(pageQuery(next), false); }}
             >
               下一页
             </Button>

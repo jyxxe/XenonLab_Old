@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage} from '../shell/types';
 import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, toggleFavorite} from './logic.js';
+import {addQueryRecent, QUERY_EXPRESSION_LIMIT, queryDraftsStorageKey, readQueryDrafts, writeQueryDrafts} from './query-drafts.js';
 import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
 export const SEARCH_LIMIT = 25;
@@ -305,8 +306,14 @@ export function useSearch(apiPage: APIPage) {
   return {mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, hits, meta, error, running, ran, run, reset};
 }
 
-export function useQueryConsole(apiPage: APIPage) {
-  const [expression, setExpressionState] = useState(DEFAULT_QUERY);
+export function useQueryConsole(apiPage: APIPage, subject: string | null) {
+  const [draftState, setDraftState] = useState({owner: null as string | null, expression: DEFAULT_QUERY, recent: [] as Array<{expression: string; updated_at: string}>, status: 'unverified', message: ''});
+  const ownerKey = queryDraftsStorageKey(subject);
+  const currentDraftState = draftState.owner === subject ? draftState : null;
+  const expression = currentDraftState?.expression ?? DEFAULT_QUERY;
+  const recent = currentDraftState?.recent ?? [];
+  const draftStatus = currentDraftState?.status ?? (ownerKey ? 'loading' : 'unverified');
+  const draftMessage = currentDraftState?.message ?? '';
   const [rows, setRows] = useState<any[]>([]);
   const [meta, setMeta] = useState<Record<string, any>>({});
   const [plan, setPlan] = useState<QueryExplain | null>(null);
@@ -317,10 +324,52 @@ export function useQueryConsole(apiPage: APIPage) {
   const generation = useRef(0);
   const validationGeneration = useRef(0);
 
+  useEffect(() => {
+    if (!ownerKey || !subject) {
+      setDraftState({owner: null, expression: DEFAULT_QUERY, recent: [], status: 'unverified', message: ''});
+      return;
+    }
+    let result;
+    try {
+      result = readQueryDrafts(window.localStorage, subject);
+    } catch (cause) {
+      result = {draft: null, recent: [], error: cause, ready: false};
+    }
+    const failed = !result.ready;
+    setDraftState({
+      owner: subject,
+      expression: result.draft?.expression ?? DEFAULT_QUERY,
+      recent: result.recent,
+      status: failed ? 'read-error' : 'ready',
+      message: failed ? '本地查询记录无法读取；当前编辑只保存在本页内存中。可重试读取。' : '',
+    });
+  }, [ownerKey, subject]);
+
+  const persistDraftState = useCallback((next: typeof draftState) => {
+    if (!subject || next.owner !== subject || next.status !== 'ready') return next;
+    let result;
+    try {
+      result = writeQueryDrafts(window.localStorage, subject, {expression: next.expression, updated_at: new Date().toISOString()}, next.recent);
+    } catch (error) {
+      result = {error};
+    }
+    return result.error
+      ? {...next, status: 'write-error', message: '本地查询记录无法保存；修改仍保留在当前页面。可重试保存。'}
+      : next;
+  }, [subject]);
+
   const setExpression = useCallback((value: string) => {
+    if (Array.from(value).length > QUERY_EXPRESSION_LIMIT) {
+      setDraftState(current => current.owner === subject ? {...current, message: `表达式最多 ${QUERY_EXPRESSION_LIMIT} 个 Unicode 字符；超出部分未接受。`} : current);
+      return;
+    }
     ++generation.current;
     ++validationGeneration.current;
-    setExpressionState(value);
+    setDraftState(current => {
+      const base = current.owner === subject ? current : {owner: subject, expression, recent: [], status: ownerKey ? 'loading' : 'unverified', message: ''};
+      const next = {...base, expression: value, message: base.status === 'ready' ? '' : base.message};
+      return ownerKey ? persistDraftState(next) : next;
+    });
     setRows([]);
     setMeta({});
     setPlan(null);
@@ -328,7 +377,7 @@ export function useQueryConsole(apiPage: APIPage) {
     setRunning(false);
     setValidating(false);
     setDuration(null);
-  }, []);
+  }, [expression, ownerKey, persistDraftState, subject]);
 
   const validate = useCallback(
     async (text: string) => {
@@ -353,13 +402,20 @@ export function useQueryConsole(apiPage: APIPage) {
   );
 
   const run = useCallback(
-    async (text: string) => {
+    async (text: string, remember = true) => {
       const request = ++generation.current;
       setRunning(true);
       setError(null);
       const started = performance.now();
       try {
         if (!(await validate(text)) || request !== generation.current) return;
+        if (remember && ownerKey && Array.from(text).length <= QUERY_EXPRESSION_LIMIT) {
+          setDraftState(current => {
+            const base = current.owner === subject ? current : {owner: subject, expression: text, recent: [], status: ownerKey ? 'loading' : 'unverified', message: ''};
+            const next = {...base, expression: text, recent: addQueryRecent(base.recent, text, new Date().toISOString())};
+            return persistDraftState(next);
+          });
+        }
         const page = await apiPage('/query', {method: 'POST', body: JSON.stringify({expression: text})});
         if (request !== generation.current) return;
         setRows(Array.isArray(page.data) ? page.data : []);
@@ -377,10 +433,35 @@ export function useQueryConsole(apiPage: APIPage) {
         }
       }
     },
-    [apiPage, validate],
+    [apiPage, ownerKey, persistDraftState, subject, validate],
   );
 
-  return {expression, setExpression, rows, meta, plan, error, running, validating, duration, run, validate};
+  const loadRecent = useCallback((item: {expression: string}) => setExpression(item.expression), [setExpression]);
+  const updateRecent = useCallback((nextRecent: Array<{expression: string; updated_at: string}>) => {
+    setDraftState(current => {
+      if (!subject || current.owner !== subject || current.status !== 'ready') return current;
+      return persistDraftState({...current, recent: nextRecent, message: ''});
+    });
+  }, [persistDraftState, subject]);
+  const deleteRecent = useCallback((expressionToDelete: string) => updateRecent(recent.filter(item => item.expression !== expressionToDelete)), [recent, updateRecent]);
+  const clearRecent = useCallback(() => updateRecent([]), [updateRecent]);
+  const retryStorage = useCallback(() => {
+    if (!subject) return;
+    let storage;
+    try { storage = window.localStorage; } catch (error) {
+      setDraftState(current => current.owner === subject ? {...current, status: 'read-error', message: '浏览器仍拒绝访问本地存储；可继续使用查询，但不会保存。'} : current);
+      return;
+    }
+    if (draftStatus === 'write-error' && currentDraftState) {
+      const result = writeQueryDrafts(storage, subject, {expression: currentDraftState.expression, updated_at: new Date().toISOString()}, currentDraftState.recent);
+      setDraftState({...currentDraftState, status: result.error ? 'write-error' : 'ready', message: result.error ? '本地查询记录仍无法保存；当前编辑保留在本页。' : '本地查询记录已保存。'});
+    } else {
+      const result = readQueryDrafts(storage, subject);
+      setDraftState({owner: subject, expression: result.draft?.expression ?? DEFAULT_QUERY, recent: result.recent, status: result.ready ? 'ready' : 'read-error', message: result.ready ? '本地查询记录已重新读取。' : '本地查询记录仍无法读取；当前编辑只保存在本页。'});
+    }
+  }, [currentDraftState, draftStatus, subject]);
+
+  return {expression, setExpression, rows, meta, plan, error, running, validating, duration, run, validate, recent, draftStatus, draftMessage, loadRecent, deleteRecent, clearRecent, retryStorage};
 }
 
 export function useTheorems(apiPage: APIPage) {
@@ -519,11 +600,11 @@ export function useLibraryPrefs(subject: string | null | undefined) {
   const recentKey = libraryPrefsStorageKey(owner, 'recent');
   const favoritesKey = libraryPrefsStorageKey(owner, 'favorites');
   const [cache, setCache] = useState(() => ({
-    owner: owner || 'anonymous',
+    owner,
     recent: read(recentKey),
     favorites: read(favoritesKey),
   }));
-  const cacheOwner = owner || 'anonymous';
+  const cacheOwner = owner;
   if (cache.owner !== cacheOwner) {
     setCache({owner: cacheOwner, recent: read(recentKey), favorites: read(favoritesKey)});
   }
@@ -551,7 +632,8 @@ export function useLibraryPrefs(subject: string | null | undefined) {
   return {recent, favorites, remember, toggle};
 }
 
-function read(key: string): RecentEntry[] {
+function read(key: string | null): RecentEntry[] {
+  if (!key) return [];
   try {
     const value = JSON.parse(localStorage.getItem(key) || '[]');
     return Array.isArray(value) ? value : [];
@@ -560,7 +642,8 @@ function read(key: string): RecentEntry[] {
   }
 }
 
-function write(key: string, value: RecentEntry[]) {
+function write(key: string | null, value: RecentEntry[]) {
+  if (!key) return;
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {

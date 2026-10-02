@@ -277,8 +277,8 @@ export function toggleFavorite(list, entry) {
 }
 
 export function libraryPrefsStorageKey(subject, section) {
-  const owner = subject ? encodeURIComponent(subject) : 'anonymous';
-  return `xeonolab.library.${owner}.${section}`;
+  if (typeof subject !== 'string' || !subject.trim()) return null;
+  return `xeonolab.library.${encodeURIComponent(subject)}.${section}`;
 }
 
 export function isFavorite(list, entry) {

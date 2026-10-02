@@ -44,7 +44,7 @@ export function indexStatusFromJobs(jobs?: Job[]): {state: string; detail: strin
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];
 export function toggleFavorite(list: any[], entry: any): any[];
 export function isFavorite(list: any[], entry: any): boolean;
-export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites'): string;
+export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites'): string | null;
 export function changedFields(before?: Record<string, unknown>, after?: Record<string, unknown>): string[];
 export function rowHasAttachment(row: any, columns?: Column[]): boolean;
 export function isIndexActiveJob(job: Job | undefined): boolean;
