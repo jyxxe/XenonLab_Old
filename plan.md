@@ -880,13 +880,13 @@ PATCH /api/v1/apps/{app_id}        admin only
 DELETE /api/v1/apps/{app_id}       admin only
 ```
 
-应用对象：
+应用对象（这里只登记独立来源的外部应用；内置应用由桌面客户端提供）：
 
 ```json
 {
-  "id": "xelibrary",
-  "title": "XeLibrary",
-  "origin": "https://library.example.internal",
+  "id": "external-app",
+  "title": "External app",
+  "origin": "https://app.example.internal",
   "entry": "/",
   "icon": "library",
   "default_size": [1200, 800],
@@ -899,6 +899,8 @@ DELETE /api/v1/apps/{app_id}       admin only
   }
 }
 ```
+
+历史外部 `xelibrary` 应用入口已由桌面内置的“知识库”替代。不得再由部署验收脚本或默认配置创建该外部入口；遗留 registry 记录通过桌面管理员的应用目录 API 删除，用户布局中的旧 dock/window/recent 引用由客户端迁移到内置 `knowledge` 应用。此入口清理不删除 XeLibrary 服务、API、数据或反向代理路由。
 
 ## 18.2 用户桌面布局
 

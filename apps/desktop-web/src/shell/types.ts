@@ -22,13 +22,24 @@ export type APIRaw = (path: string, init?: RequestInit) => Promise<Response>;
 export type Sandbox = {allow_scripts: boolean; allow_forms: boolean; allow_downloads: boolean};
 
 export type DockPreference = 'small' | 'medium' | 'large';
+export type WallpaperMode = 'solid' | 'gradient' | 'image';
+export type WidgetId = 'clock' | 'status' | 'calendar' | 'app-shortcuts' | 'work' | 'notes' | 'search';
 
 export type UserPreferences = {
   theme: 'system' | 'light' | 'dark';
   accent: 'blue' | 'purple' | 'green' | 'orange';
-  wallpaper: 'aurora' | 'ocean' | 'sunset' | 'silver';
+  wallpaper: 'aurora' | 'ocean' | 'sunset' | 'silver' | 'custom';
+  wallpaper_mode?: WallpaperMode;
+  wallpaper_color?: string;
+  wallpaper_gradient_from?: string;
+  wallpaper_gradient_to?: string;
+  wallpaper_gradient_angle?: number;
+  wallpaper_dim?: number;
   timezone: string;
-  widgets: Array<'clock' | 'status'>;
+  widgets: WidgetId[];
+  shortcut_apps: string[];
+  custom_wallpaper_available?: boolean;
+  notes?: string;
   dock_size: DockPreference;
   dock_autohide: boolean;
   restore_windows: boolean;

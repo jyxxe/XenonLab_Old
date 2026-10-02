@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {isActiveWork, isExpiredWorkClaim} from './work-state';
+import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
+import type {DesktopApp} from './shell/types';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
 type WorkItem={id:string;status:string;claim_active:boolean};
 type Job={job_id:string;status:string};
@@ -20,6 +21,108 @@ export function ClockWidget({timezone}:{timezone:string}){
   catch{time=now.toLocaleTimeString('zh-CN');date=now.toLocaleDateString('zh-CN')}
   return <section className="widget widget-clock" aria-label="时钟"><b>{time}</b><span>{date}</span></section>;
 }
+
+export function CalendarWidget({timezone}:{timezone:string}){
+  const [now,setNow]=useState(()=>new Date());
+  useEffect(()=>{const timer=setInterval(()=>setNow(new Date()),60_000);return()=>clearInterval(timer)},[]);
+  let year=now.getFullYear(),month=now.getMonth()+1,day=now.getDate();
+  try{
+    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone(timezone),year:'numeric',month:'numeric',day:'numeric'}).formatToParts(now);
+    year=Number(parts.find(part=>part.type==='year')?.value);
+    month=Number(parts.find(part=>part.type==='month')?.value);
+    day=Number(parts.find(part=>part.type==='day')?.value);
+  }catch{/* fall back to the browser's local calendar */}
+  const weekday=new Date(Date.UTC(year,month-1,1)).getUTCDay();
+  const days=new Date(Date.UTC(year,month,0)).getUTCDate();
+  const monthLabel=new Intl.DateTimeFormat('zh-CN',{timeZone:zone(timezone),year:'numeric',month:'long'}).format(now);
+  const headings=['日','一','二','三','四','五','六'];
+  return <section className="widget widget-calendar" aria-label={`${monthLabel}日历`}>
+    <header><strong>{monthLabel}</strong></header>
+    <div className="calendar-grid" role="grid" aria-label={`${monthLabel}日期`}>
+      {headings.map((label,index)=><span className="calendar-weekday" role="columnheader" key={`${label}-${index}`}>{label}</span>)}
+      {Array.from({length:42},(_,index)=>{
+        const value=index-weekday+1;
+        const inMonth=value>=1&&value<=days;
+        return <span role="gridcell" aria-current={inMonth&&value===day?'date':undefined} className={inMonth&&value===day?'calendar-today':inMonth?'':'calendar-outside'} key={index}>{inMonth?value:''}</span>;
+      })}
+    </div>
+  </section>;
+}
+
+export function AppShortcutsWidget({apps,selected,onOpen}:{apps:DesktopApp[];selected:string[];onOpen:(id:string)=>void}){
+  const choices=selected.length?apps.filter(app=>selected.includes(app.id)):apps.slice(0,4);
+  return <section className="widget widget-shortcuts" aria-label="应用快捷入口">
+    <header><strong>应用快捷入口</strong></header>
+    {choices.length?<div className="shortcut-grid">{choices.slice(0,12).map(app=><button type="button" key={app.id} onClick={()=>onOpen(app.id)} aria-label={`打开${app.title}`}>
+      <span aria-hidden="true">{app.icon}</span><small>{app.title}</small>
+    </button>)}</div>:<p className="muted">没有可用的授权应用</p>}
+  </section>;
+}
+
+type DetailedWorkItem={id:string;repository:string;issue_id:number;title:string;status:string;claim_active:boolean};
+export function WorkWidget({apiPage,allowed,onOpen}:{apiPage:APIPage;allowed:boolean;onOpen:()=>void}){
+  const [items,setItems]=useState<DetailedWorkItem[]|null>(null),[truncated,setTruncated]=useState(false);
+  const latest=useRef(apiPage); latest.current=apiPage;
+  useEffect(()=>{if(!allowed)return;let active=true;
+    const load=async()=>{try{const page=await latest.current('/work?limit=1000');if(active){setItems(page.data);setTruncated(Boolean(page.meta.next_cursor))}}catch{if(active)setItems(null)}};
+    void load();const timer=setInterval(load,60_000);return()=>{active=false;clearInterval(timer)};
+  },[allowed]);
+  const active=(items??[]).filter(isActiveWork).sort((a,b)=>a.repository.localeCompare(b.repository)||b.issue_id-a.issue_id).slice(0,5);
+  return <section className="widget widget-work" aria-label="任务队列">
+    <header><strong>任务队列</strong><i className={`status-dot${allowed&&items===null?' bad':''}`}/></header>
+    {!allowed?<small>当前账户没有任务读取权限</small>:items===null?<small>加载失败，稍后重试</small>:active.length===0?<small>暂无进行中任务</small>:
+      <ul>{active.map(item=><li key={item.id}><span className="work-title">{item.repository} #{item.issue_id} {item.title}</span><em data-status={workDisplayStatus(item)}>{workDisplayStatus(item)}</em></li>)}</ul>}
+    {allowed&&items!==null&&<small>{truncated?'至少 ':''}{items.filter(isActiveWork).length} 项进行中 · <button type="button" className="widget-link" onClick={onOpen}>打开任务</button></small>}
+    {allowed&&items===null&&<small><button type="button" className="widget-link" onClick={onOpen}>打开任务面板</button></small>}
+  </section>;
+}
+
+type NoteSaveState='saved'|'dirty'|'saving'|'error';
+export function NotesWidget({notes,onSave}:{notes:string;onSave:(value:string,keepalive?:boolean)=>Promise<void>}){
+  const [value,setValue]=useState(notes),[saveState,setSaveState]=useState<NoteSaveState>('saved');
+  const latest=useRef(notes),synced=useRef(notes),timer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+  const saveChain=useRef<Promise<void>>(Promise.resolve());
+  const mounted=useRef(false);
+  const saveLatest=useRef(onSave);saveLatest.current=onSave;
+  const flushRef=useRef<(keepalive?:boolean,reportStatus?:boolean)=>Promise<void>>(async()=>{});
+  flushRef.current=async(keepalive=false,reportStatus=true)=>{
+    clearTimeout(timer.current);timer.current=undefined;
+    const snapshot=latest.current;
+    if(snapshot===synced.current)return;
+    if(reportStatus&&mounted.current)setSaveState('saving');
+    const pending=saveChain.current.catch(()=>undefined).then(()=>saveLatest.current(snapshot,keepalive));
+    saveChain.current=pending;
+    try{await pending;synced.current=snapshot;if(reportStatus&&mounted.current)setSaveState(latest.current===snapshot?'saved':'dirty');if(latest.current!==snapshot){if(mounted.current)timer.current=setTimeout(()=>void flushRef.current(),500);else void flushRef.current(true,false).catch(()=>undefined)}}
+    catch{if(reportStatus&&mounted.current)setSaveState('error');throw new Error('便签尚未保存')}
+  };
+  useEffect(()=>{if(notes!==synced.current&&latest.current===synced.current){synced.current=notes;latest.current=notes;setValue(notes);setSaveState('saved')}},[notes]);
+  useEffect(()=>{
+    mounted.current=true;
+    const onPageHide=()=>{void flushRef.current(true).catch(()=>undefined)};
+    window.addEventListener('pagehide',onPageHide);
+    return()=>{window.removeEventListener('pagehide',onPageHide);clearTimeout(timer.current);mounted.current=false;void flushRef.current(true,false).catch(()=>undefined)};
+  },[]);
+  const edit=(next:string)=>{latest.current=next;setValue(next);setSaveState('dirty');clearTimeout(timer.current);timer.current=setTimeout(()=>void flushRef.current().catch(()=>undefined),800)};
+  return <section className="widget widget-notes" aria-label="快速便签">
+    <header><strong>快速便签</strong><span role="status" aria-live="polite" data-save-state={saveState}>{saveState==='saved'?'已保存':saveState==='saving'?'保存中…':saveState==='error'?'保存失败，重新聚焦后重试':'有未保存修改'}</span></header>
+    <textarea value={value} maxLength={4000} placeholder="随手记录，自动保存到账户偏好" aria-label="便签内容" onChange={event=>edit(event.target.value)} onBlur={()=>void flushRef.current().catch(()=>undefined)} />
+    {value.length>3500&&<small>{value.length} / 4000</small>}
+    <small>离开页面时会尽力同步；显示“已保存”后才确认服务端已确认保存。</small>
+  </section>;
+}
+
+export function SearchWidget({onSearch,available}:{onSearch:(query:string)=>void;available:boolean}){
+  const [query,setQuery]=useState('');
+  const submit=()=>{const trimmed=query.trim();if(!trimmed||!available)return;onSearch(trimmed);setQuery('')};
+  return <section className="widget widget-search" aria-label="知识库搜索">
+    <header><strong>搜索知识库</strong></header>
+    {!available?<small>当前账户没有可用的知识库应用</small>:<form onSubmit={event=>{event.preventDefault();submit()}}>
+      <input value={query} maxLength={4096} placeholder="输入关键词" aria-label="知识库搜索关键词" onChange={event=>setQuery(event.target.value)} />
+      <button type="submit" disabled={!query.trim()}>搜索</button>
+    </form>}
+  </section>;
+}
+
 export function StatusWidget({apiPage,onOpen}:{apiPage:APIPage;onOpen:()=>void}){
   const [work,setWork]=useState<WorkItem[]|null>(null),[workTruncated,setWorkTruncated]=useState(false),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null),[jobs,setJobs]=useState<Job[]|null>(null);
   const latest=useRef(apiPage);

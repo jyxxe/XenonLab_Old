@@ -5,16 +5,40 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  isRetiredRegistryAppId,
+  migrateLegacyAppReferences,
   nextWindowId,
   restoreWindows,
   resizeRect,
   serializeWindows,
   toggleMaximize,
   workArea,
+  maximizedRect,
 } from '../src/shell/window-manager.js';
 
 const viewport = {width: 1440, height: 900};
 const app = {title: 'Knowledge', defaultSize: [1200, 800], minSize: [820, 520]};
+
+test('legacy XeLibrary layout references migrate to native Knowledge without changing other preferences', () => {
+  assert.equal(isRetiredRegistryAppId('xelibrary'), true);
+  assert.equal(isRetiredRegistryAppId('custom-app'), false, 'unrelated external apps remain eligible');
+  const source = {
+    dock: ['settings', 'xelibrary', 'knowledge', 'chat'],
+    dock_initialized: true,
+    windows: [
+      {id: 'legacy', app_id: 'xelibrary', title: 'Legacy library', x: 20, y: 40, width: 900, height: 600, minimized: true},
+      {id: 'other', app_id: 'chat', title: 'Chat', x: 30, y: 50, width: 800, height: 500},
+    ],
+    revision: 7,
+  };
+  const migrated = migrateLegacyAppReferences(source);
+  assert.deepEqual(migrated.dock, ['settings', 'knowledge', 'chat']);
+  assert.deepEqual(migrated.windows[0], {...source.windows[0], app_id: 'knowledge', title: '知识库'});
+  assert.deepEqual(migrated.windows[1], source.windows[1]);
+  assert.equal(migrated.dock_initialized, true);
+  assert.equal(migrated.revision, 7);
+  assert.deepEqual(source.dock, ['settings', 'xelibrary', 'knowledge', 'chat'], 'migration does not mutate stored input');
+});
 
 test('default geometry stays inside the work area and respects minimums', () => {
   const rect = defaultRect(app, viewport);
@@ -46,7 +70,7 @@ test('resizeRect anchors the opposite edge and clamps to the viewport', () => {
   assert.ok(clamped.width >= 400 && clamped.height >= 300, 'minimum size enforced');
 });
 
-test('maximize respects the menu bar and dock and restores the previous rectangle', () => {
+test('maximize fills the viewport below the menu bar and restores the previous rectangle', () => {
   const win = {
     id: 'w1',
     app_id: 'knowledge',
@@ -58,11 +82,13 @@ test('maximize respects the menu bar and dock and restores the previous rectangl
     minimized: false,
   };
   const maximized = toggleMaximize(win, viewport);
-  const area = workArea(viewport);
+  const area = maximizedRect(viewport);
+  assert.equal(maximized.x, 0);
+  assert.equal(maximized.width, viewport.width);
   assert.equal(maximized.y, area.y);
   assert.equal(maximized.height, area.height);
   assert.ok(maximized.y >= 30, 'maximize does not cover the menu bar');
-  assert.ok(maximized.y + maximized.height <= viewport.height - 70, 'dock remains visible');
+  assert.equal(maximized.y + maximized.height, viewport.height, 'bottom edge reaches viewport');
   const restored = toggleMaximize(maximized, viewport);
   assert.equal(restored.x, 100);
   assert.equal(restored.width, 900);
@@ -140,9 +166,16 @@ test('maximized geometry survives save/reload and restores after viewport change
   const resized={width:1366,height:768};
   const [loaded]=restoreWindows(saved,()=>app,resized);
   assert.equal(loaded.maximized,true);
-  assert.deepEqual({x:loaded.x,y:loaded.y,width:loaded.width,height:loaded.height},workArea(resized));
+  assert.deepEqual({x:loaded.x,y:loaded.y,width:loaded.width,height:loaded.height},maximizedRect(resized));
   const restored=toggleMaximize(loaded,resized);
   assert.equal(restored.x,original.x);
   assert.equal(restored.width,original.width);
   assert.equal(restored.maximized,false);
+});
+
+test('maximized geometry fits compact screens regardless of app minimum size', () => {
+  for (const viewport of [{width:390,height:844},{width:820,height:1180}]) {
+    const [win] = restoreWindows([{id:'compact',app_id:'knowledge',maximized:true}],()=>app,viewport);
+    assert.deepEqual({x:win.x,y:win.y,width:win.width,height:win.height}, maximizedRect(viewport));
+  }
 });

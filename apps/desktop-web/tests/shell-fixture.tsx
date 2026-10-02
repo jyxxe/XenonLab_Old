@@ -11,7 +11,11 @@ import {DesktopShell} from '../src/shell/DesktopShell';
 // same surface with deterministic, synthetic data so browser acceptance runs offline.
 type Call = {method: string; path: string; body: any};
 const calls: Call[] = [];
-const registry:any[]=[];
+const scenario = new URLSearchParams(location.search).get('scenario');
+const legacyRegistry:any[] = scenario === 'legacy-xelibrary' || scenario === 'legacy-xelibrary-duplicate'
+  ? [{id:'xelibrary',title:'XeLibrary legacy iframe',origin:'https://library.xenon.lan',entry:'/',icon:'◇',default_size:[1100,740],singleton:true,permissions:['xelibrary:read']}]
+  : [];
+const registry:any[]=legacyRegistry;
 const tables=[
   {id:'example-table',name:'部署验收',path:'/示例/平台'},
 ];
@@ -24,19 +28,33 @@ const stored = (key: string, fallback: any) => {
     return fallback;
   }
 };
-const preferences = stored('preferences', {
+const preferenceDefaults = {
   theme: 'dark',
   accent: 'blue',
   wallpaper: 'aurora',
+  custom_wallpaper_available: false,
   timezone: 'UTC',
   widgets: ['clock', 'status'],
+  shortcut_apps: [],
   dock_size: 'medium',
   dock_autohide: false,
   restore_windows: true,
   animations: true,
   reduced_motion: false,
-});
-const layout: {dock: string[]; windows: any[];dock_initialized?:boolean} = stored('layout', {dock: [], windows: []});
+};
+const preferences = scenario ? {...preferenceDefaults} : stored('preferences', preferenceDefaults);
+const scenarioLayout = scenario === 'legacy-xelibrary' || scenario === 'legacy-xelibrary-duplicate'
+  ? {
+      dock: ['settings', 'xelibrary', 'knowledge', 'chat'],
+      dock_initialized: true,
+      windows: [
+        {id:'legacy-library-window',app_id:'xelibrary',title:'XeLibrary legacy',x:70,y:60,width:900,height:600,minimized:false},
+        ...(scenario === 'legacy-xelibrary-duplicate' ? [{id:'native-knowledge-window',app_id:'knowledge',title:'知识库自定义标题',x:120,y:90,width:1000,height:650,minimized:false}] : []),
+        {id:'unrelated-chat-window',app_id:'chat',title:'AI 对话自定义标题',x:160,y:120,width:850,height:560,minimized:true},
+      ],
+    }
+  : {dock: [], windows: []};
+const layout: {dock: string[]; windows: any[];dock_initialized?:boolean} = scenario ? scenarioLayout : stored('layout', scenarioLayout);
 const work = Array.from({length: 5}, (_, index) => ({
   id: `fixture-${index + 1}`,
   repository: 'xenon-admin/XeonoLab',
@@ -101,6 +119,24 @@ const apiPage = async (path: string, init?: RequestInit) => {
   return {data, meta: {}};
 };
 const apiRaw = async (path: string, init?: RequestInit) => {
+  if (path === '/users/me/wallpaper' && (!init?.method || init.method === 'GET')) {
+    if (!preferences.custom_wallpaper_available) return new Response(null, {status: 404});
+    const image = Uint8Array.from(atob('UklGRjQAAABXRUJQVlA4ICgAAACQAQCdASoCAAIAAMASJQBOl0AAcwAA/v5b3/87bUdT4y/1te28MKAA'), char => char.charCodeAt(0));
+    return new Response(image, {status: 200, headers: {'Content-Type': 'image/webp'}});
+  }
+  if (path === '/users/me/wallpaper' && init?.method === 'PUT') {
+    calls.push({method: 'PUT', path, body: {contentType: new Headers(init.headers).get('Content-Type')}});
+    preferences.custom_wallpaper_available = true;
+    sessionStorage.setItem('shell-fixture:preferences', JSON.stringify(preferences));
+    return new Response(JSON.stringify({data: {wallpaper: 'custom'}}), {status: 200, headers: {'Content-Type': 'application/json'}});
+  }
+  if (path === '/users/me/wallpaper' && init?.method === 'DELETE') {
+    calls.push({method: 'DELETE', path, body: null});
+    preferences.custom_wallpaper_available = false;
+    if (preferences.wallpaper === 'custom' && preferences.wallpaper_mode === 'image') preferences.wallpaper = 'aurora';
+    sessionStorage.setItem('shell-fixture:preferences', JSON.stringify(preferences));
+    return new Response(JSON.stringify({data: {deleted: true, wallpaper: 'aurora'}}), {status: 200, headers: {'Content-Type': 'application/json'}});
+  }
   const data = await api(path, init);
   return new Response(JSON.stringify({data}), {status: 200, headers: {'Content-Type': 'application/json'}});
 };
@@ -126,7 +162,6 @@ createRoot(document.getElementById('root')!).render(
       api={api}
       apiPage={apiPage}
       apiRaw={apiRaw}
-      token="fixture-token"
       onLogout={async () => {
         (window as any).shellFixture.loggedOut = true;
       }}

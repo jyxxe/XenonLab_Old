@@ -304,15 +304,49 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("document.querySelector('.dock-minimized button').click()");
     await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('.window[data-app-id=knowledge]')).visibility==='visible'"), 'restored window');
 
-    // Window: maximize respects the menu bar and dock, and restores its previous rect.
+    // Window: maximize fills the viewport and temporarily hides the Dock.
     const beforeMax = await rectOf(cdp, '.window[data-app-id=knowledge]');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').click()");
     await sleep(150);
     const maximized = await rectOf(cdp, '.window[data-app-id=knowledge]');
-    assert.equal(maximized.y, 42, 'maximized window starts below the menu bar and keeps a margin');
-    assert.ok(maximized.h <= 900 - 30 - 90, 'maximized window leaves room for the dock');
+    assert.equal(maximized.x, 0);
+    assert.equal(maximized.y, 30, 'maximized window starts immediately below the menu bar');
+    assert.equal(maximized.w, 1440);
+    assert.equal(maximized.y + maximized.h, await cdp.evaluate('innerHeight'));
+    await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('nav.dock')).opacity==='0'"), 'Dock hides while maximized');
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR, {recursive:true});
+      const screenshot = await cdp.call('Page.captureScreenshot', {format:'png'});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue133-maximized.png'),Buffer.from(screenshot.data,'base64'));
+    }
+
+    // Compact widgets and each Dock size must leave maximized content reachable.
+    for (const [width, height] of [[1366,768],[820,1180],[390,844]]) {
+      await cdp.call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor: 1, mobile: width < 768});
+      await sleep(250);
+      const rect = await rectOf(cdp, '.window[data-app-id=knowledge]');
+      assert.deepEqual(rect, {x:0,y:30,w:width,h:height-30}, 'maximized frame follows viewport edges');
+      if (width < 1024) assert.equal(await cdp.evaluate("getComputedStyle(document.querySelector('.widgets')).visibility"), 'hidden');
+      for (const size of ['small','medium','large']) {
+        await cdp.evaluate(`document.querySelector('nav.dock').classList.remove('dock-size-small','dock-size-medium','dock-size-large');document.querySelector('nav.dock').classList.add('dock-size-${size}')`);
+        assert.equal(await cdp.evaluate("document.elementFromPoint(innerWidth/2,innerHeight-20)?.closest('.window')?.dataset.appId"), 'knowledge', `${size} Dock does not cover bottom content`);
+      }
+    }
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width:1440,height:900,deviceScaleFactor:1,mobile:false});
+    await sleep(250);
+    await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .min').click()");
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'minimizing removes temporary Dock hiding');
+    await cdp.evaluate("document.querySelector('.dock-minimized button').click()");
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), true, 'restoring maximized window hides Dock again');
+    await cdp.call('Input.dispatchMouseEvent', {type:'mouseMoved',x:720,y:899});
+    await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('nav.dock')).opacity==='1'"), 'bottom edge reveals Dock over maximized app');
+    await click('nav.dock button[title="系统设置"]');
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'normal foreground window shows Dock while maximized window remains behind');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').focus()");
+    await waitFor(() => cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), 'keyboard focus on maximized window hides Dock');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').click()");
     await sleep(150);
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'restore retains the non-autohide preference');
     const restored = await rectOf(cdp, '.window[data-app-id=knowledge]');
     assert.ok(Math.abs(restored.x - beforeMax.x) <= 4 && Math.abs(restored.w - beforeMax.w) <= 4, 'restore returns the previous rectangle');
 
@@ -358,6 +392,37 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     // Settings persist through the platform API and drive the document theme.
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统设置\"]').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=settings] .settings-panel'))"), 'settings window');
+    await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('日历')).querySelector('input').click()");
+    await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('应用快捷入口')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.widget-calendar')&&document.querySelector('.widget-shortcuts'))"), 'calendar and app shortcut widgets');
+    await cdp.evaluate("[...document.querySelectorAll('.widget-shortcut-options label')].find(label=>label.innerText.includes('知识库')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("window.shellFixture.preferences.shortcut_apps.includes('knowledge')"), 'authorized app shortcut saved');
+    assert.match(await cdp.evaluate("document.querySelector('.widget-calendar').getAttribute('aria-label')"), /日历/);
+    await cdp.evaluate("document.querySelector('.widget-shortcuts button[aria-label=\"打开知识库\"]').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), 'authorized app opened from shortcut widget');
+    const wallpaperPath = path.join(os.tmpdir(), `xeonolab-wallpaper-${process.pid}.png`);
+    await fs.writeFile(wallpaperPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/4ZsAAAAASUVORK5CYII=', 'base64'));
+    const documentNode = await cdp.call('DOM.getDocument', {depth: -1});
+    const wallpaperInput = await cdp.call('DOM.querySelector', {nodeId: documentNode.root.nodeId, selector: 'input[aria-label="选择自定义壁纸"]'});
+    await cdp.call('DOM.setFileInputFiles', {files: [wallpaperPath], nodeId: wallpaperInput.nodeId});
+    await waitFor(() => cdp.evaluate("window.shellFixture.preferences.wallpaper==='custom'"), 'custom wallpaper choice persisted through API');
+    await waitFor(() => cdp.evaluate("document.querySelector('.desktop[data-wallpaper-custom=\"image\"]')?.style.backgroundImage.includes('blob:')"), 'saved wallpaper loaded for shell background');
+    const renderedWallpaper = await cdp.evaluate(`(async () => {
+      const background = getComputedStyle(document.querySelector('.desktop')).backgroundImage;
+      const url = background.match(/url\\(["']?(blob:[^"')]+)["']?\\)/)?.[1];
+      if (!url) return false;
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return image.naturalWidth > 0 && image.naturalHeight > 0;
+    })()`);
+    assert.equal(renderedWallpaper, true, 'the rendered account wallpaper decodes in the browser');
+    assert.ok(await cdp.evaluate("window.shellFixture.calls.some(call=>call.method==='PUT'&&call.path==='/users/me/wallpaper')"), 'wallpaper upload uses authenticated server API');
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 390, height: 844, deviceScaleFactor: 1, mobile: true});
+    const mobileWallpaperControl = await cdp.evaluate("(() => {const input=document.querySelector('input[aria-label=\"选择自定义壁纸\"]');input.scrollIntoView({block:'center'});const rect=input.getBoundingClientRect();return {left:rect.left,right:rect.right,width:innerWidth}})()");
+    assert.ok(mobileWallpaperControl.left >= 0 && mobileWallpaperControl.right <= mobileWallpaperControl.width, 'wallpaper control fits the 390px settings viewport');
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 913, deviceScaleFactor: 1, mobile: false});
+    await fs.rm(wallpaperPath, {force: true});
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"减少动态效果\"]').click()");
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='true'"), 'reduced motion applied');
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"Dock 自动隐藏\"]').click()");
@@ -645,6 +710,10 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate(`(() => {const frame=document.querySelector('.iframe-app iframe');window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'http://127.0.0.1:${stalledPort}',data:{type:'app.ready'}}))})()`);
     await waitFor(() => cdp.evaluate("document.querySelector('.iframe-toolbar')?.innerText.includes('应用已连接')"), 'trusted iframe ready');
     assert.equal(await cdp.evaluate("document.querySelector('.iframe-app iframe').getAttribute('sandbox')"), 'allow-same-origin allow-scripts allow-forms', 'sandbox restrictions retained');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .max').click()");
+    const chatMax = await rectOf(cdp, '.window[data-app-id=chat]');
+    assert.deepEqual(chatMax, {x:0,y:30,w:1440,h:870}, 'OpenWebUI iframe window fills the desktop');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .max').click()");
     const frameId=await cdp.evaluate("document.querySelector('.iframe-app iframe').id");
     await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .min').click()");
     assert.equal(await cdp.evaluate("Boolean(document.getElementById('"+frameId+"'))"), true, 'minimize retains connected iframe');
@@ -760,6 +829,33 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("sessionStorage.setItem('shell-fixture:layout',JSON.stringify({dock:[],windows:[],dock_initialized:true}))");
     await cdp.call('Page.reload');
     await waitFor(()=>cdp.evaluate("document.querySelectorAll('nav.dock .dock-item').length===1"),'explicitly empty Dock restored');
+
+    // A retired registry entry must not surface in the real shell. Existing server
+    // layouts migrate that entry to the native app while preserving unrelated state.
+    for (const scenario of ['legacy-xelibrary', 'legacy-xelibrary-duplicate']) {
+      await cdp.call('Page.navigate', {url: `http://127.0.0.1:${portNumber}/tests/shell-fixture.html?scenario=${scenario}`});
+      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), `${scenario} restored as native Knowledge`);
+      await waitFor(() => cdp.evaluate("window.shellFixture.layout.dock.includes('knowledge') && !window.shellFixture.layout.dock.includes('xelibrary') && !window.shellFixture.layout.windows.some(win=>win.app_id==='xelibrary')"), `${scenario} layout migration persisted`);
+      assert.equal(await cdp.evaluate("window.shellFixture.registry.some(app=>app.id==='xelibrary')"), true, 'fixture confirms the legacy registry entry was supplied');
+      assert.equal(await cdp.evaluate("document.querySelectorAll('.window[data-app-id=xelibrary]').length"), 0, 'no legacy iframe window is rendered');
+      assert.equal(await cdp.evaluate("document.querySelectorAll('.window[data-app-id=knowledge]').length"), 1, 'one native knowledge window is restored');
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock button[title=\"知识库\"]'))"), true, 'native Knowledge appears on the Dock');
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock button[title=\"AI 对话\"]'))"), true, 'unrelated chat window remains reachable from the Dock');
+      assert.equal(await cdp.evaluate("document.documentElement.dataset.theme==='dark' && document.documentElement.dataset.wallpaper==='aurora' && Boolean(document.querySelector('.widget-clock')) && Boolean(document.querySelector('.widget-status'))"), true, 'unrelated theme, wallpaper, and widgets remain applied');
+      const windows = await cdp.evaluate('window.shellFixture.layout.windows');
+      const knowledge = windows.find(win => win.app_id === 'knowledge');
+      const chat = windows.find(win => win.app_id === 'chat');
+      assert.ok(knowledge, 'persisted layout uses the native knowledge app id');
+      assert.deepEqual([knowledge.x, knowledge.y, knowledge.width, knowledge.height], [scenario.endsWith('duplicate') ? 120 : 70, scenario.endsWith('duplicate') ? 90 : 60, scenario.endsWith('duplicate') ? 1000 : 900, scenario.endsWith('duplicate') ? 650 : 600], 'the retained Knowledge window keeps its geometry');
+      assert.deepEqual([chat.title, chat.x, chat.y, chat.width, chat.height, chat.minimized], ['AI 对话自定义标题', 160, 120, 850, 560, true], 'unrelated window personalization survives');
+
+      await cdp.evaluate("document.querySelector('button[title=\"LaunchPad\"]').click()");
+      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), `${scenario} LaunchPad`);
+      const launchpadTitles = await cdp.evaluate("[...document.querySelectorAll('.launchpad-app strong')].map(item=>item.textContent)");
+      assert.equal(launchpadTitles.includes('XeLibrary legacy iframe'), false, 'LaunchPad hides the legacy external app');
+      assert.equal(launchpadTitles.filter(title => title === '知识库').length, 1, 'LaunchPad exposes one native Knowledge app');
+      await cdp.key('Escape', 'Escape');
+    }
 
     // Exercise the real App/auth/session boundary with a synthetic server session.
     // Every refresh rotates its bearer token, reproducing production parent renders.

@@ -785,6 +785,64 @@
         }
       }
     },
+    "/api/v1/users/me/wallpaper": {
+      "get": {
+        "summary": "Get Wallpaper",
+        "operationId": "get_wallpaper_api_v1_users_me_wallpaper_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Upload Wallpaper",
+        "operationId": "upload_wallpaper_api_v1_users_me_wallpaper_put",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Wallpaper",
+        "operationId": "delete_wallpaper_api_v1_users_me_wallpaper_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/me/app-audit": {
       "get": {
         "summary": "Registry Audit",
@@ -1243,6 +1301,72 @@
             ],
             "title": "Wallpaper"
           },
+          "wallpaper_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Mode"
+          },
+          "wallpaper_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Color"
+          },
+          "wallpaper_gradient_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient From"
+          },
+          "wallpaper_gradient_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient To"
+          },
+          "wallpaper_gradient_angle": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient Angle"
+          },
+          "wallpaper_dim": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Dim"
+          },
           "timezone": {
             "anyOf": [
               {
@@ -1267,6 +1391,33 @@
               }
             ],
             "title": "Widgets"
+          },
+          "shortcut_apps": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 12
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortcut Apps"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "dock_size": {
             "anyOf": [

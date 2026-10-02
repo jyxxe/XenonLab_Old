@@ -6,6 +6,7 @@ import {System} from './System';
 import {Settings} from '../Settings';
 import {Development} from './Development';
 import {Issues} from './Issues';
+import {isRetiredRegistryAppId} from './window-manager.js';
 import type {DesktopApp, RegistryApp} from './types';
 
 const chatOrigin =
@@ -140,7 +141,7 @@ export function mergeApps(registry: RegistryApp[], scopes: string[]): DesktopApp
   const builtins = builtinApps().map(app => app.id === 'chat' && configuredChat ? {...toDesktopApp(configuredChat), id: 'chat', title: app.title, dock: true, menu: app.menu} : app).filter(app => app.permissions.every(scope => scopes.includes(scope)));
   const builtinIds = new Set(builtins.map(app => app.id));
   const external = registry
-    .filter(entry => !builtinIds.has(entry.id) && entry !== configuredChat)
+    .filter(entry => !isRetiredRegistryAppId(entry.id) && !builtinIds.has(entry.id) && entry !== configuredChat)
     .map(toDesktopApp)
     .filter(app => app.permissions.every(scope => scopes.includes(scope)));
   return [...builtins, ...external];
