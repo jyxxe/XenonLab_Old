@@ -10,6 +10,7 @@ results retained so callers can locate and resubmit the remainder.
 
 import json
 import time
+from pathlib import Path
 from uuid import uuid4
 
 from .common import connect, transaction
@@ -35,6 +36,8 @@ class BulkJobStore:
                 "failed INTEGER NOT NULL DEFAULT 0,"
                 "results TEXT NOT NULL DEFAULT '[]',"
                 "error TEXT,"
+                "output TEXT,"
+                "cancel_requested INTEGER NOT NULL DEFAULT 0,"
                 "created_at REAL NOT NULL,"
                 "updated_at REAL NOT NULL)"
             )
@@ -49,6 +52,10 @@ class BulkJobStore:
                     status="failed",
                     error="worker interrupted; partial results retained; resubmit remaining items",
                 )
+            for row in db.execute("SELECT id,output FROM bulk_jobs WHERE status='cancelled'").fetchall():
+                if row["output"]:
+                    Path(row["output"]).unlink(missing_ok=True)
+                    self._write(db, row["id"], output=None)
             self._prune(db)
 
     def create(self, table_id, kind, payload, owner, batch_id=None):
@@ -114,6 +121,52 @@ class BulkJobStore:
                 "UPDATE bulk_jobs SET status='failed',error=?,updated_at=? WHERE id=?",
                 (error, time.time(), job_id),
             )
+
+    def complete(self, job_id):
+        with transaction(self.database) as db:
+            db.execute(
+                "UPDATE bulk_jobs SET status='completed',updated_at=? WHERE id=? AND status='running'",
+                (time.time(), job_id),
+            )
+
+    def set_done(self, job_id, done):
+        with transaction(self.database) as db:
+            db.execute(
+                "UPDATE bulk_jobs SET done=?,status='running',updated_at=? WHERE id=? AND status IN ('queued','running')",
+                (done, time.time(), job_id),
+            )
+
+    def request_cancel(self, job_id):
+        """Flag a queued/running job for cooperative cancellation."""
+        with transaction(self.database) as db:
+            row = db.execute("SELECT status FROM bulk_jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None or row["status"] in ("completed", "failed", "cancelled"):
+                return False
+            db.execute(
+                "UPDATE bulk_jobs SET cancel_requested=1,status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,"
+                "updated_at=? WHERE id=?",
+                (time.time(), job_id),
+            )
+            return True
+
+    def cancel_requested(self, job_id):
+        with connect(self.database) as db:
+            row = db.execute("SELECT cancel_requested FROM bulk_jobs WHERE id=?", (job_id,)).fetchone()
+        return bool(row and row["cancel_requested"])
+
+    def finish_cancelled(self, job_id, output=None):
+        with transaction(self.database) as db:
+            row = db.execute("SELECT output FROM bulk_jobs WHERE id=?", (job_id,)).fetchone()
+            if row and row["output"]:
+                Path(row["output"]).unlink(missing_ok=True)
+            db.execute(
+                "UPDATE bulk_jobs SET status='cancelled',output=NULL,updated_at=? WHERE id=?",
+                (time.time(), job_id),
+            )
+
+    def set_output(self, job_id, output):
+        with transaction(self.database) as db:
+            db.execute("UPDATE bulk_jobs SET output=?,updated_at=? WHERE id=?", (output, time.time(), job_id))
 
     def list(self, table_id=None, limit=50):
         query = "SELECT * FROM bulk_jobs"
