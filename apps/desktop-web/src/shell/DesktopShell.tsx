@@ -35,7 +35,7 @@ const defaultPreferences: UserPreferences = {
   wallpaper_gradient_from: '#0b1220',
   wallpaper_gradient_to: '#1d4ed8',
   wallpaper_gradient_angle: 160,
-  wallpaper_image: '',
+  wallpaper_image_version: 0,
   wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
@@ -98,7 +98,12 @@ export function DesktopShell({
     const win = windows.find(item => item.id === activeId);
     return win ? apps.find(app => app.id === win.app_id) ?? null : null;
   }, [activeId, windows, apps]);
-  const customWallpaper = useMemo(() => customWallpaperStyle(preferences), [preferences]);
+  const [mobileWidgetsOpen, setMobileWidgetsOpen] = useState(false);
+
+  // Custom wallpaper bytes live outside the preferences payload; fetch them once
+  // per image version so frequent preference writes never re-download the blob.
+  const [wallpaperImage, setWallpaperImage] = useState('');
+  const customWallpaper = useMemo(() => customWallpaperStyle(preferences, wallpaperImage), [preferences, wallpaperImage]);
   const knowledgeAvailable = useMemo(() => apps.some(app => app.id === 'knowledge'), [apps]);
 
   const connect = useCallback(async () => {
@@ -255,10 +260,12 @@ export function DesktopShell({
   const focus = useCallback((id: string) => editWindows(current => focusWindow(current, id)), [editWindows]);
 
   const applyPreferences = useCallback(
-    async (patch: Partial<UserPreferences>) => {
+    async (patch: Partial<UserPreferences>, init?: RequestInit) => {
       const version = ++preferenceVersion.current;
       setPreferences(current => ({...current, ...patch}));
-      const pending = preferenceQueue.current.catch(() => undefined).then(() => api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch)}));
+      const pending = preferenceQueue.current
+        .catch(() => undefined)
+        .then(() => api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch), ...init}));
       preferenceQueue.current = pending;
       try {
         const saved = await pending;
@@ -270,6 +277,27 @@ export function DesktopShell({
     },
     [api, push],
   );
+
+  // Custom wallpaper bytes live outside the preferences payload; fetch them once
+  // per image version so frequent preference writes never re-download the blob.
+  const wallpaperVersion = preferences.wallpaper_image_version || 0;
+  useEffect(() => {
+    if (preferences.wallpaper !== 'custom' || preferences.wallpaper_mode !== 'image' || !wallpaperVersion) {
+      setWallpaperImage('');
+      return;
+    }
+    let active = true;
+    api(`/users/me/wallpaper-image`)
+      .then((data: {version?: number; image?: string}) => {
+        if (active) setWallpaperImage(data.version === wallpaperVersion ? data.image || '' : '');
+      })
+      .catch(() => {
+        if (active) setWallpaperImage('');
+      });
+    return () => {
+      active = false;
+    };
+  }, [api, preferences.wallpaper, preferences.wallpaper_mode, wallpaperVersion]);
 
   const toggleLaunchPad = useCallback(() => {
     setLaunchpadOpen(value => !value);
@@ -613,7 +641,7 @@ export function DesktopShell({
       </div>
 
       {(preferences.widgets || []).length > 0 && (
-        <div className="widgets">
+        <div className={`widgets${mobileWidgetsOpen ? ' open' : ''}`}>
           {(preferences.widgets || []).includes('clock') && <ClockWidget timezone={preferences.timezone} />}
           {(preferences.widgets || []).includes('calendar') && <CalendarWidget timezone={preferences.timezone} />}
           {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
@@ -622,9 +650,28 @@ export function DesktopShell({
             <SearchWidget onSearch={query => openApp('knowledge', {action: 'search', query})} />
           )}
           {(preferences.widgets || []).includes('notes') && (
-            <NotesWidget notes={preferences.notes || ''} onChange={value => void applyPreferences({notes: value}).catch(() => undefined)} />
+            <NotesWidget notes={preferences.notes || ''} onChange={(value, init) => applyPreferences({notes: value}, init)} />
           )}
+          <button
+            type="button"
+            className="widgets-close"
+            aria-label="收起桌面组件"
+            onClick={() => setMobileWidgetsOpen(false)}
+          >
+            收起组件
+          </button>
         </div>
+      )}
+      {(preferences.widgets || []).length > 0 && (
+        <button
+          type="button"
+          className="widgets-toggle"
+          aria-label="桌面组件"
+          aria-expanded={mobileWidgetsOpen}
+          onClick={() => setMobileWidgetsOpen(value => !value)}
+        >
+          ▤
+        </button>
       )}
 
       <Dock

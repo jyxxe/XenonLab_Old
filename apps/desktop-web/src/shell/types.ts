@@ -35,7 +35,7 @@ export type UserPreferences = {
   wallpaper_gradient_from?: string;
   wallpaper_gradient_to?: string;
   wallpaper_gradient_angle?: number;
-  wallpaper_image?: string;
+  wallpaper_image_version?: number;
   wallpaper_dim?: number;
   timezone: string;
   widgets: WidgetId[];

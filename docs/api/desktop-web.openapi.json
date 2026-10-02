@@ -785,6 +785,56 @@
         }
       }
     },
+    "/api/v1/users/me/wallpaper-image": {
+      "get": {
+        "summary": "Get Wallpaper Image",
+        "operationId": "get_wallpaper_image_api_v1_users_me_wallpaper_image_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Put Wallpaper Image",
+        "operationId": "put_wallpaper_image_api_v1_users_me_wallpaper_image_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WallpaperImagePut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/me/app-audit": {
       "get": {
         "summary": "Registry Audit",
@@ -1298,16 +1348,16 @@
             ],
             "title": "Wallpaper Gradient Angle"
           },
-          "wallpaper_image": {
+          "wallpaper_image_version": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Wallpaper Image"
+            "title": "Wallpaper Image Version"
           },
           "wallpaper_dim": {
             "anyOf": [
@@ -1533,6 +1583,19 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WallpaperImagePut": {
+        "properties": {
+          "image": {
+            "type": "string",
+            "maxLength": 2800000,
+            "title": "Image",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "WallpaperImagePut"
       }
     }
   }

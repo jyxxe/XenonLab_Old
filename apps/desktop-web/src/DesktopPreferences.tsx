@@ -1,7 +1,7 @@
 import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
 import type {DesktopApp, UserPreferences, WallpaperMode, WidgetId} from './shell/types';
-import {customWallpaperStyle, WALLPAPER_IMAGE_MAX_CHARS} from './wallpaper.js';
+import {customWallpaperStyle} from './wallpaper.js';
 
 export type Preferences = UserPreferences;
 export const defaultPreferences: UserPreferences = {
@@ -13,7 +13,7 @@ export const defaultPreferences: UserPreferences = {
   wallpaper_gradient_from: '#0b1220',
   wallpaper_gradient_to: '#1d4ed8',
   wallpaper_gradient_angle: 160,
-  wallpaper_image: '',
+  wallpaper_image_version: 0,
   wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
@@ -56,9 +56,7 @@ async function downscaleImageToDataUrl(file: File, maxEdge = 2048): Promise<stri
 }
 
 export function DesktopPreferences({
-  preferences,
-  apply,
-  saveLayout,
+  api, preferences, apply, saveLayout,
   apps, dockIds, togglePin, movePinned,
 }: {
   apps: DesktopApp[];
@@ -73,7 +71,10 @@ export function DesktopPreferences({
   const changeVersion = useRef(0);
   const [message, setMessage] = useState('');
   const [timezone, setTimezone] = useState(preferences.timezone);
-  const customPreview = customWallpaperStyle(preferences);
+  // The preview uses the locally chosen gradient/image before the server round
+  // trip completes; the image override mirrors the wallpaper-image endpoint.
+  const [localImage, setLocalImage] = useState<string | null>(null);
+  const customPreview = customWallpaperStyle(preferences, localImage ?? undefined);
 
   // Appearance changes apply immediately and the shell persists them; macOS-style
   // settings have no separate confirmation step for display options.
@@ -193,19 +194,32 @@ export function DesktopPreferences({
                       setMessage('正在处理图片…');
                       try {
                         const dataUrl = await downscaleImageToDataUrl(file);
-                        if (dataUrl.length > WALLPAPER_IMAGE_MAX_CHARS) {
-                          setMessage('图片过大，即使压缩后仍超出 2MB 限制，请换一张图片');
-                          return;
-                        }
-                        await update({wallpaper_image: dataUrl, wallpaper_mode: 'image'});
+                        // The blob is stored through the dedicated wallpaper-image
+                        // endpoint; preferences only carry the version counter.
+                        const put = await api('/users/me/wallpaper-image', {method: 'PUT', body: JSON.stringify({image: dataUrl})});
+                        setLocalImage(dataUrl);
+                        await update({wallpaper_mode: 'image', wallpaper_image_version: put?.version ?? 0});
                       } catch (error) {
-                        setMessage('图片读取失败：' + String(error));
+                        setMessage('图片保存失败：' + String(error));
                       }
                     }}
                   />
                 </label>
-                {preferences.wallpaper_image ? (
-                  <Button size="sm" onClick={() => update({wallpaper_image: ''})}>移除自定义图片</Button>
+                {preferences.wallpaper_image_version ? (
+                  <Button
+                    size="sm"
+                    onClick={async () => {
+                      try {
+                        const put = await api('/users/me/wallpaper-image', {method: 'PUT', body: JSON.stringify({image: ''})});
+                        setLocalImage('');
+                        await update({wallpaper_mode: 'solid', wallpaper_image_version: put?.version ?? 0});
+                      } catch (error) {
+                        setMessage('移除图片失败：' + String(error));
+                      }
+                    }}
+                  >
+                    移除自定义图片
+                  </Button>
                 ) : (
                   <p className="muted">尚未设置图片，桌面暂时使用渐变兜底。</p>
                 )}

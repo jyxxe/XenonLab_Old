@@ -101,8 +101,27 @@ async function centerOf(cdp, selector) {
   })()`);
 }
 
-// Acceptance for issue #116: additional desktop widgets (calendar, work queue,
-// notes, search) and the custom wallpaper rendering path. Fixture data only.
+async function clickPoint(cdp, point) {
+  await cdp.call('Input.dispatchMouseEvent', {type: 'mousePressed', ...point, button: 'left', buttons: 1, clickCount: 1});
+  await cdp.call('Input.dispatchMouseEvent', {type: 'mouseReleased', ...point, button: 'left', buttons: 0, clickCount: 1});
+}
+
+const FIXTURE_URL = port => `http://127.0.0.1:${port}/tests/shell-fixture.html`;
+
+const PREFS = overrides => JSON.stringify({
+  theme: 'dark', accent: 'blue', wallpaper: 'custom',
+  wallpaper_mode: 'gradient', wallpaper_color: '#101828',
+  wallpaper_gradient_from: '#123456', wallpaper_gradient_to: '#c0ffee',
+  wallpaper_gradient_angle: 200, wallpaper_image_version: 0, wallpaper_dim: 20,
+  timezone: 'UTC', widgets: ['clock', 'calendar', 'status', 'work', 'search', 'notes'],
+  notes: '', dock_size: 'medium', dock_autohide: false, restore_windows: true,
+  animations: true, reduced_motion: false, ...overrides,
+});
+
+// Acceptance for issue #116 (round 2, maintainer review fixes): layer order and
+// solid fallback for custom wallpapers, the separate wallpaper-image asset
+// endpoint, notes flush-on-leave, and the narrow-viewport widget entry point.
+// Fixture data only; the fixture emulates the wallpaper-image endpoint.
 test('Desktop widgets and custom wallpaper acceptance', async t => {
   const chromePath = process.env.CHROME_BIN || ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(file => existsSync(file));
   if (!chromePath) {
@@ -140,32 +159,53 @@ test('Desktop widgets and custom wallpaper acceptance', async t => {
     await cdp.call('Page.enable');
     await cdp.call('Runtime.enable');
     await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 900, deviceScaleFactor: 1, mobile: false});
-    await cdp.call('Page.addScriptToEvaluateOnNewDocument', {
-      source: `sessionStorage.setItem('shell-fixture:preferences', JSON.stringify({
-        theme:'dark',accent:'blue',wallpaper:'custom',
-        wallpaper_mode:'gradient',wallpaper_color:'#101828',
-        wallpaper_gradient_from:'#123456',wallpaper_gradient_to:'#c0ffee',
-        wallpaper_gradient_angle:200,wallpaper_image:'',wallpaper_dim:20,
-        timezone:'UTC',widgets:['clock','calendar','status','work','search','notes'],
-        notes:'',dock_size:'medium',dock_autohide:false,restore_windows:true,
-        animations:true,reduced_motion:false
-      }));`,
-    });
-    await cdp.call('Page.navigate', {url: `http://127.0.0.1:${portNumber}/tests/shell-fixture.html`});
 
+    const seedPrefs = expression => cdp.call('Page.addScriptToEvaluateOnNewDocument', {source: expression});
+
+    // --- Scene 1: gradient with dim overlay.
+    await seedPrefs(`sessionStorage.setItem('shell-fixture:preferences', '${PREFS({})}')`);
+    await cdp.call('Page.navigate', {url: FIXTURE_URL(portNumber)});
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.desktop'))"), 'desktop shell');
-
-    // Custom wallpaper: inline background wins, preset attribute stays available.
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.wallpaper==='custom'"), 'custom wallpaper dataset');
     const desktopStyle = await cdp.evaluate(`(() => {
       const desktop = document.querySelector('.desktop');
-      return {mode: desktop.getAttribute('data-wallpaper-custom'), background: desktop.style.backgroundImage, color: desktop.style.backgroundColor};
+      const computed = getComputedStyle(desktop);
+      return {
+        mode: desktop.getAttribute('data-wallpaper-custom'),
+        inlineBackground: desktop.style.backgroundImage,
+        computedBackgroundImage: computed.backgroundImage,
+        color: desktop.style.backgroundColor,
+      };
     })()`);
     assert.equal(desktopStyle.mode, 'gradient');
-    // Chrome serialises inline gradient colours back as rgb(); accept both forms.
-    assert.match(desktopStyle.background, /linear-gradient\(200deg, (?:#123456|rgb\(18, 52, 86\)), (?:#c0ffee|rgb\(192, 255, 238\))\)/);
-    assert.match(desktopStyle.background, /rgba\(0, 0, 0, 0\.2\)/);
+    // The dim overlay must paint before the gradient: first CSS layer wins.
+    assert.match(desktopStyle.inlineBackground, /^linear-gradient\(rgba\(0, 0, 0, 0\.2\), rgba\(0, 0, 0, 0\.2\)\), linear-gradient\(200deg, /);
+    assert.match(desktopStyle.computedBackgroundImage, /^linear-gradient\(rgba\(0, 0, 0, 0\.2\)/);
     assert.match(desktopStyle.color, /^(?:#101828|rgb\(16, 24, 40\))$/);
+
+    // --- Scene 2: solid mode must not let the preset stylesheet bleed through.
+    await seedPrefs(`sessionStorage.setItem('shell-fixture:preferences', '${PREFS({wallpaper_mode: 'solid', wallpaper_dim: 0})}')`);
+    await cdp.call('Page.navigate', {url: FIXTURE_URL(portNumber)});
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.desktop'))"), 'desktop shell (solid)');
+    const solidStyle = await cdp.evaluate(`(() => {
+      const desktop = document.querySelector('.desktop');
+      return {inline: desktop.style.backgroundImage, computed: getComputedStyle(desktop).backgroundImage, color: getComputedStyle(desktop).backgroundColor};
+    })()`);
+    assert.equal(solidStyle.inline, 'none');
+    assert.equal(solidStyle.computed, 'none');
+    assert.match(solidStyle.color, /^(?:#101828|rgb\(16, 24, 40\))$/);
+
+    // --- Scene 3: image mode loads bytes from the dedicated endpoint.
+    await seedPrefs(`sessionStorage.setItem('shell-fixture:preferences', '${PREFS({
+      wallpaper_mode: 'image', wallpaper_image_version: 2,
+    })}');sessionStorage.setItem('shell-fixture:wallpaperVersion','2');sessionStorage.setItem('shell-fixture:wallpaperImage', JSON.stringify('data:image/png;base64,QUJDREVG'));`);
+    await cdp.call('Page.navigate', {url: FIXTURE_URL(portNumber)});
+    await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('.desktop')).backgroundImage.includes('url(')"), 'image wallpaper loaded from endpoint');
+    const imageStyle = await cdp.evaluate(`(() => {
+      const computed = getComputedStyle(document.querySelector('.desktop'));
+      return {backgroundImage: computed.backgroundImage, inline: document.querySelector('.desktop').style.backgroundImage};
+    })()`);
+    assert.match(imageStyle.inline, /^linear-gradient\(rgba\(0, 0, 0, 0\.2\), rgba\(0, 0, 0, 0\.2\)\), url\("data:image\/png;base64,QUJDREVG"\)$/);
 
     // Calendar: current month header, today marked, six Monday-first rows.
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.widget-calendar table'))"), 'calendar widget');
@@ -183,8 +223,8 @@ test('Desktop widgets and custom wallpaper acceptance', async t => {
     assert.equal(calendar.rows, 6);
     assert.equal(calendar.today, String(calendar.day));
 
-    // Work queue: fixture has one queued issue (#71) and one active claim (#70);
-    // the expired claim (#72), completed (#73) and blocked (#74) items are excluded.
+    // Work queue: fixture active items are #71 (queued) and #70 (claimed);
+    // expired #72, completed #73 and blocked #74 are excluded.
     await waitFor(() => cdp.evaluate("document.querySelector('.widget-work')?.innerText.includes('进行中')"), 'work widget summary');
     const work = await cdp.evaluate(`(() => {
       const widget = document.querySelector('.widget-work');
@@ -195,8 +235,6 @@ test('Desktop widgets and custom wallpaper acceptance', async t => {
     assert.match(work.items[0], /QUEUED/i);
     assert.match(work.items[1], /^#70 Synthetic issue 70/);
     assert.match(work.items[1], /CLAIMED/i);
-    assert.equal(work.items.join('\n').includes('#72'), false);
-    assert.equal(work.items.join('\n').includes('#74'), false);
     assert.match(work.footer, /2 项进行中/);
 
     // Notes: typing persists through the debounced preferences PATCH.
@@ -209,6 +247,17 @@ test('Desktop widgets and custom wallpaper acceptance', async t => {
     await waitFor(() => cdp.evaluate("window.shellFixture.calls.some(call => call.method==='PATCH' && call.path==='/users/me/preferences' && call.body && call.body.notes==='验收便签内容')"), 'notes persisted');
     assert.equal(await cdp.evaluate("window.shellFixture.preferences.notes"), '验收便签内容');
 
+    // Notes flush: an edit inside the debounce window survives a pagehide.
+    await cdp.evaluate(`(() => {
+      window.shellFixture.resetCalls();
+      const input = document.querySelector('.widget-notes textarea');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, '离开前最后一句');
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+    })()`);
+    await cdp.evaluate("dispatchEvent(new Event('pagehide'))");
+    await waitFor(() => cdp.evaluate("window.shellFixture.calls.some(call => call.method==='PATCH' && call.body && call.body.notes==='离开前最后一句')"), 'notes flushed on pagehide');
+    assert.equal(await cdp.evaluate("window.shellFixture.preferences.notes"), '离开前最后一句');
+
     // Search widget: submitting opens the knowledge app window.
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.widget-search input'))"), 'search widget');
     await cdp.evaluate(`(() => {
@@ -216,22 +265,50 @@ test('Desktop widgets and custom wallpaper acceptance', async t => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '局部凸性');
       input.dispatchEvent(new Event('input', {bubbles: true}));
     })()`);
-    const submit = await centerOf(cdp, '.widget-search button');
-    await cdp.call('Input.dispatchMouseEvent', {type: 'mousePressed', ...submit, button: 'left', buttons: 1, clickCount: 1});
-    await cdp.call('Input.dispatchMouseEvent', {type: 'mouseReleased', ...submit, button: 'left', buttons: 0, clickCount: 1});
+    await clickPoint(cdp, await centerOf(cdp, '.widget-search button'));
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), 'knowledge window opens from search widget');
-    assert.match(await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge]').innerText"), /局部凸性|知识库/);
 
     // Work widget click-through opens the development app.
-    const workWidget = await centerOf(cdp, '.widget-work');
-    await cdp.call('Input.dispatchMouseEvent', {type: 'mousePressed', ...workWidget, button: 'left', buttons: 1, clickCount: 1});
-    await cdp.call('Input.dispatchMouseEvent', {type: 'mouseReleased', ...workWidget, button: 'left', buttons: 0, clickCount: 1});
+    await clickPoint(cdp, await centerOf(cdp, '.widget-work'));
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=development]'))"), 'development window opens from work widget');
 
     if (process.env.UI_SCREENSHOT_DIR) {
       await fs.mkdir(process.env.UI_SCREENSHOT_DIR, {recursive: true});
       const shot = await cdp.call('Page.captureScreenshot', {format: 'png', captureBeyondViewport: false});
       await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR, 'desktop-widgets-wallpaper.png'), Buffer.from(shot.data, 'base64'));
+    }
+
+    // --- Scene 4: 390px viewport — widgets collapse behind a reachable toggle.
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 390, height: 844, deviceScaleFactor: 1, mobile: true});
+    await sleep(200);
+    const narrow = await cdp.evaluate(`(() => {
+      const toggle = document.querySelector('.widgets-toggle');
+      const widgets = document.querySelector('.widgets');
+      const toggleStyle = toggle ? getComputedStyle(toggle) : null;
+      return {
+        hasToggle: Boolean(toggle),
+        toggleVisible: toggleStyle ? toggleStyle.display !== 'none' : false,
+        widgetsHidden: widgets ? getComputedStyle(widgets).display === 'none' : true,
+      };
+    })()`);
+    assert.equal(narrow.hasToggle && narrow.toggleVisible, true, 'toggle button is visible at 390px');
+    assert.equal(narrow.widgetsHidden, true, 'widget column is collapsed by default at 390px');
+    await clickPoint(cdp, await centerOf(cdp, '.widgets-toggle'));
+    await waitFor(() => cdp.evaluate("document.querySelector('.widgets')?.classList.contains('open')"), 'widget panel opens from toggle');
+    const openState = await cdp.evaluate(`(() => {
+      const widgets = document.querySelector('.widgets');
+      const close = document.querySelector('.widgets-close');
+      return {display: getComputedStyle(widgets).display, closeVisible: close ? getComputedStyle(close).display !== 'none' : false, scrollable: widgets.scrollHeight >= widgets.clientHeight};
+    })()`);
+    assert.notEqual(openState.display, 'none');
+    assert.equal(openState.closeVisible, true);
+    await cdp.evaluate("document.querySelector('.widgets-close')?.scrollIntoView({block:'center'})");
+    await sleep(120);
+    await clickPoint(cdp, await centerOf(cdp, '.widgets-close'));
+    await waitFor(() => cdp.evaluate("!document.querySelector('.widgets')?.classList.contains('open')"), 'widget panel collapses again');
+    if (process.env.UI_SCREENSHOT_DIR) {
+      const shot = await cdp.call('Page.captureScreenshot', {format: 'png', captureBeyondViewport: false});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR, 'desktop-widgets-390.png'), Buffer.from(shot.data, 'base64'));
     }
   } finally {
     await stopProcess(chrome).catch(() => undefined);

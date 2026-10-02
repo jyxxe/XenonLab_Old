@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import os
 import re
@@ -46,13 +48,37 @@ class AppPatch(BaseModel):
     sandbox: Sandbox | None = None
 
 
-# Client-side wallpapers are downscaled to JPEG before upload; the cap keeps a
-# preferences row (rewritten whole on every PATCH) comfortably small. The empty
-# string is the "no image set" default and must survive the round-trip through
-# PATCH merges, so the pattern allows it explicitly.
+# Client-side wallpapers are downscaled to JPEG before upload. The image bytes
+# live in a dedicated table (not the preferences JSON row) so frequent
+# preference writes — the notes widget saves every keystroke burst — never
+# rewrite or re-return a large blob. The preferences row only keeps a version
+# counter used as the frontend cache key.
 WALLPAPER_IMAGE_MAX_CHARS = 2_800_000
-WALLPAPER_IMAGE_PATTERN = r"^(?:data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2})?$"
+WALLPAPER_IMAGE_MAX_BYTES = (WALLPAPER_IMAGE_MAX_CHARS * 3) // 4
+WALLPAPER_DATA_URL_PATTERN = r"^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$"
 HEX_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
+
+_MAGIC_JPEG = b"\xff\xd8\xff"
+_MAGIC_PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def validate_wallpaper_data_url(value: str) -> str:
+    """Reject anything that is not a bounded, decodable PNG/JPEG/WebP data URL."""
+    if not value:
+        return value
+    if len(value) > WALLPAPER_IMAGE_MAX_CHARS or not re.match(WALLPAPER_DATA_URL_PATTERN, value):
+        raise ValueError("wallpaper image must be a bounded base64 PNG/JPEG/WebP data URL") from None
+    payload = value.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("wallpaper image payload is not valid base64") from None
+    if len(raw) > WALLPAPER_IMAGE_MAX_BYTES:
+        raise ValueError("wallpaper image exceeds the size cap") from None
+    is_webp = raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
+    if not (raw.startswith(_MAGIC_JPEG) or raw.startswith(_MAGIC_PNG) or is_webp):
+        raise ValueError("wallpaper image bytes do not match PNG/JPEG/WebP signatures") from None
+    return value
 
 
 class Preferences(BaseModel):
@@ -65,9 +91,7 @@ class Preferences(BaseModel):
     wallpaper_gradient_from: str = Field(default="#0b1220", pattern=HEX_COLOR_PATTERN)
     wallpaper_gradient_to: str = Field(default="#1d4ed8", pattern=HEX_COLOR_PATTERN)
     wallpaper_gradient_angle: int = Field(default=160, ge=0, le=360)
-    wallpaper_image: str = Field(
-        default="", max_length=WALLPAPER_IMAGE_MAX_CHARS, pattern=WALLPAPER_IMAGE_PATTERN
-    )
+    wallpaper_image_version: int = Field(default=0, ge=0)
     wallpaper_dim: int = Field(default=0, ge=0, le=90)
     timezone: str = Field(default="system", min_length=1, max_length=80)
     widgets: list[Literal["clock", "status", "calendar", "work", "notes", "search"]] = Field(
@@ -101,7 +125,7 @@ class PreferencePatch(BaseModel):
     wallpaper_gradient_from: str | None = None
     wallpaper_gradient_to: str | None = None
     wallpaper_gradient_angle: int | None = None
-    wallpaper_image: str | None = None
+    wallpaper_image_version: int | None = None
     wallpaper_dim: int | None = None
     timezone: str | None = None
     widgets: list[str] | None = None
@@ -111,6 +135,16 @@ class PreferencePatch(BaseModel):
     restore_windows: bool | None = None
     animations: bool | None = None
     reduced_motion: bool | None = None
+
+
+class WallpaperImagePut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    image: str = Field(default="", max_length=WALLPAPER_IMAGE_MAX_CHARS)
+
+    @field_validator("image")
+    @classmethod
+    def valid_image(cls, value):
+        return validate_wallpaper_data_url(value)
 
 
 class Layout(BaseModel):
@@ -132,6 +166,7 @@ def create_app(settings=None):
         CREATE TABLE IF NOT EXISTS apps(id TEXT PRIMARY KEY,definition TEXT);
         CREATE TABLE IF NOT EXISTS layouts(owner TEXT PRIMARY KEY,layout TEXT);
         CREATE TABLE IF NOT EXISTS preferences(owner TEXT PRIMARY KEY,definition TEXT);
+        CREATE TABLE IF NOT EXISTS wallpaper_assets(owner TEXT PRIMARY KEY,image TEXT);
         CREATE TABLE IF NOT EXISTS app_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,target TEXT,at REAL);
         """)
 
@@ -309,6 +344,37 @@ def create_app(settings=None):
                 "INSERT OR REPLACE INTO preferences VALUES(?,?)", (actor.sub, updated.model_dump_json())
             )
         return response(request, updated.model_dump())
+
+    @app.get("/api/v1/users/me/wallpaper-image")
+    def get_wallpaper_image(request: Request, actor=Depends(scope("desktop:read"))):
+        with connect(path) as db:
+            prow = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
+            arow = db.execute("SELECT image FROM wallpaper_assets WHERE owner=?", (actor.sub,)).fetchone()
+        version = json.loads(prow[0]).get("wallpaper_image_version", 0) if prow else 0
+        image = arow[0] if arow else ""
+        return response(request, {"version": version if image else 0, "image": image})
+
+    @app.put("/api/v1/users/me/wallpaper-image")
+    def put_wallpaper_image(body: WallpaperImagePut, request: Request, actor=Depends(scope("desktop:read"))):
+        with transaction(path) as db:
+            row = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
+            old = json.loads(row[0]) if row else Preferences().model_dump()
+            try:
+                updated = Preferences.model_validate(
+                    {**old, "wallpaper_image_version": int(old.get("wallpaper_image_version", 0)) + 1}
+                )
+            except ValueError:
+                raise APIError(422, "INVALID_PREFERENCES", "invalid preference state") from None
+            if body.image:
+                db.execute(
+                    "INSERT OR REPLACE INTO wallpaper_assets VALUES(?,?)", (actor.sub, body.image)
+                )
+            else:
+                db.execute("DELETE FROM wallpaper_assets WHERE owner=?", (actor.sub,))
+            db.execute(
+                "INSERT OR REPLACE INTO preferences VALUES(?,?)", (actor.sub, updated.model_dump_json())
+            )
+        return response(request, {"version": updated.wallpaper_image_version})
 
     @app.get("/api/v1/users/me/app-audit")
     def registry_audit(request: Request, actor=Depends(scope("desktop:admin"))):

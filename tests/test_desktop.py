@@ -1,5 +1,8 @@
+import base64
+
 from fastapi.testclient import TestClient
 
+from xeonolab.desktop import WALLPAPER_IMAGE_MAX_BYTES
 from xeonolab.services import create_app
 
 from .conftest import auth
@@ -86,7 +89,7 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     assert changed["theme"] == "dark" and changed["timezone"] == "Asia/Shanghai"
     assert changed["widgets"] == ["clock", "status"]
     assert changed["wallpaper"] == "aurora" and changed["wallpaper_mode"] == "solid"
-    assert changed["wallpaper_image"] == "" and changed["wallpaper_dim"] == 0
+    assert changed["wallpaper_image_version"] == 0 and changed["wallpaper_dim"] == 0
     assert changed["notes"] == ""
     changed = client.patch(url, headers=auth(), json={"widgets": ["clock"]}).json()["data"]
     assert changed["widgets"] == ["clock"]
@@ -110,8 +113,9 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
         {"wallpaper_color": "blue"},
         {"wallpaper_gradient_angle": 361},
         {"wallpaper_dim": 91},
-        {"wallpaper_image": "https://cdn.example/wallpaper.png"},
-        {"wallpaper_image": "data:image/svg+xml;base64,PHN2Zy8+"},
+        {"wallpaper_image_version": -1},
+        # The image blob no longer rides on the preferences payload at all.
+        {"wallpaper_image": "data:image/png;base64,QUJD"},
         {"notes": "x" * 4001},
     ):
         assert client.patch(url, headers=auth(), json=invalid).status_code == 422
@@ -123,14 +127,17 @@ def test_preferences_custom_wallpaper_widgets_and_notes(settings):
     settings.dev_tokens["alice"]["scope"] += " desktop:read"
     client = TestClient(create_app("desktop-web", settings))
     url = "/api/v1/users/me/preferences"
-    png_data_url = "data:image/png;base64," + "A" * 64
+    image_url = "/api/v1/users/me/wallpaper-image"
+    # A real minimal PNG payload (signature + IHDR length/type) so the server-side
+    # magic-byte validation accepts it like the client-side canvas export would.
+    png_payload = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"0" * 48
+    png_data_url = "data:image/png;base64," + base64.b64encode(png_payload).decode()
     saved = client.patch(
         url,
         headers=auth(),
         json={
             "wallpaper": "custom",
             "wallpaper_mode": "image",
-            "wallpaper_image": png_data_url,
             "wallpaper_dim": 30,
             "widgets": ["clock", "calendar", "work", "search", "notes"],
             "notes": "回路测试用便签",
@@ -139,16 +146,40 @@ def test_preferences_custom_wallpaper_widgets_and_notes(settings):
     assert saved.status_code == 200
     data = saved.json()["data"]
     assert data["wallpaper"] == "custom" and data["wallpaper_mode"] == "image"
-    assert data["wallpaper_image"] == png_data_url and data["wallpaper_dim"] == 30
+    assert "wallpaper_image" not in data
+    assert data["wallpaper_dim"] == 30
     assert data["widgets"] == ["clock", "calendar", "work", "search", "notes"]
     assert data["notes"] == "回路测试用便签"
-    # An oversized image is rejected instead of bloating the preferences row.
-    oversized = client.patch(
-        url, headers=auth(), json={"wallpaper_image": "data:image/png;base64," + "A" * 2_800_001}
-    )
-    assert oversized.status_code == 422
-    # The stored row still holds the previous, valid wallpaper after the rejection.
-    assert client.get(url, headers=auth()).json()["data"]["wallpaper_image"] == png_data_url
+
+    put = client.put(image_url, headers=auth(), json={"image": png_data_url})
+    assert put.status_code == 200 and put.json()["data"]["version"] == 1
+    fetched = client.get(image_url, headers=auth()).json()["data"]
+    assert fetched["version"] == 1 and fetched["image"] == png_data_url
+    # A version bump via PUT is visible on the next preferences read.
+    assert client.get(url, headers=auth()).json()["data"]["wallpaper_image_version"] == 1
+
+    # Server-side validation rejects payloads that are not decodable images,
+    # and rejected writes leave the stored asset and version untouched.
+    for bad in (
+        {"image": "data:image/png;base64," + base64.b64encode(b"not an image at all").decode()},
+        {"image": "data:image/png;base64," + "A" * 64},
+        {"image": "data:image/svg+xml;base64,PHN2Zy8+"},
+        {"image": "data:image/png;base64," + "!" * 10},
+        {"image": "https://cdn.example/wallpaper.png"},
+        {"image": "data:image/png;base64," + base64.b64encode(b"\xff\xd8\xff" + b"0" * WALLPAPER_IMAGE_MAX_BYTES).decode()},
+    ):
+        assert client.put(image_url, headers=auth(), json=bad).status_code == 422, bad["image"][:40]
+    assert client.get(image_url, headers=auth()).json()["data"]["image"] == png_data_url
+
+    # Clearing the asset bumps the version again and empties the image.
+    cleared = client.put(image_url, headers=auth(), json={"image": ""})
+    assert cleared.status_code == 200 and cleared.json()["data"]["version"] == 2
+    assert client.get(image_url, headers=auth()).json()["data"] == {"version": 0, "image": ""}
+
+    # Frequent notes saves never carry or rewrite the image blob.
+    assert client.patch(url, headers=auth(), json={"notes": "第二轮"}).status_code == 200
+    prefs_after = client.get(url, headers=auth()).json()["data"]
+    assert prefs_after["notes"] == "第二轮" and prefs_after["wallpaper_image_version"] == 2
 
 
 def test_layout_remembers_explicitly_empty_dock(settings):

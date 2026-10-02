@@ -45,13 +45,38 @@ test('customWallpaperStyle ignores preset wallpapers', () => {
   assert.equal(customWallpaperStyle(null), null);
 });
 
-test('customWallpaperStyle builds a solid background', () => {
+test('solid mode returns an explicit none so the preset layers cannot bleed through', () => {
   const style = customWallpaperStyle({
     wallpaper: 'custom',
     wallpaper_mode: 'solid',
     wallpaper_color: '#0f172a',
   });
-  assert.deepEqual(style, {backgroundColor: '#0f172a', backgroundImage: '', imageMode: false});
+  assert.deepEqual(style, {backgroundColor: '#0f172a', backgroundImage: 'none', imageMode: false});
+});
+
+test('dim overlay always paints as the first background layer', () => {
+  const image = customWallpaperStyle({
+    wallpaper: 'custom',
+    wallpaper_mode: 'image',
+    wallpaper_image: 'data:image/png;base64,QUJD',
+    wallpaper_dim: 40,
+  });
+  assert.equal(image.imageMode, true);
+  // First layer wins in CSS; the dim gradient must lead the image layer.
+  assert.equal(
+    image.backgroundImage,
+    'linear-gradient(rgba(0, 0, 0, 0.400), rgba(0, 0, 0, 0.400)), url("data:image/png;base64,QUJD")',
+  );
+
+  const gradient = customWallpaperStyle({
+    wallpaper: 'custom',
+    wallpaper_mode: 'gradient',
+    wallpaper_gradient_from: '#111111',
+    wallpaper_gradient_to: '#222222',
+    wallpaper_dim: 90,
+  });
+  assert.equal(gradient.imageMode, false);
+  assert.equal(gradient.backgroundImage, 'linear-gradient(rgba(0, 0, 0, 0.900), rgba(0, 0, 0, 0.900)), linear-gradient(160deg, #111111, #222222)');
 });
 
 test('customWallpaperStyle builds a gradient with clamped angle and sanitized colors', () => {
@@ -76,32 +101,20 @@ test('customWallpaperStyle builds a gradient with clamped angle and sanitized co
   assert.equal(broken.backgroundImage, 'linear-gradient(0deg, #0b1220, #1d4ed8)');
 });
 
-test('customWallpaperStyle layers a dim overlay above image or gradient', () => {
-  const image = customWallpaperStyle({
-    wallpaper: 'custom',
-    wallpaper_mode: 'image',
-    wallpaper_image: 'data:image/png;base64,QUJD',
-    wallpaper_dim: 40,
-  });
-  assert.equal(image.imageMode, true);
-  assert.match(image.backgroundImage, /^url\("data:image\/png;base64,QUJD"\)/);
-  assert.match(image.backgroundImage, /linear-gradient\(rgba\(0, 0, 0, 0\.400\), rgba\(0, 0, 0, 0\.400\)\)$/);
+test('image mode prefers the override asset and falls back when it is missing', () => {
+  const override = customWallpaperStyle(
+    {wallpaper: 'custom', wallpaper_mode: 'image', wallpaper_image_version: 3},
+    'data:image/jpeg;base64,QUJDRA==',
+  );
+  assert.equal(override.imageMode, true);
+  assert.match(override.backgroundImage, /url\("data:image\/jpeg;base64,QUJDRA=="\)$/);
 
-  const gradient = customWallpaperStyle({
-    wallpaper: 'custom',
-    wallpaper_mode: 'gradient',
-    wallpaper_gradient_from: '#111111',
-    wallpaper_gradient_to: '#222222',
-    wallpaper_dim: 90,
-  });
-  assert.equal(gradient.imageMode, false);
-  assert.equal(gradient.backgroundImage, 'linear-gradient(160deg, #111111, #222222), linear-gradient(rgba(0, 0, 0, 0.900), rgba(0, 0, 0, 0.900))');
-});
-
-test('customWallpaperStyle falls back to gradient when the image is missing or rejected', () => {
-  const missing = customWallpaperStyle({wallpaper: 'custom', wallpaper_mode: 'image'});
-  assert.equal(missing.imageMode, false);
-  assert.match(missing.backgroundImage, /^linear-gradient\(160deg/);
+  const fallback = customWallpaperStyle(
+    {wallpaper: 'custom', wallpaper_mode: 'image', wallpaper_image_version: 3},
+    '',
+  );
+  assert.equal(fallback.imageMode, false);
+  assert.match(fallback.backgroundImage, /linear-gradient\(160deg/);
 
   const rejected = customWallpaperStyle({
     wallpaper: 'custom',
@@ -121,5 +134,5 @@ test('customWallpaperStyle clamps the dim value and skips zero dim', () => {
   assert.equal(clamped.backgroundImage, 'linear-gradient(rgba(0, 0, 0, 0.900), rgba(0, 0, 0, 0.900))');
 
   const zero = customWallpaperStyle({wallpaper: 'custom', wallpaper_mode: 'solid', wallpaper_dim: 0});
-  assert.equal(zero.backgroundImage, '');
+  assert.equal(zero.backgroundImage, 'none');
 });

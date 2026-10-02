@@ -82,19 +82,48 @@ export function WorkWidget({apiPage,onOpen}:{apiPage:APIPage;onOpen:()=>void}){
     <small>{items===null?'':`${truncated?'至少 ':''}${(items??[]).filter(isActiveWork).length} 项进行中 · 点击打开任务中心 →`}</small>
   </button>;
 }
-export function NotesWidget({notes,onChange}:{notes:string;onChange:(value:string)=>void}){
+type NotesSaver=(value:string,init?:RequestInit)=>Promise<void>;
+const NOTES_SAVE_STATUS:Record<'saving'|'saved'|'error',string>={saving:'保存中…',saved:'已保存',error:'保存失败，继续输入会重试'};
+export function NotesWidget({notes,onChange}:{notes:string;onChange:NotesSaver}){
   const [value,setValue]=useState(notes);
+  const [status,setStatus]=useState<'idle'|'saving'|'saved'|'error'>('idle');
   const synced=useRef(notes);
   const timer=useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(()=>{if(notes!==synced.current){synced.current=notes;setValue(notes);}},[notes]);
-  useEffect(()=>()=>clearTimeout(timer.current),[]);
+  const saving=useRef(false);
+  const pending=useRef<null | {value:string;keepalive?:boolean}>(null);
+  useEffect(()=>{if(notes!==synced.current&&!saving.current){synced.current=notes;setValue(notes);}},[notes]);
+  const flush=(keepalive?:boolean)=>{
+    clearTimeout(timer.current);
+    const next=pending.current;
+    pending.current=null;
+    if(next===null||next.value===synced.current)return;
+    synced.current=next.value;
+    saving.current=true;
+    setStatus('saving');
+    onChange(next.value,keepalive?{keepalive:true}:undefined)
+      .then(()=>{saving.current=false;if(pending.current===null)setStatus('saved')})
+      .catch(()=>{saving.current=false;setStatus('error')});
+  };
+  useEffect(()=>()=>{
+    // Window teardown (close, logout, navigation): the last burst of typing is
+    // flushed synchronously here; keepalive lets the PATCH survive navigation.
+    flush(true);
+    clearTimeout(timer.current);
+  },[]);
+  useEffect(()=>{
+    const onPageHide=()=>flush(true);
+    addEventListener('pagehide',onPageHide);
+    return()=>removeEventListener('pagehide',onPageHide);
+  },[]);
   const edit=(next:string)=>{
     setValue(next);
+    pending.current={value:next};
+    setStatus('idle');
     clearTimeout(timer.current);
-    timer.current=setTimeout(()=>{synced.current=next;onChange(next);},800);
+    timer.current=setTimeout(()=>flush(),800);
   };
   return <section className="widget widget-notes" aria-label="快速便签">
-    <header><strong>快速便签</strong></header>
+    <header><strong>快速便签</strong>{status!=='idle'&&<small role="status" data-tone={status==='error'?'error':undefined}>{NOTES_SAVE_STATUS[status]}</small>}</header>
     <textarea
       value={value}
       maxLength={4000}

@@ -66,6 +66,18 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     }
     return {...preferences};
   }
+  if (path === '/users/me/wallpaper-image') {
+    if (method === 'PUT' && body) {
+      const version = (stored('wallpaperVersion', 0) as number) + 1;
+      sessionStorage.setItem('shell-fixture:wallpaperVersion', JSON.stringify(version));
+      sessionStorage.setItem('shell-fixture:wallpaperImage', JSON.stringify(body.image || ''));
+      preferences.wallpaper_image_version = version;
+      sessionStorage.setItem('shell-fixture:preferences', JSON.stringify(preferences));
+      return {version};
+    }
+    const image = stored('wallpaperImage', '') as string;
+    return {version: image ? stored('wallpaperVersion', 0) : 0, image};
+  }
   if (path === '/users/me/layout') {
     if (method === 'PUT' && body) {
       if(control.failLayout)throw Error('synthetic layout save failure');
