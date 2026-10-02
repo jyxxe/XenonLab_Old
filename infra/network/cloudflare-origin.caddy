@@ -1,8 +1,8 @@
+import security-headers.caddy
+
 http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
   bind 192.168.0.101
-  header X-Content-Type-Options nosniff
-  header Referrer-Policy no-referrer
-  header Strict-Transport-Security "max-age=300"
+  import security_headers
   @outside not remote_ip 192.168.0.105 192.168.0.101
   handle @outside {
     respond "Tunnel connector required" 403
