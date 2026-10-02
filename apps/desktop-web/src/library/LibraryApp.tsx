@@ -191,6 +191,7 @@ export function LibraryApp({
   }
 
   function activateLoadedRow(rowId: string) {
+    ++rowNavigation.current;
     setActiveRowId(rowId);
     setInspectorOpen(true);
     setInspectorTab('overview');
