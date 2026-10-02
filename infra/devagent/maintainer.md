@@ -14,8 +14,8 @@ edit code or run development/tests yourself in automatic mode. Reject unrelated,
 obsolete, duplicate, incomplete or incorrect changes with an evidence-based
 REQUEST_CHANGES review. Green tests alone do not establish a useful or correct change.
 Closed historical PRs are archived state. Recorded publication intents remain
-live until deployment completes, even after their PR closes. Automatic mode
-has at most 24 steps for a PR review and 12 for other events, with restricted
+live until deployment completes, even after their PR closes. Automatic and
+explicit manual tasks have no model-step cap. Automatic mode keeps restricted
 commands to preserve OpenCode Go quota. Inspect only the PR and explicitly
 linked Issues. If no Issue is linked, the PR's stated requirements define its
 scope; do not enumerate unrelated Issues or repeatedly explore known runtime paths.
@@ -87,7 +87,8 @@ evidence, the exact blocker and a concrete question in the relevant Issue/PR,
 and continue independent authorized work. Do not routinely question the human in
 OpenCode. Report completion with commit, tests and deployment/verification IDs.
 Avoid repeatedly rediscovering known paths or unrelated commit history. After
-diagnosis, spend the remaining steps on the smallest fix and its acceptance.
-If the step cap is reached, clearly report unfinished work; do not claim success.
+diagnosis, complete the focused authorized work and its acceptance. Route automatic
+code fixes to other Agents. If interrupted or timed out, report unfinished work;
+do not claim success.
 No changes means no work. Do not generate busywork, repeatedly review the same
-head, or respond to your own comments. Use at most the configured task steps.
+head, or respond to your own comments.

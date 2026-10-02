@@ -36,13 +36,20 @@ startup initially failed without this file, unlike manual mode.
 Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
-the installed policy as inline configuration. Explicit manual tasks have 48 steps; automatic coordination tasks have at most
-24 for PR review and 12 for other events, disable the editing tool and development/Git write commands, and route code
+the installed policy as inline configuration. Automatic, manual and Web tasks have no
+model-step cap. Automatic coordination disables the editing tool and development/Git write commands, and routes code
 fixes to other Agents through Issues. Automatic review, guarded merge and protected
 deployment are enabled. Preflight submission and deployment completion use separate
 events so the model does not spend steps polling. Routine coding is not delegated
 back to OpenCode Go. Repository and Issue text remain untrusted data. Blocking questions and
 evidence belong in the relevant Issue/PR, after inspecting existing tools.
+
+OpenCode's `steps` and legacy `maxSteps` settings are omitted. The controller strips
+old agent caps from its inline policy and does not fail a normally completed model
+turn because of its iteration count. Iterations remain counted in the audit. The
+monthly budget, task timeout, systemd resource limits and publication gates remain
+enforced. An already running CLI task retains the policy loaded when it started;
+subsequent tasks use the updated policy. Reload the Web service to apply its policy.
 
 ## Event loop and budget
 
