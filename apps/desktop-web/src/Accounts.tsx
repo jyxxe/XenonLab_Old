@@ -3,6 +3,7 @@ import {isUnregisteredAccountError} from './api-error.js';
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type Account={id:string;parent:string|null;username:string;name:string;enabled:boolean;inherit_all:boolean;grants:string[];effective_scopes:string[];kind:string};
 const labels:Record<string,string>={'accounts:manage':'管理子账号','desktop:read':'访问桌面','desktop:admin':'管理桌面应用','dev:read':'读取开发任务','dev:write':'更新开发任务','xelibrary:read':'读取知识库','xelibrary:write':'编辑知识库','xelibrary:query':'查询知识库','xelibrary:attach':'管理附件','xelibrary:admin':'管理知识库权限','embedding:read':'读取向量','embedding:write':'生成向量','llm:use':'使用模型','deploy:read':'查看发布','deploy:release':'登记发布','deploy:approve':'审批发布','deploy:execute':'执行发布（仍需 Codex 身份）'};
+function displayError(error:unknown,fallback:string){return error instanceof Error&&error.message.trim()?error.message:fallback}
 function Scopes({available,selected,setSelected}:{available:string[];selected:string[];setSelected:(s:string[])=>void}){return <div className="scope-grid">{available.map(scope=><label key={scope}><input type="checkbox" checked={selected.includes(scope)} onChange={e=>setSelected(e.target.checked?[...selected,scope]:selected.filter(s=>s!==scope))}/>{labels[scope]||scope}</label>)}</div>}
 export function Accounts({api}:{api:API}){
  const [me,setMe]=useState<any>(null),[nodes,setNodes]=useState<Account[]>([]),[chosen,setChosen]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
@@ -14,9 +15,9 @@ export function Accounts({api}:{api:API}){
  const canManage=me?.kind==='human'&&(me.scopes.includes('accounts:manage')||me.scopes.includes('desktop:admin'));
  const canPolicy=canManage&&!!selected&&(chosen!==me?.subject||selected.parent===null);
  async function load(){const identity=await api('/users/me');setMe(identity);let rows:Account[]=[],cursor='';try{for(;;){const page=await api('/auth/accounts?limit=1000&cursor='+encodeURIComponent(cursor));rows.push(...page);if(page.length<1000)break;cursor=page[page.length-1].id}}catch(error){if(!isUnregisteredAccountError(error))throw error;setNodes([]);setChosen('');setParent('');setTreeState('unregistered');return}setNodes(rows);setTreeState('ready');setChosen(old=>rows.some(r=>r.id===old)?old:identity.subject);setParent(old=>rows.some(r=>r.id===old)?old:identity.subject)}
- async function act(action:()=>Promise<void>){setBusy(true);setMessage('');try{await action()}catch(e){setMessage(String(e))}finally{setBusy(false)}}
+ async function act(action:()=>Promise<void>){setBusy(true);setMessage('');try{await action()}catch(e){setMessage(displayError(e,'操作失败，请重试'))}finally{setBusy(false)}}
  useEffect(()=>{act(load)},[]);
- useEffect(()=>{if(!selected)return;setName(selected.name);setEnabled(selected.enabled);setInherit(selected.inherit_all);setGrants(selected.grants);setKeyScopes(selected.effective_scopes.filter(s=>s==='desktop:read'));setSecret('');setReset('');api('/auth/api-keys?owner='+encodeURIComponent(chosen)).then(setKeys).catch(e=>setMessage(String(e)))},[chosen,nodes]);
+ useEffect(()=>{if(!selected)return;setName(selected.name);setEnabled(selected.enabled);setInherit(selected.inherit_all);setGrants(selected.grants);setKeyScopes(selected.effective_scopes.filter(s=>s==='desktop:read'));setSecret('');setReset('');api('/auth/api-keys?owner='+encodeURIComponent(chosen)).then(setKeys).catch(e=>setMessage(displayError(e,'读取 API key 失败，请重试')))},[chosen,nodes]);
  const depth=(n:Account)=>{let d=0,p=n.parent;const seen=new Set<string>();while(p&&d<128&&!seen.has(p)){seen.add(p);const row=nodes.find(r=>r.id===p);if(!row)break;p=row.parent;d++}return d};
  const available=selected?.parent?nodes.find(n=>n.id===selected.parent)?.effective_scopes||selected.effective_scopes:selected?.effective_scopes||[];
  return <section className="account-manager"><h2>账号与 API key</h2><p>子账号的有效权限随父账号变化。API key 只显示一次，撤销后立即停止授权。</p><p role="status">{message}</p>
