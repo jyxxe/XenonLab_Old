@@ -117,3 +117,32 @@ def test_layout_remembers_explicitly_empty_dock(settings):
     assert saved.json()["data"]["dock_initialized"] is True
     restarted = TestClient(create_app("desktop-web", settings))
     assert restarted.get(url, headers=auth()).json()["data"]["dock_initialized"] is True
+
+
+def test_preferences_persist_library_recents_and_favorites(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/preferences"
+    recents = [
+        {"kind": "table", "id": "t1", "title": "表一", "at": 20},
+        {"kind": "row", "id": "t1:row-2", "title": "行二", "at": 10},
+        {"junk": True},
+        {"kind": "", "id": "x", "title": "dropped", "at": 5},
+    ]
+    favorites = [{"kind": "table", "id": "t9", "title": "x" * 500, "at": 7}]
+    patch = client.patch(url, headers=auth(), json={"library_recents": recents, "library_favorites": favorites})
+    assert patch.status_code == 200, patch.text
+    stored = patch.json()["data"]
+    assert stored["library_recents"] == [
+        {"kind": "table", "id": "t1", "title": "表一", "at": 20},
+        {"kind": "row", "id": "t1:row-2", "title": "行二", "at": 10},
+    ]
+    assert stored["library_favorites"][0]["title"] == "x" * 200
+    assert len(client.patch(url, headers=auth(), json={
+        "library_favorites": [{"kind": "table", "id": f"t{i}", "title": "x", "at": i} for i in range(80)],
+    }).json()["data"]["library_favorites"]) == 50
+    restarted = TestClient(create_app("desktop-web", settings))
+    assert restarted.get(url, headers=auth()).json()["data"]["library_recents"][0]["id"] == "t1"
+    # another account stays isolated
+    settings.dev_tokens["bob"]["scope"] += " desktop:read"
+    assert restarted.get(url, headers=auth("bob")).json()["data"]["library_recents"] == []

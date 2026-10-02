@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage} from '../shell/types';
-import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, toggleFavorite} from './logic.js';
+import {libraryPrefsStorageKey, mergeRecent, mergeServerPrefs, parseFieldFilters, toggleFavorite} from './logic.js';
 import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
 export const SEARCH_LIMIT = 25;
@@ -514,7 +514,7 @@ export function useTheorems(apiPage: APIPage) {
   };
 }
 
-export function useLibraryPrefs(subject: string | null | undefined) {
+export function useLibraryPrefs(subject: string | null | undefined, api?: API) {
   const owner = subject || null;
   const recentKey = libraryPrefsStorageKey(owner, 'recent');
   const favoritesKey = libraryPrefsStorageKey(owner, 'favorites');
@@ -524,6 +524,35 @@ export function useLibraryPrefs(subject: string | null | undefined) {
     favorites: read(favoritesKey),
   }));
   const cacheOwner = owner || 'anonymous';
+
+  // Issue #72: recents/favorites follow the account across devices. The server
+  // copy is merged over the local cache on load; later changes push back.
+  useEffect(() => {
+    if (!api || !owner) return;
+    let active = true;
+    api('/users/me/preferences')
+      .then((prefs: {library_recents?: RecentEntry[]; library_favorites?: RecentEntry[]}) => {
+        if (!active) return;
+        const mergedRecent = mergeServerPrefs(read(recentKey), prefs.library_recents, 'recent');
+        const mergedFavorites = mergeServerPrefs(read(favoritesKey), prefs.library_favorites, 'favorites');
+        write(recentKey, mergedRecent);
+        write(favoritesKey, mergedFavorites);
+        setCache({owner: cacheOwner, recent: mergedRecent, favorites: mergedFavorites});
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [api, cacheOwner, favoritesKey, owner, recentKey]);
+
+  const pushServer = useCallback((section: 'library_recents' | 'library_favorites', entries: RecentEntry[]) => {
+    if (!api) return;
+    void api('/users/me/preferences', {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({[section]: entries}),
+    }).catch(() => undefined);
+  }, [api]);
   if (cache.owner !== cacheOwner) {
     setCache({owner: cacheOwner, recent: read(recentKey), favorites: read(favoritesKey)});
   }
@@ -535,18 +564,20 @@ export function useLibraryPrefs(subject: string | null | undefined) {
       const previous = current.owner === cacheOwner ? current.recent : read(recentKey);
       const next = mergeRecent(previous, entry);
       write(recentKey, next);
+      pushServer('library_recents', next);
       return {owner: cacheOwner, recent: next, favorites: current.owner === cacheOwner ? current.favorites : read(favoritesKey)};
     });
-  }, [cacheOwner, favoritesKey, recentKey]);
+  }, [cacheOwner, favoritesKey, pushServer, recentKey]);
 
   const toggle = useCallback((entry: RecentEntry) => {
     setCache(current => {
       const previous = current.owner === cacheOwner ? current.favorites : read(favoritesKey);
       const next = toggleFavorite(previous, entry);
       write(favoritesKey, next);
+      pushServer('library_favorites', next);
       return {owner: cacheOwner, recent: current.owner === cacheOwner ? current.recent : read(recentKey), favorites: next};
     });
-  }, [cacheOwner, favoritesKey, recentKey]);
+  }, [cacheOwner, favoritesKey, pushServer, recentKey]);
 
   return {recent, favorites, remember, toggle};
 }

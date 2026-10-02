@@ -42,6 +42,7 @@ export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;
 export function indexStatusFromJobs(jobs?: Job[]): {state: string; detail: string; latest?: Job};
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];
+export function mergeServerPrefs(local: any[] | null | undefined, server: any[] | null | undefined, kind: 'recent' | 'favorites'): any[];
 export function toggleFavorite(list: any[], entry: any): any[];
 export function isFavorite(list: any[], entry: any): boolean;
 export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites'): string;

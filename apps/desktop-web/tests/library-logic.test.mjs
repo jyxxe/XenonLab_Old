@@ -13,6 +13,7 @@ import {
   indexStatusFromJobs,
   isKeywordResult,
   libraryPrefsStorageKey,
+  mergeServerPrefs,
   mergeRecent,
   parseFieldFilters,
   rowHasAttachment,
@@ -189,4 +190,26 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
   assert.equal(withQueryPagination('FROM "/**"', 100, 20), 'FROM "/**" LIMIT 100 OFFSET 20');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(-1), '—');
+});
+
+test('mergeServerPrefs unions by kind+id preferring fresher timestamps', () => {
+  const local = [
+    {kind: 'table', id: 't1', title: 'local t1', at: 30},
+    {kind: 'table', id: 't2', title: 'local t2', at: 5},
+    {kind: 'row', id: 't1:row-9', title: 'local row', at: 7},
+  ];
+  const server = [
+    {kind: 'table', id: 't1', title: 'server t1', at: 20},
+    {kind: 'table', id: 't9', title: 'server t9', at: 40},
+  ];
+  const merged = mergeServerPrefs(local, server, 'recent');
+  const byId = Object.fromEntries(merged.map(entry => [entry.id, entry]));
+  assert.equal(byId['t1'].title, 'local t1', 'fresher local entry wins');
+  assert.equal(byId['t2'].title, 'local t2', 'local-only entry kept');
+  assert.equal(byId['t9'].title, 'server t9', 'server-only entry kept');
+  assert.equal(merged[0].id, 't9', 'recents sort by at descending');
+  assert.equal(merged.length, 4, 'union of local and server entries');
+  const favorites = mergeServerPrefs([], server, 'favorites');
+  assert.equal(favorites.length, 2, 'server favorites adopted when local is empty');
+  assert.equal(mergeServerPrefs(null, null, 'favorites').length, 0);
 });

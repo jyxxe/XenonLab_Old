@@ -1322,6 +1322,36 @@
               }
             ],
             "title": "Reduced Motion"
+          },
+          "library_recents": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Recents"
+          },
+          "library_favorites": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Favorites"
           }
         },
         "additionalProperties": false,

@@ -60,6 +60,13 @@ class Preferences(BaseModel):
     restore_windows: bool = True
     animations: bool = True
     reduced_motion: bool = False
+    library_recents: list[dict] = Field(default_factory=list, max_length=50)
+    library_favorites: list[dict] = Field(default_factory=list, max_length=50)
+
+    @field_validator("library_recents", "library_favorites")
+    @classmethod
+    def _clean_library_entries_fields(cls, value):
+        return _clean_library_entries(value)
 
     @field_validator("timezone")
     @classmethod
@@ -70,6 +77,25 @@ class Preferences(BaseModel):
             except (ZoneInfoNotFoundError, ValueError):
                 raise ValueError("IANA timezone required") from None
         return value
+
+
+def _clean_library_entries(value):
+    """Normalize server-persisted library recents/favorites entries (issue #72)."""
+    cleaned = []
+    for entry in value or []:
+        if not isinstance(entry, dict):
+            continue
+        kind, entry_id = entry.get("kind"), entry.get("id")
+        if not isinstance(kind, str) or not kind or not isinstance(entry_id, str) or not entry_id:
+            continue
+        at = entry.get("at")
+        cleaned.append({
+            "kind": kind[:32],
+            "id": entry_id[:128],
+            "title": str(entry.get("title", ""))[:200],
+            "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else 0,
+        })
+    return cleaned[:50]
 
 
 class PreferencePatch(BaseModel):
@@ -84,6 +110,13 @@ class PreferencePatch(BaseModel):
     restore_windows: bool | None = None
     animations: bool | None = None
     reduced_motion: bool | None = None
+    library_recents: list[dict] | None = None
+    library_favorites: list[dict] | None = None
+
+    @field_validator("library_recents", "library_favorites")
+    @classmethod
+    def _clean_patch_library_entries(cls, value):
+        return None if value is None else _clean_library_entries(value)
 
 
 class Layout(BaseModel):

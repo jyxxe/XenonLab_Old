@@ -265,6 +265,25 @@ export function indexStatusFromJobs(jobs = []) {
   return {state, detail, latest};
 }
 
+export function mergeServerPrefs(local, server, kind) {
+  
+  // Union of local and server entries keyed by kind+id, keeping the fresher
+  // copy of each; the server ordering wins for ties so all devices converge.
+  const key = entry => `${entry.kind}:${entry.id}`;
+  const merged = new Map();
+  for (const entry of server || []) {
+    if (entry && entry.kind && entry.id) merged.set(key(entry), {...entry});
+  }
+  for (const entry of local || []) {
+    if (!entry || !entry.kind || !entry.id) continue;
+    const existing = merged.get(key(entry));
+    if (!existing || Number(entry.at) > Number(existing.at)) merged.set(key(entry), {...entry});
+  }
+  const list2 = [...merged.values()];
+  if (kind === 'recent') return list2.sort((a, b) => Number(b.at) - Number(a.at)).slice(0, 8);
+  return list2.slice(0, 50);
+}
+
 export function mergeRecent(list, entry, limit = 8) {
   const filtered = list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
   return [entry, ...filtered].slice(0, limit);
