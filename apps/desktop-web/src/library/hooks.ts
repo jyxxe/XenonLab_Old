@@ -7,26 +7,24 @@ import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchM
 export const SEARCH_LIMIT = 25;
 export const DEFAULT_QUERY = 'FROM "/**" LIMIT 100';
 
-export function useScopes(api: API) {
-  const [scopes, setScopes] = useState<string[]>([]);
-  const [subject, setSubject] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
+export function useScopes(api: API, authEpoch = 0) {
+  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+  const current = identity.epoch === authEpoch ? identity : {epoch: authEpoch, scopes: [], subject: null, loaded: false};
   useEffect(() => {
     let active = true;
+    setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: false});
     api('/users/me')
       .then(me => {
         if (active) {
-          setScopes(me.scopes || []);
-          setSubject(typeof me.subject === 'string' ? me.subject : null);
-          setLoaded(true);
+          setIdentity({epoch: authEpoch, scopes: me.scopes || [], subject: typeof me.subject === 'string' && me.subject.trim() ? me.subject : null, loaded: true});
         }
       })
-      .catch(() => active && setLoaded(true));
+      .catch(() => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true}));
     return () => {
       active = false;
     };
-  }, [api]);
-  return {scopes, subject, loaded};
+  }, [api, authEpoch]);
+  return current;
 }
 
 export function useCatalogue(apiPage: APIPage) {
@@ -306,7 +304,7 @@ export function useSearch(apiPage: APIPage) {
   return {mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, hits, meta, error, running, ran, run, reset};
 }
 
-export function useQueryConsole(apiPage: APIPage, subject: string | null) {
+export function useQueryConsole(apiPage: APIPage, subject: string | null, identityVerified = Boolean(subject), authEpoch = 0) {
   const [draftState, setDraftState] = useState({owner: null as string | null, expression: DEFAULT_QUERY, recent: [] as Array<{expression: string; updated_at: string}>, status: 'unverified', message: ''});
   const ownerKey = queryDraftsStorageKey(subject);
   const currentDraftState = draftState.owner === subject ? draftState : null;
@@ -323,6 +321,19 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
   const [duration, setDuration] = useState<number | null>(null);
   const generation = useRef(0);
   const validationGeneration = useRef(0);
+  const observedAuthEpoch = useRef(authEpoch);
+  if (observedAuthEpoch.current !== authEpoch) {
+    observedAuthEpoch.current = authEpoch;
+    generation.current += 1;
+    validationGeneration.current += 1;
+    setRows([]);
+    setMeta({});
+    setPlan(null);
+    setError(null);
+    setRunning(false);
+    setValidating(false);
+    setDuration(null);
+  }
 
   useEffect(() => {
     if (!ownerKey || !subject) {
@@ -346,7 +357,7 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
   }, [ownerKey, subject]);
 
   const persistDraftState = useCallback((next: typeof draftState) => {
-    if (!subject || next.owner !== subject || next.status !== 'ready') return next;
+    if (!subject || observedAuthEpoch.current !== authEpoch || next.owner !== subject || next.status !== 'ready') return next;
     let result;
     try {
       result = writeQueryDrafts(window.localStorage, subject, {expression: next.expression, updated_at: new Date().toISOString()}, next.recent);
@@ -356,7 +367,7 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
     return result.error
       ? {...next, status: 'write-error', message: '本地查询记录无法保存；修改仍保留在当前页面。可重试保存。'}
       : next;
-  }, [subject]);
+  }, [authEpoch, subject]);
 
   const setExpression = useCallback((value: string) => {
     if (Array.from(value).length > QUERY_EXPRESSION_LIMIT) {
@@ -381,6 +392,7 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
 
   const validate = useCallback(
     async (text: string) => {
+      if (!identityVerified || observedAuthEpoch.current !== authEpoch) return false;
       const request = ++validationGeneration.current;
       setValidating(true);
       setError(null);
@@ -398,11 +410,12 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
         if (request === validationGeneration.current) setValidating(false);
       }
     },
-    [apiPage],
+    [apiPage, authEpoch, identityVerified],
   );
 
   const run = useCallback(
     async (text: string, remember = true) => {
+      if (!identityVerified || observedAuthEpoch.current !== authEpoch) return;
       const request = ++generation.current;
       setRunning(true);
       setError(null);
@@ -433,7 +446,7 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
         }
       }
     },
-    [apiPage, ownerKey, persistDraftState, subject, validate],
+    [apiPage, authEpoch, identityVerified, ownerKey, persistDraftState, subject, validate],
   );
 
   const loadRecent = useCallback((item: {expression: string}) => setExpression(item.expression), [setExpression]);
@@ -446,7 +459,7 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
   const deleteRecent = useCallback((expressionToDelete: string) => updateRecent(recent.filter(item => item.expression !== expressionToDelete)), [recent, updateRecent]);
   const clearRecent = useCallback(() => updateRecent([]), [updateRecent]);
   const retryStorage = useCallback(() => {
-    if (!subject) return;
+    if (!subject || observedAuthEpoch.current !== authEpoch) return;
     let storage;
     try { storage = window.localStorage; } catch (error) {
       setDraftState(current => current.owner === subject ? {...current, status: 'read-error', message: '浏览器仍拒绝访问本地存储；可继续使用查询，但不会保存。'} : current);
@@ -459,9 +472,9 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null) {
       const result = readQueryDrafts(storage, subject);
       setDraftState({owner: subject, expression: result.draft?.expression ?? DEFAULT_QUERY, recent: result.recent, status: result.ready ? 'ready' : 'read-error', message: result.ready ? '本地查询记录已重新读取。' : '本地查询记录仍无法读取；当前编辑只保存在本页。'});
     }
-  }, [currentDraftState, draftStatus, subject]);
+  }, [authEpoch, currentDraftState, draftStatus, subject]);
 
-  return {expression, setExpression, rows, meta, plan, error, running, validating, duration, run, validate, recent, draftStatus, draftMessage, loadRecent, deleteRecent, clearRecent, retryStorage};
+  return {expression, setExpression, rows: identityVerified ? rows : [], meta: identityVerified ? meta : {}, plan: identityVerified ? plan : null, error: identityVerified ? error : null, running: identityVerified && running, validating: identityVerified && validating, duration: identityVerified ? duration : null, run, validate, recent, draftStatus, draftMessage, loadRecent, deleteRecent, clearRecent, retryStorage};
 }
 
 export function useTheorems(apiPage: APIPage) {

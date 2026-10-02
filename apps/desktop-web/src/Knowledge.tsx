@@ -8,7 +8,7 @@ import {LibraryApp} from './library/LibraryApp';
  * inspector all live under `src/library/`; this module keeps the historical
  * `Knowledge` export so the desktop shell and the library-origin page are unchanged.
  */
-export function Knowledge({api, apiPage, apiRaw, intent, apps, openApp, notify}: {
+export function Knowledge({api, apiPage, apiRaw, intent, apps, openApp, notify, authEpoch = 0}: {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
@@ -16,6 +16,7 @@ export function Knowledge({api, apiPage, apiRaw, intent, apps, openApp, notify}:
   apps: DesktopApp[];
   openApp: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
   notify: (toast: {title: string; tone?: 'info' | 'success' | 'danger'}) => void;
+  authEpoch?: number;
 }) {
   return (
     <LibraryApp
@@ -26,6 +27,7 @@ export function Knowledge({api, apiPage, apiRaw, intent, apps, openApp, notify}:
       apps={apps}
       openApp={openApp}
       notify={notify}
+      authEpoch={authEpoch}
     />
   );
 }

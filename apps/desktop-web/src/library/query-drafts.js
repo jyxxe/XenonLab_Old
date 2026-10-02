@@ -35,7 +35,7 @@ export function readQueryDrafts(storage, subject) {
     const raw = storage.getItem(key);
     if (!raw) return {draft: null, recent: [], error: null, ready: true};
     const value = JSON.parse(raw);
-    if (value?.version !== VERSION) return {draft: null, recent: [], error: null, ready: true};
+    if (value?.version !== VERSION) return {draft: null, recent: [], error: new Error('Unsupported query draft schema version'), ready: false};
     const draft = validExpression(value.draft?.expression)
       ? {expression: value.draft.expression, updated_at: typeof value.draft.updated_at === 'string' ? value.draft.updated_at : ''}
       : null;

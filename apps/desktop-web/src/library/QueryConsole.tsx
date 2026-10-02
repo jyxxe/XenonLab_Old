@@ -25,6 +25,7 @@ export function QueryConsole({
   recent,
   draftStatus,
   draftMessage,
+  queryEnabled,
   onRun,
   onValidate,
   onOpenRow,
@@ -46,6 +47,7 @@ export function QueryConsole({
   recent: Array<{expression: string; updated_at: string}>;
   draftStatus: string;
   draftMessage: string;
+  queryEnabled: boolean;
   onRun: (expression: string, remember?: boolean) => void;
   onValidate: (expression: string) => Promise<boolean> | void;
   onOpenRow: (tableId: string, rowId: string) => void;
@@ -87,6 +89,7 @@ export function QueryConsole({
         <p>当前表达式 {queryExpressionLength(expression)} / {QUERY_EXPRESSION_LIMIT} 个字符。草稿按已验证账号保存在本机；校验通过后加入最近查询，最多保留 20 条并按表达式去重。载入只恢复表达式，不会执行查询。</p>
         {draftStatus === 'unverified' && <p role="status">正在确认当前账号；确认前不会读取或保存查询记录。</p>}
         {draftStatus === 'loading' && <p role="status">正在读取当前账号的查询草稿…</p>}
+        {!queryEnabled && <p role="status">身份正在验证；验证完成前查询操作已暂停。</p>}
         {draftStatus === 'read-error' || draftStatus === 'write-error' ? <div role="alert"><span>{draftMessage}</span> <Button size="sm" onClick={onRetryStorage}>重试本地存储</Button></div> : draftMessage && <p role="status">{draftMessage}</p>}
         <details>
           <summary>最近查询（{recent.length} / 20）</summary>
@@ -103,8 +106,8 @@ export function QueryConsole({
       </div>
 
       <div className="library-query-toolbar">
-        <Button variant="primary" onClick={() => onRun(expression)} disabled={running}>{running ? '执行中…' : '运行'}</Button>
-        <Button onClick={() => void onValidate(expression)} disabled={running || validating}>{validating ? '校验中…' : '校验语法'}</Button>
+        <Button variant="primary" onClick={() => onRun(expression)} disabled={!queryEnabled || running}>{running ? '执行中…' : '运行'}</Button>
+        <Button onClick={() => void onValidate(expression)} disabled={!queryEnabled || running || validating}>{validating ? '校验中…' : '校验语法'}</Button>
         <Button
           onClick={async () => {
             try {

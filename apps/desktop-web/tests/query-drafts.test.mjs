@@ -55,3 +55,12 @@ test('storage read and write exceptions are returned for UI recovery instead of 
   const saved = writeQueryDrafts(writeFailure, 'alice', {expression: 'FROM "/**"', updated_at: ''}, []);
   assert.equal(saved.error.name, 'QuotaExceededError');
 });
+
+test('unknown stored schema versions fail closed instead of being overwritten as empty history', () => {
+  const storage = memoryStorage();
+  storage.setItem(queryDraftsStorageKey('alice'), JSON.stringify({version: 2, draft: {expression: 'from future'}, recent: []}));
+  const result = readQueryDrafts(storage, 'alice');
+  assert.equal(result.ready, false);
+  assert.match(result.error.message, /Unsupported/);
+  assert.equal(result.draft, null);
+});
