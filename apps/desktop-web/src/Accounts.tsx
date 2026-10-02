@@ -29,7 +29,10 @@ export function Accounts({api}:{api:API}){
    if(enabled!==selected.enabled)patch.enabled=enabled;
    if(inherit!==selected.inherit_all)patch.inherit_all=inherit;
    const before=[...new Set(selected.grants)].sort(),after=[...new Set(grants)].sort();
-   if(before.join('\0')!==after.join('\0'))patch.grants=after.filter(scope=>available.includes(scope));
+   if(before.join('\0')!==after.join('\0')){
+    if(unavailableGrants.length){setMessage('请先明确移除所有超出父账号当前权限的旧 grants，再保存权限变更。');return}
+    patch.grants=after;
+   }
   }
   if(!Object.keys(patch).length){setMessage('没有需要保存的更改');return}
   await api('/auth/accounts/'+chosen,{method:'PATCH',body:JSON.stringify(patch)});

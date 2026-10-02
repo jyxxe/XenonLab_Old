@@ -14,7 +14,7 @@
       import {Accounts} from '/src/Accounts.tsx';
       import {APIRequestError} from '/src/api-error.js';
 
-      const parentScopes = ['accounts:manage', 'desktop:admin', 'desktop:read', 'xelibrary:read'];
+      const parentScopes = ['accounts:manage', 'desktop:admin', 'desktop:read', 'xelibrary:query', 'xelibrary:read'];
       const rows = [
         {id: 'root', parent: null, username: 'admin', name: 'Root', enabled: true, inherit_all: false,
           grants: [...parentScopes], effective_scopes: [...parentScopes], kind: 'human'},

@@ -32,11 +32,16 @@ test('account edits omit unchanged grants and remove revoked grants only on expl
       id: 'child', body: {enabled: false},
     });
     await page.getByText('已不可授予的旧权限').waitFor();
+    await page.locator('.account-detail .scope-grid').first().getByLabel('查询知识库').check();
+    await page.getByRole('button', {name: '保存账号设置'}).click();
+    await page.getByRole('status').filter({hasText: '请先明确移除所有超出父账号当前权限的旧 grants'}).waitFor();
+    assert.equal(await page.evaluate(() => window.__accountPatchCalls.length), 2);
+
     await page.getByRole('button', {name: '移除 编辑知识库'}).click();
     await page.getByRole('button', {name: '保存账号设置'}).click();
     await page.waitForFunction(() => window.__accountPatchCalls?.length === 3);
     assert.deepEqual(await page.evaluate(() => window.__accountPatchCalls[2]), {
-      id: 'child', body: {grants: ['desktop:read', 'xelibrary:read']},
+      id: 'child', body: {grants: ['desktop:read', 'xelibrary:query', 'xelibrary:read']},
     });
     await page.getByText('已不可授予的旧权限').waitFor({state: 'detached'});
     assert.equal(await page.getByRole('status').filter({hasText: '账号已更新'}).count(), 1);
