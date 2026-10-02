@@ -17,6 +17,15 @@ public issuer. Other paths return 404 to loopback; all non-loopback clients are
 denied. This is an internal transport route for one host, not a new public site
 or issuer.
 
+The allowlist is enforced with an explicit Caddy `route` block. Its ordered
+handlers first return 403 for every non-loopback request, then handle only
+`/auth/*`, and finally return 404 for other loopback paths. Do not rely on
+textual order between top-level `respond` and `handle` directives: Caddyfile
+adaptation sorts directives, and a top-level guard can run after a handler.
+An actual request from a separate LAN client must receive HTTP 403 from this
+vhost before the desktop-web namespace is changed; a network-level rejection
+does not prove the route guard.
+
 The mapping is mounted only into desktop-web's systemd namespace; VM101's host
 and other services retain public DNS resolution. Verify both views after
 installation. No other VM, system DNS, Cloudflare route, firewall, or desktop
