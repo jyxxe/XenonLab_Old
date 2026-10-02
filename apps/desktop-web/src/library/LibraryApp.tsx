@@ -562,6 +562,8 @@ export function LibraryApp({
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          tab={inspectorTab}
+          onTabChange={setInspectorTab}
           table={table}
           columns={table.columns || []}
           row={selectedRow}
