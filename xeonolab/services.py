@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import ssl
 from pathlib import Path
 
@@ -12,6 +13,48 @@ from fastapi import Depends, Request
 from pydantic import BaseModel, Field
 
 from .common import APIError, base_app, connect, response, scope, transaction
+
+
+def _next_sse_frame(buffer):
+    candidates = [(buffer.find(delimiter), len(delimiter)) for delimiter in (b"\r\n\r\n", b"\n\n", b"\r\r")]
+    candidates = [(index, length) for index, length in candidates if index >= 0]
+    if not candidates:
+        return None
+    index, length = min(candidates)
+    end = index + length
+    frame = bytes(buffer[:end])
+    del buffer[:end]
+    return frame
+
+
+def _sse_frame_kind(frame):
+    event_name = b""
+    data_lines = []
+    for line in re.split(rb"\r\n|\r|\n", frame):
+        if line.startswith(b"event:"):
+            event_name = line[6:].strip()
+        elif line.startswith(b"data:"):
+            value = line[5:]
+            data_lines.append(value[1:] if value.startswith(b" ") else value)
+    if event_name == b"error":
+        return "error"
+    data = b"\n".join(data_lines).strip()
+    if data == b"[DONE]":
+        return "done"
+    if data:
+        try:
+            payload = json.loads(data)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return "data"
+        if isinstance(payload, dict) and "error" in payload:
+            return "error"
+    return "data"
+
+
+_SAFE_STREAM_ERROR = (
+    b'data: {"error":{"message":"LLM provider stream failed",'
+    b'"type":"provider_error","code":"PROVIDER_ERROR"}}\n\n'
+)
 
 SERVICES = [
     "xelibrary",
@@ -195,6 +238,25 @@ def create_app(service=None, settings=None):
 
     elif service == "llm-gateway":
 
+        def bounded_setting(name, default, minimum, maximum):
+            raw = os.getenv(name, str(default))
+            try:
+                value = int(raw)
+            except ValueError:
+                raise ValueError(f"{name} must be an integer") from None
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{name} must be between {minimum} and {maximum}")
+            return value
+
+        app.state.llm_stream_timeout_seconds = bounded_setting("LLM_STREAM_TIMEOUT_SECONDS", 600, 1, 3600)
+        app.state.llm_stream_max_response_bytes = bounded_setting(
+            "LLM_STREAM_MAX_RESPONSE_BYTES", 8 * 1024 * 1024, 1, 64 * 1024 * 1024
+        )
+        stream_capacity = bounded_setting("LLM_STREAM_MAX_ACTIVE", 8, 1, 64)
+        app.state.llm_stream_slots = asyncio.Queue(maxsize=stream_capacity)
+        for _ in range(stream_capacity):
+            app.state.llm_stream_slots.put_nowait(object())
+
         def provider_key():
             if os.getenv("LLM_API_KEY_FILE"):
                 return Path(os.environ["LLM_API_KEY_FILE"]).read_text().strip()
@@ -211,6 +273,7 @@ def create_app(service=None, settings=None):
             responses={200: {"content": {"text/event-stream": {}}}},
         )
         async def chat(request: Request, actor=Depends(scope("llm:use"))):
+            deadline = asyncio.get_running_loop().time() + app.state.llm_stream_timeout_seconds
             key = provider_key()
             if not key:
                 raise APIError(503, "PROVIDER_NOT_CONFIGURED", "LLM provider credential required")
@@ -226,31 +289,111 @@ def create_app(service=None, settings=None):
                 context.maximum_version = ssl.TLSVersion.TLSv1_2
 
             if stream_requested:
-                timeout = httpx.Timeout(connect=10, read=120, write=30, pool=10)
-                client = httpx.AsyncClient(timeout=timeout, trust_env=False, verify=context)
-                upstream = None
                 try:
-                    upstream_request = client.build_request(
-                        "POST",
-                        os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/")
-                        + "/v1/chat/completions",
-                        headers={
-                            "Authorization": "Bearer " + key,
-                            "Accept": "text/event-stream",
-                            "Accept-Encoding": "identity",
-                        },
-                        json=body,
-                    )
-                    upstream = await client.send(upstream_request, stream=True)
-                except httpx.HTTPError:
-                    await client.aclose()
-                    raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
+                    slot = app.state.llm_stream_slots.get_nowait()
+                except asyncio.QueueEmpty:
+                    raise APIError(
+                        429,
+                        "LLM_STREAM_CAPACITY",
+                        "stream capacity reached; retry later",
+                        headers={"Retry-After": "5"},
+                    ) from None
 
-                content_type = upstream.headers.get("content-type", "").lower()
-                if upstream.status_code != 200 or not content_type.startswith("text/event-stream"):
-                    await upstream.aclose()
-                    await client.aclose()
-                    raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed")
+                client = None
+                upstream = None
+                send_task = None
+                disconnect_task = None
+                handed_off = False
+
+                async def wait_for_disconnect():
+                    while True:
+                        message = await request.receive()
+                        if message["type"] == "http.disconnect":
+                            return
+
+                async def close_resources():
+                    try:
+                        if upstream is not None:
+                            try:
+                                await upstream.aclose()
+                            except httpx.HTTPError:
+                                logging.getLogger("xeonolab").warning(
+                                    json.dumps(
+                                        {
+                                            "service": "llm-gateway",
+                                            "event": "provider_stream.close_failed",
+                                            "request_id": getattr(request.state, "request_id", ""),
+                                        },
+                                        separators=(",", ":"),
+                                    )
+                                )
+                    finally:
+                        try:
+                            if client is not None:
+                                try:
+                                    await client.aclose()
+                                except Exception:
+                                    logging.getLogger("xeonolab").warning(
+                                        json.dumps(
+                                            {
+                                                "service": "llm-gateway",
+                                                "event": "provider_client.close_failed",
+                                                "request_id": getattr(request.state, "request_id", ""),
+                                            },
+                                            separators=(",", ":"),
+                                        )
+                                    )
+                        finally:
+                            app.state.llm_stream_slots.put_nowait(slot)
+
+                try:
+                    timeout = httpx.Timeout(connect=10, read=120, write=30, pool=10)
+                    client = httpx.AsyncClient(timeout=timeout, trust_env=False, verify=context)
+                    async with asyncio.timeout_at(deadline):
+                        upstream_request = client.build_request(
+                            "POST",
+                            os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/")
+                            + "/v1/chat/completions",
+                            headers={
+                                "Authorization": "Bearer " + key,
+                                "Accept": "text/event-stream",
+                                "Accept-Encoding": "identity",
+                            },
+                            json=body,
+                        )
+                        send_task = asyncio.create_task(client.send(upstream_request, stream=True))
+                        disconnect_task = asyncio.create_task(wait_for_disconnect())
+                        done, _ = await asyncio.wait(
+                            (send_task, disconnect_task), return_when=asyncio.FIRST_COMPLETED
+                        )
+                        if disconnect_task in done:
+                            send_task.cancel()
+                            await asyncio.gather(send_task, return_exceptions=True)
+                            raise asyncio.CancelledError
+                        upstream = await send_task
+
+                    disconnect_task.cancel()
+                    await asyncio.gather(disconnect_task, return_exceptions=True)
+                    content_type = upstream.headers.get("content-type", "").lower()
+                    if upstream.status_code != 200 or not content_type.startswith("text/event-stream"):
+                        raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed")
+                    handed_off = True
+
+                except asyncio.CancelledError:
+                    raise
+                except TimeoutError:
+                    raise APIError(504, "PROVIDER_TIMEOUT", "LLM provider request timed out") from None
+                except httpx.HTTPError:
+                    raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
+                finally:
+                    if disconnect_task is not None:
+                        disconnect_task.cancel()
+                        await asyncio.gather(disconnect_task, return_exceptions=True)
+                    if send_task is not None and not send_task.done():
+                        send_task.cancel()
+                        await asyncio.gather(send_task, return_exceptions=True)
+                    if not handed_off:
+                        await close_resources()
 
                 async def stream_chunks():
                     def record_stream_error(code):
@@ -266,32 +409,52 @@ def create_app(service=None, settings=None):
                             )
                         )
 
+                    total_bytes = 0
+                    buffer = bytearray()
                     try:
-                        async with asyncio.timeout(600):
+                        async with asyncio.timeout_at(deadline):
                             async for chunk in upstream.aiter_bytes():
-                                if chunk:
-                                    yield chunk
+                                total_bytes += len(chunk)
+                                if total_bytes > app.state.llm_stream_max_response_bytes:
+                                    record_stream_error("response_limit")
+                                    yield _SAFE_STREAM_ERROR
+                                    return
+                                buffer.extend(chunk)
+                                while (frame := _next_sse_frame(buffer)) is not None:
+                                    kind = _sse_frame_kind(frame)
+                                    if kind == "error":
+                                        record_stream_error("provider_error_event")
+                                        yield _SAFE_STREAM_ERROR
+                                        return
+                                    yield frame
+                                    if kind == "done":
+                                        return
+                        if buffer:
+                            record_stream_error("incomplete_sse_frame")
+                            yield _SAFE_STREAM_ERROR
+                        else:
+                            record_stream_error("missing_done_marker")
+                            yield _SAFE_STREAM_ERROR
                     except httpx.HTTPError:
-                        # A truncated SSE stream has no successful terminal marker; do not
-                        # leak upstream exception details or credentials into a new event.
                         record_stream_error("upstream_read_failed")
+                        yield _SAFE_STREAM_ERROR
                         return
                     except TimeoutError:
                         record_stream_error("stream_timeout")
+                        yield _SAFE_STREAM_ERROR
                         return
                     finally:
-                        try:
-                            await upstream.aclose()
-                        finally:
-                            await client.aclose()
+                        await close_resources()
 
                 from fastapi.responses import StreamingResponse
 
-                return StreamingResponse(
+                response_stream = StreamingResponse(
                     stream_chunks(),
                     media_type="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
+                handed_off = True
+                return response_stream
 
             async with httpx.AsyncClient(timeout=120, trust_env=False, verify=context) as client:
                 result = await client.post(
