@@ -13,11 +13,18 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import UUID
 
 from PIL import Image
+
+from .wallpaper_limits import WALLPAPER_MAX_BYTES, WALLPAPER_MAX_PIXELS
+
+DEFAULT_MAX_TOTAL_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_ASSETS = 1000
+DEFAULT_FREE_SPACE_RESERVE_BYTES = 64 * 1024 * 1024
 
 
 class WallpaperBackupError(ValueError):
@@ -98,14 +105,28 @@ def _wallpaper_rows(database: Path) -> list[tuple[str, str, str, int]]:
         raise WallpaperBackupError(f"cannot inspect desktop database: {exc}") from exc
 
 
-def _asset_file(root: Path, asset_id: str) -> Path:
+def _canonical_asset_id(asset_id: str) -> str:
     try:
         canonical = str(UUID(asset_id))
     except (ValueError, TypeError, AttributeError) as exc:
         raise WallpaperBackupError("invalid wallpaper asset ID") from exc
     if canonical != asset_id:
         raise WallpaperBackupError("non-canonical wallpaper asset ID")
+    return canonical
+
+
+def _asset_file(root: Path, asset_id: str) -> Path:
+    canonical = _canonical_asset_id(asset_id)
     return root / "wallpapers" / f"{canonical}.webp"
+
+
+def _validate_metadata_rows(rows: list[tuple[str, str, str, int]]) -> None:
+    for owner, asset_id, media_type, size in rows:
+        if not isinstance(owner, str) or not owner or media_type != "image/webp":
+            raise WallpaperBackupError("invalid wallpaper metadata owner or media type")
+        if type(size) is not int or size < 0 or size > WALLPAPER_MAX_BYTES:
+            raise WallpaperBackupError("wallpaper metadata exceeds the 5 MiB asset limit")
+        _canonical_asset_id(asset_id)
 
 
 def _verify_asset(path: Path, *, expected_size: int | None = None) -> None:
@@ -113,11 +134,25 @@ def _verify_asset(path: Path, *, expected_size: int | None = None) -> None:
         raise WallpaperBackupError(f"missing or unsafe wallpaper file: {path.name}")
     if expected_size is not None and path.stat().st_size != expected_size:
         raise WallpaperBackupError(f"wallpaper metadata size mismatch: {path.name}")
+    if path.stat().st_size > WALLPAPER_MAX_BYTES:
+        raise WallpaperBackupError(f"wallpaper exceeds the 5 MiB asset limit: {path.name}")
     try:
-        with Image.open(path) as image:
+        # Pillow's process-wide bomb threshold may be lower than our explicit
+        # product limit. Suppress only its warning here; enforce our own pixel
+        # bound before decoding any pixel data below.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            image_context = Image.open(path)
+        with image_context as image:
             if image.format != "WEBP" or getattr(image, "n_frames", 1) != 1:
                 raise WallpaperBackupError(f"invalid wallpaper encoding: {path.name}")
-            image.verify()
+            if image.width * image.height > WALLPAPER_MAX_PIXELS:
+                raise WallpaperBackupError(f"wallpaper exceeds the 16 MP pixel limit: {path.name}")
+            image.load()
+    except Image.DecompressionBombError as exc:
+        raise WallpaperBackupError(f"wallpaper exceeds the 16 MP pixel limit: {path.name}") from exc
+    except WallpaperBackupError:
+        raise
     except (OSError, ValueError) as exc:
         raise WallpaperBackupError(f"invalid wallpaper image: {path.name}") from exc
 
@@ -149,7 +184,52 @@ def _validate_rows(root: Path, database: Path) -> list[dict]:
     return records
 
 
-def create_desktop_wallpaper_backup(data_dir: Path, destination: Path) -> Path:
+def _limits(max_total_bytes: int, max_assets: int, free_space_reserve_bytes: int) -> None:
+    if max_total_bytes < 0 or max_assets < 0 or free_space_reserve_bytes < 0:
+        raise WallpaperBackupError("backup budgets must be non-negative integers")
+
+
+def _source_estimate(data_dir: Path, rows: list[tuple[str, str, str, int]]) -> tuple[int, int]:
+    db_path = data_dir / "desktop.sqlite"
+    database_bytes = db_path.stat().st_size
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(db_path) + suffix)
+        if sidecar.exists():
+            if sidecar.is_symlink() or not sidecar.is_file():
+                raise WallpaperBackupError(f"unsafe desktop database sidecar: {sidecar.name}")
+            if suffix == "-wal":
+                database_bytes += sidecar.stat().st_size
+    asset_bytes = sum(row[3] for row in rows)
+    return database_bytes + asset_bytes, database_bytes
+
+
+def _enforce_budget(total_bytes: int, asset_count: int, *, max_total_bytes: int,
+                    max_assets: int, free_space_reserve_bytes: int,
+                    destination_parent: Path) -> None:
+    _limits(max_total_bytes, max_assets, free_space_reserve_bytes)
+    if total_bytes > max_total_bytes:
+        raise WallpaperBackupError(
+            f"desktop wallpaper snapshot exceeds the configured data budget ({total_bytes} > {max_total_bytes} bytes)"
+        )
+    if asset_count > max_assets:
+        raise WallpaperBackupError(
+            f"desktop wallpaper snapshot exceeds the configured asset budget ({asset_count} > {max_assets})"
+        )
+    free = shutil.disk_usage(destination_parent).free
+    if free < total_bytes + free_space_reserve_bytes:
+        raise WallpaperBackupError(
+            f"insufficient destination free space: need {total_bytes + free_space_reserve_bytes} bytes, have {free}"
+        )
+
+
+def create_desktop_wallpaper_backup(
+    data_dir: Path,
+    destination: Path,
+    *,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    max_assets: int = DEFAULT_MAX_ASSETS,
+    free_space_reserve_bytes: int = DEFAULT_FREE_SPACE_RESERVE_BYTES,
+) -> Path:
     """Create a new private snapshot while mutations are excluded by the shared data lock."""
     data_dir = _path_without_symlinks(Path(data_dir), strict=True)
     destination = _path_without_symlinks(Path(destination), strict=False)
@@ -161,6 +241,16 @@ def create_desktop_wallpaper_backup(data_dir: Path, destination: Path) -> Path:
         raise WallpaperBackupError("desktop.sqlite is missing")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with wallpaper_data_lock(data_dir):
+        rows = _wallpaper_rows(data_dir / "desktop.sqlite")
+        _limits(max_total_bytes, max_assets, free_space_reserve_bytes)
+        _validate_metadata_rows(rows)
+        estimate, _ = _source_estimate(data_dir, rows)
+        _enforce_budget(
+            estimate, len(rows), max_total_bytes=max_total_bytes, max_assets=max_assets,
+            free_space_reserve_bytes=free_space_reserve_bytes, destination_parent=destination.parent,
+        )
+        # Validate references and decodability before any snapshot is copied.
+        _validate_rows(data_dir, data_dir / "desktop.sqlite")
         staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
         try:
             os.chmod(staging, 0o700)
@@ -188,7 +278,13 @@ def create_desktop_wallpaper_backup(data_dir: Path, destination: Path) -> Path:
             raise
 
 
-def verify_desktop_wallpaper_backup(backup: Path) -> dict:
+def verify_desktop_wallpaper_backup(
+    backup: Path,
+    *,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    max_assets: int = DEFAULT_MAX_ASSETS,
+) -> dict:
+    _limits(max_total_bytes, max_assets, 0)
     backup = _path_without_symlinks(Path(backup), strict=True)
     if not backup.is_dir():
         raise WallpaperBackupError("backup must be a regular directory")
@@ -209,6 +305,9 @@ def verify_desktop_wallpaper_backup(backup: Path) -> dict:
         raise WallpaperBackupError("unsupported desktop wallpaper backup format")
     db = backup / "desktop.sqlite"
     records = _validate_rows(backup, db)
+    total_bytes = db.stat().st_size + sum(record["size"] for record in records)
+    if total_bytes > max_total_bytes or len(records) > max_assets:
+        raise WallpaperBackupError("backup exceeds the configured data or asset budget")
     if manifest["wallpapers"] != records:
         raise WallpaperBackupError("backup wallpaper inventory does not match database/files")
     actual = {p.name for p in (backup / "wallpapers").iterdir()}
@@ -218,7 +317,14 @@ def verify_desktop_wallpaper_backup(backup: Path) -> dict:
     return manifest
 
 
-def restore_desktop_wallpaper_backup(backup: Path, destination: Path) -> Path:
+def restore_desktop_wallpaper_backup(
+    backup: Path,
+    destination: Path,
+    *,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    max_assets: int = DEFAULT_MAX_ASSETS,
+    free_space_reserve_bytes: int = DEFAULT_FREE_SPACE_RESERVE_BYTES,
+) -> Path:
     """Restore only desktop.sqlite and wallpapers to a new, absent data root."""
     backup = _path_without_symlinks(Path(backup), strict=True)
     destination = _path_without_symlinks(Path(destination), strict=False)
@@ -226,8 +332,16 @@ def restore_desktop_wallpaper_backup(backup: Path, destination: Path) -> Path:
         raise WallpaperBackupError("restore destination must be separate from the backup")
     if destination.exists() or destination.is_symlink():
         raise WallpaperBackupError("restore destination must not already exist")
-    verify_desktop_wallpaper_backup(backup)
+    verify_desktop_wallpaper_backup(backup, max_total_bytes=max_total_bytes, max_assets=max_assets)
+    manifest = json.loads((backup / "manifest.json").read_bytes())
+    total_bytes = (backup / "desktop.sqlite").stat().st_size + sum(
+        record["size"] for record in manifest["wallpapers"]
+    )
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _enforce_budget(
+        total_bytes, len(manifest["wallpapers"]), max_total_bytes=max_total_bytes, max_assets=max_assets,
+        free_space_reserve_bytes=free_space_reserve_bytes, destination_parent=destination.parent,
+    )
     staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
     try:
         os.chmod(staging, 0o700)

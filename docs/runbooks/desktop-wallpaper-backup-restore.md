@@ -12,13 +12,26 @@ monitor backups.
 ```sh
 uv run python scripts/desktop_wallpaper_backup.py backup \
   --data-dir /var/lib/xeonolab/desktop-web \
-  --destination /protected-backups/desktop-YYYYMMDD
+  --destination /protected-backups/desktop-YYYYMMDD \
+  --max-total-bytes 536870912 --max-assets 1000 \
+  --free-space-reserve-bytes 67108864
 uv run python scripts/desktop_wallpaper_backup.py verify \
-  --backup /protected-backups/desktop-YYYYMMDD
+  --backup /protected-backups/desktop-YYYYMMDD \
+  --max-total-bytes 536870912 --max-assets 1000
 uv run python scripts/desktop_wallpaper_backup.py restore \
   --backup /protected-backups/desktop-YYYYMMDD \
-  --destination /var/tmp/desktop-restore-drill
+  --destination /var/tmp/desktop-restore-drill \
+  --max-total-bytes 536870912 --max-assets 1000 \
+  --free-space-reserve-bytes 67108864
 ```
+
+By default, total snapshot size (database plus referenced assets) is capped at
+512 MiB, at most 1,000 assets are accepted, and backup/restore require the
+destination filesystem to report at least 64 MiB more free space than the
+estimated copy size. Change `--max-total-bytes`, `--max-assets`, or
+`--free-space-reserve-bytes` for a deliberately larger local operation. Every
+individual image is rechecked as a single-frame WebP no larger than 5 MiB and
+16 megapixels. Encoded uploads also have a hard 5 MiB output cap.
 
 The application and backup helper coordinate wallpaper upload/replacement and
 deletion with `.desktop-wallpaper.lock`. While holding that lock, the helper
@@ -37,6 +50,11 @@ Each service process accepts at most two wallpaper processing requests at once;
 when full, additional uploads receive HTTP 429 `WALLPAPER_PROCESSING_BUSY`
 before their bodies are read. In a multi-process server, the total bound is two
 requests per process.
+
+The free-space check is a preflight estimate, not a reservation: unrelated
+writers can consume space after the check and during copying. Keep the stated
+reserve and monitor the destination filesystem; on a copy failure the helper
+removes its incomplete staging directory and does not publish the target.
 
 Do not roll back to an application version whose `Preferences` schema does not
 accept the `custom` wallpaper value before restoring the matching pre-feature
