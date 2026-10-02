@@ -388,11 +388,16 @@ def install(app):
         if active not in ("", "true", "false"):
             raise APIError(422, "INVALID_ACTIVE", "active must be true or false")
         now = time.time()
+        # `active` (the #93 filter) treats queued items as actionable, but the
+        # claim_active contract stays "this caller holds a live lease": only a
+        # non-null holder with an unexpired lease counts. Conflating the two
+        # would hide the claim button for every queued item.
         active_expression = "(status='queued' OR (holder IS NOT NULL AND expires > :now))"
+        claim_expression = "(holder IS NOT NULL AND expires > :now)"
         query = (
             "SELECT *,"
-            f" {active_expression} AS claim_active,"
-            f" (status='claimed' AND NOT {active_expression}) AS lease_expired"
+            f" {claim_expression} AS claim_active,"
+            f" (status='claimed' AND NOT {claim_expression}) AS lease_expired"
             " FROM work WHERE id>:cursor"
         )
         parameters: dict = {"cursor": cursor, "now": now}

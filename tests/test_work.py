@@ -828,6 +828,10 @@ def test_listing_active_filter_and_lease_expired(settings):
     for title in ("Queued item", "Live claim", "Blocked item"):
         assert by_title[title]["lease_expired"] is False, title
     assert by_title["Live claim"]["claim_active"] is True
+    # claim_active stays the live-lease contract: a queued item has no holder,
+    # so it must remain claimable in the UI (regression for PR #102 review).
+    assert by_title["Queued item"]["claim_active"] is False
+    assert by_title["Blocked item"]["claim_active"] is False
 
     active_ids = {row["title"] for row in
                   client.get("/api/v1/work?active=true&limit=100", headers=auth()).json()["data"]}
