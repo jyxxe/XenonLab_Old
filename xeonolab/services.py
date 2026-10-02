@@ -252,6 +252,7 @@ def create_app(service=None, settings=None):
         app.state.llm_stream_max_response_bytes = bounded_setting(
             "LLM_STREAM_MAX_RESPONSE_BYTES", 8 * 1024 * 1024, 1, 64 * 1024 * 1024
         )
+        app.state.llm_request_max_bytes = bounded_setting("LLM_REQUEST_MAX_BYTES", 1024 * 1024, 1, 8 * 1024 * 1024)
         stream_capacity = bounded_setting("LLM_STREAM_MAX_ACTIVE", 8, 1, 64)
         app.state.llm_stream_slots = asyncio.Queue(maxsize=stream_capacity)
         for _ in range(stream_capacity):
@@ -270,40 +271,86 @@ def create_app(service=None, settings=None):
 
         @app.post(
             "/v1/chat/completions",
-            responses={200: {"content": {"text/event-stream": {}}}},
+            responses={
+                200: {
+                    "description": "JSON completion, or SSE stream. Midstream failures are safe error data events without data: [DONE].",
+                    "content": {"application/json": {}, "text/event-stream": {}},
+                },
+                408: {"description": "Request body or provider stream deadline exceeded."},
+                413: {"description": "Request body exceeds the configured byte limit."},
+                429: {"description": "Per-process stream capacity reached; includes Retry-After."},
+                502: {"description": "Provider request failed before streaming began."},
+                504: {"description": "Provider response headers exceeded the request deadline."},
+            },
         )
         async def chat(request: Request, actor=Depends(scope("llm:use"))):
             deadline = asyncio.get_running_loop().time() + app.state.llm_stream_timeout_seconds
-            key = provider_key()
-            if not key:
-                raise APIError(503, "PROVIDER_NOT_CONFIGURED", "LLM provider credential required")
-            body = await request.json()
-            if not isinstance(body, dict) or body.get("model") != "deepseek-flash":
-                raise APIError(422, "UNSUPPORTED_REQUEST", "only deepseek-flash configured")
-            stream_requested = body.get("stream") is True
-            if body.get("stream") and not stream_requested:
-                raise APIError(422, "UNSUPPORTED_REQUEST", "stream must be a boolean")
+            try:
+                slot = app.state.llm_stream_slots.get_nowait()
+            except asyncio.QueueEmpty:
+                raise APIError(
+                    429,
+                    "LLM_STREAM_CAPACITY",
+                    "chat capacity reached; retry later",
+                    headers={"Retry-After": "5"},
+                ) from None
+
+            slot_released = False
+
+            def release_slot():
+                nonlocal slot_released
+                if not slot_released:
+                    app.state.llm_stream_slots.put_nowait(slot)
+                    slot_released = True
+
+            try:
+                async with asyncio.timeout_at(deadline):
+                    content_length = request.headers.get("content-length")
+                    if content_length is not None:
+                        try:
+                            declared_length = int(content_length)
+                        except ValueError:
+                            raise APIError(400, "INVALID_CONTENT_LENGTH", "invalid content length") from None
+                        if declared_length < 0:
+                            raise APIError(400, "INVALID_CONTENT_LENGTH", "invalid content length")
+                        if declared_length > app.state.llm_request_max_bytes:
+                            raise APIError(413, "REQUEST_TOO_LARGE", "chat request exceeds the byte limit")
+                    raw_body = bytearray()
+                    async for chunk in request.stream():
+                        if len(raw_body) + len(chunk) > app.state.llm_request_max_bytes:
+                            raise APIError(413, "REQUEST_TOO_LARGE", "chat request exceeds the byte limit")
+                        raw_body.extend(chunk)
+                    try:
+                        body = json.loads(raw_body)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        raise APIError(422, "INVALID_REQUEST", "request body must be valid JSON") from None
+                    if not isinstance(body, dict) or body.get("model") != "deepseek-flash":
+                        raise APIError(422, "UNSUPPORTED_REQUEST", "only deepseek-flash configured")
+                    stream_requested = body.get("stream") is True
+                    if body.get("stream") and not stream_requested:
+                        raise APIError(422, "UNSUPPORTED_REQUEST", "stream must be a boolean")
+                    key = provider_key()
+                    if not key:
+                        raise APIError(503, "PROVIDER_NOT_CONFIGURED", "LLM provider credential required")
+            except TimeoutError:
+                release_slot()
+                raise APIError(408, "REQUEST_TIMEOUT", "chat request body timed out") from None
+            except BaseException:
+                release_slot()
+                raise
+
             body = {**body, "model": os.getenv("LLM_PROVIDER_MODEL", "deepseek-flash")}
             context = ssl.create_default_context()
             if os.getenv("LLM_TLS_MAX_VERSION") == "1.2":
                 context.maximum_version = ssl.TLSVersion.TLSv1_2
 
             if stream_requested:
-                try:
-                    slot = app.state.llm_stream_slots.get_nowait()
-                except asyncio.QueueEmpty:
-                    raise APIError(
-                        429,
-                        "LLM_STREAM_CAPACITY",
-                        "stream capacity reached; retry later",
-                        headers={"Retry-After": "5"},
-                    ) from None
-
                 client = None
                 upstream = None
                 send_task = None
                 disconnect_task = None
                 handed_off = False
+                cleanup_task = None
 
                 async def wait_for_disconnect():
                     while True:
@@ -311,12 +358,12 @@ def create_app(service=None, settings=None):
                         if message["type"] == "http.disconnect":
                             return
 
-                async def close_resources():
+                async def perform_cleanup():
                     try:
                         if upstream is not None:
                             try:
                                 await upstream.aclose()
-                            except httpx.HTTPError:
+                            except Exception:
                                 logging.getLogger("xeonolab").warning(
                                     json.dumps(
                                         {
@@ -344,7 +391,17 @@ def create_app(service=None, settings=None):
                                         )
                                     )
                         finally:
-                            app.state.llm_stream_slots.put_nowait(slot)
+                            release_slot()
+
+                async def close_resources():
+                    nonlocal cleanup_task
+                    if cleanup_task is None:
+                        cleanup_task = asyncio.create_task(perform_cleanup())
+                    try:
+                        await asyncio.shield(cleanup_task)
+                    except asyncio.CancelledError:
+                        await cleanup_task
+                        raise
 
                 try:
                     timeout = httpx.Timeout(connect=10, read=120, write=30, pool=10)
@@ -367,8 +424,11 @@ def create_app(service=None, settings=None):
                             (send_task, disconnect_task), return_when=asyncio.FIRST_COMPLETED
                         )
                         if disconnect_task in done:
-                            send_task.cancel()
-                            await asyncio.gather(send_task, return_exceptions=True)
+                            if send_task.done() and not send_task.cancelled():
+                                upstream = send_task.result()
+                            else:
+                                send_task.cancel()
+                                await asyncio.gather(send_task, return_exceptions=True)
                             raise asyncio.CancelledError
                         upstream = await send_task
 
@@ -448,7 +508,14 @@ def create_app(service=None, settings=None):
 
                 from fastapi.responses import StreamingResponse
 
-                response_stream = StreamingResponse(
+                class CleanupStreamingResponse(StreamingResponse):
+                    async def __call__(self, scope, receive, send):
+                        try:
+                            await super().__call__(scope, receive, send)
+                        finally:
+                            await close_resources()
+
+                response_stream = CleanupStreamingResponse(
                     stream_chunks(),
                     media_type="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -456,6 +523,7 @@ def create_app(service=None, settings=None):
                 handed_off = True
                 return response_stream
 
+            release_slot()
             async with httpx.AsyncClient(timeout=120, trust_env=False, verify=context) as client:
                 result = await client.post(
                     os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/") + "/v1/chat/completions",

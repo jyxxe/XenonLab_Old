@@ -441,7 +441,7 @@ def test_streaming_asgi_24_send_oserror_closes_provider(settings, monkeypatch):
 
         async def send(message):
             sent.append(message)
-            if message["type"] == "http.response.body":
+            if message["type"] == "http.response.start":
                 raise OSError("downstream closed")
 
         try:
@@ -453,6 +453,108 @@ def test_streaming_asgi_24_send_oserror_closes_provider(settings, monkeypatch):
     asyncio.run(run())
     assert chunks.closed is True
     assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_stream_disconnect_racing_provider_headers_closes_returned_response(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    StreamingProvider.instances = []
+    disconnect = asyncio.Event()
+    send_release = asyncio.Event()
+    send_started = asyncio.Event()
+    chunks = ProviderStream([b"data: never consumed\n\n"])
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=chunks)
+
+        async def send(self, request, stream=False):
+            send_started.set()
+            await send_release.wait()
+            return self.response
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        first = True
+
+        async def receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+                 "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
+        request = Request(scope, receive)
+        task = asyncio.create_task(endpoint(request, SimpleNamespace()))
+        await send_started.wait()
+        disconnect.set()
+        send_release.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())
+    assert chunks.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_chat_request_body_size_limit_returns_json_error(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    monkeypatch.setenv("LLM_REQUEST_MAX_BYTES", "16")
+    StreamingProvider.instances = []
+    app = create_app("llm-gateway", settings)
+    response = TestClient(app).post(
+        "/v1/chat/completions", headers=auth(), json={"model": "deepseek-flash", "stream": True}
+    )
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "REQUEST_TOO_LARGE"
+    assert app.state.llm_stream_slots.qsize() == 8
+    assert StreamingProvider.instances == []
+
+
+def test_chat_request_body_deadline_returns_json_error(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    monkeypatch.setenv("LLM_STREAM_TIMEOUT_SECONDS", "1")
+    StreamingProvider.instances = []
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        first = True
+
+        async def receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": b'{"model":', "more_body": True}
+            await asyncio.Event().wait()
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+                 "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
+        try:
+            await endpoint(Request(scope, receive), SimpleNamespace())
+        except APIError as error:
+            assert error.status == 408
+            assert error.code == "REQUEST_TIMEOUT"
+        else:
+            raise AssertionError("slow request body should time out")
+
+    asyncio.run(run())
+    assert StreamingProvider.instances == []
     assert app.state.llm_stream_slots.qsize() == 8
 
 
