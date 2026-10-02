@@ -121,6 +121,44 @@
 .widget-status dd{margin:0}
 .widget-status>small{display:block;margin-top:var(--spacing-2);color:var(--text-muted);font-size:var(--font-size-xs)}
 
+/* Calendar widget */
+.widget-calendar header{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-2);margin-bottom:var(--spacing-2)}
+.widget-calendar header strong{font-size:var(--font-size-sm)}
+.widget-calendar table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--font-size-xs)}
+.widget-calendar th{color:var(--text-muted);font-weight:500;padding:0 0 2px}
+.widget-calendar td{text-align:center;padding:2px 0;color:var(--text-secondary);border-radius:var(--radius-pill)}
+.widget-calendar td.outside{color:var(--text-muted);opacity:.55}
+.widget-calendar td[aria-current='date']{background:var(--accent-soft);color:var(--accent);font-weight:600}
+
+/* Work queue widget */
+.widget-work header{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-2);margin-bottom:var(--spacing-2)}
+.widget-work header strong{font-size:var(--font-size-sm)}
+.widget-work ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.widget-work li{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-2);font-size:var(--font-size-xs)}
+.widget-work .work-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.widget-work em{font-style:normal;flex-shrink:0;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;font-size:10px}
+.widget-work em[data-status='claimed']{color:var(--success)}
+.widget-work em[data-status='queued']{color:var(--accent)}
+.widget-work em[data-status='expired']{color:var(--warning)}
+.widget-work>small{display:block;margin-top:var(--spacing-2);color:var(--text-muted);font-size:var(--font-size-xs)}
+
+/* Notes + search widgets */
+.widget-notes header,.widget-search header{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-2);margin-bottom:var(--spacing-2)}
+.widget-notes header strong,.widget-search header strong{font-size:var(--font-size-sm)}
+.widget-notes textarea{width:100%;min-height:96px;resize:vertical;font:inherit;font-size:var(--font-size-xs);color:var(--text-primary);background:transparent;border:1px solid var(--border-subtle);border-radius:var(--radius-panel);padding:6px 8px}
+.widget-notes textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.widget-notes>small{display:block;margin-top:4px;text-align:right;color:var(--text-muted);font-size:var(--font-size-xs)}
+.widget-search form{display:flex;gap:6px}
+.widget-search input{flex:1;min-width:0;font:inherit;font-size:var(--font-size-xs);color:var(--text-primary);background:transparent;border:1px solid var(--border-subtle);border-radius:var(--radius-pill);padding:5px 10px}
+.widget-search input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.widget-search button{flex-shrink:0;padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius-pill);background:var(--control);color:var(--text-primary);font-size:var(--font-size-xs);cursor:pointer}
+.widget-search button:disabled{opacity:.45;cursor:not-allowed}
+
+/* Custom wallpaper: inline background wins over the preset stylesheet value;
+   user images cover the viewport, gradients stay crisp via no-repeat. */
+.desktop[data-wallpaper-custom]{background-repeat:no-repeat;background-position:center}
+.desktop[data-wallpaper-custom='image']{background-size:cover;background-attachment:fixed}
+
 .session-banner{position:fixed;top:calc(var(--menubar-height) + 10px);left:50%;transform:translateX(-50%);z-index:var(--z-menubar);display:flex;align-items:center;gap:var(--spacing-3);padding:var(--spacing-2) var(--spacing-4);border:1px solid var(--border-strong);border-radius:var(--radius-pill);background:var(--surface-glass);box-shadow:var(--shadow-menu);backdrop-filter:blur(18px);font-size:var(--font-size-sm)}
 .session-banner[data-phase='reauthorize']{border-color:color-mix(in srgb,var(--danger) 55%,var(--border))}
 

@@ -85,6 +85,9 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     changed = client.patch(url, headers=auth(), json={"accent": "purple"}).json()["data"]
     assert changed["theme"] == "dark" and changed["timezone"] == "Asia/Shanghai"
     assert changed["widgets"] == ["clock", "status"]
+    assert changed["wallpaper"] == "aurora" and changed["wallpaper_mode"] == "solid"
+    assert changed["wallpaper_image"] == "" and changed["wallpaper_dim"] == 0
+    assert changed["notes"] == ""
     changed = client.patch(url, headers=auth(), json={"widgets": ["clock"]}).json()["data"]
     assert changed["widgets"] == ["clock"]
     assert changed["dock_size"] == "medium" and changed["dock_autohide"] is False
@@ -102,10 +105,50 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
         {"widgets": "clock"},
         {"dock_size": "huge"},
         {"reduced_motion": "not-a-bool"},
+        {"wallpaper": "rainbow"},
+        {"wallpaper_mode": "animated"},
+        {"wallpaper_color": "blue"},
+        {"wallpaper_gradient_angle": 361},
+        {"wallpaper_dim": 91},
+        {"wallpaper_image": "https://cdn.example/wallpaper.png"},
+        {"wallpaper_image": "data:image/svg+xml;base64,PHN2Zy8+"},
+        {"notes": "x" * 4001},
     ):
         assert client.patch(url, headers=auth(), json=invalid).status_code == 422
     restarted = TestClient(create_app("desktop-web", settings))
     assert restarted.get(url, headers=auth()).json()["data"] == changed
+
+
+def test_preferences_custom_wallpaper_widgets_and_notes(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/preferences"
+    png_data_url = "data:image/png;base64," + "A" * 64
+    saved = client.patch(
+        url,
+        headers=auth(),
+        json={
+            "wallpaper": "custom",
+            "wallpaper_mode": "image",
+            "wallpaper_image": png_data_url,
+            "wallpaper_dim": 30,
+            "widgets": ["clock", "calendar", "work", "search", "notes"],
+            "notes": "回路测试用便签",
+        },
+    )
+    assert saved.status_code == 200
+    data = saved.json()["data"]
+    assert data["wallpaper"] == "custom" and data["wallpaper_mode"] == "image"
+    assert data["wallpaper_image"] == png_data_url and data["wallpaper_dim"] == 30
+    assert data["widgets"] == ["clock", "calendar", "work", "search", "notes"]
+    assert data["notes"] == "回路测试用便签"
+    # An oversized image is rejected instead of bloating the preferences row.
+    oversized = client.patch(
+        url, headers=auth(), json={"wallpaper_image": "data:image/png;base64," + "A" * 2_800_001}
+    )
+    assert oversized.status_code == 422
+    # The stored row still holds the previous, valid wallpaper after the rejection.
+    assert client.get(url, headers=auth()).json()["data"]["wallpaper_image"] == png_data_url
 
 
 def test_layout_remembers_explicitly_empty_dock(settings):

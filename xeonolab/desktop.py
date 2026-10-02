@@ -46,15 +46,34 @@ class AppPatch(BaseModel):
     sandbox: Sandbox | None = None
 
 
+# Client-side wallpapers are downscaled to JPEG before upload; the cap keeps a
+# preferences row (rewritten whole on every PATCH) comfortably small. The empty
+# string is the "no image set" default and must survive the round-trip through
+# PATCH merges, so the pattern allows it explicitly.
+WALLPAPER_IMAGE_MAX_CHARS = 2_800_000
+WALLPAPER_IMAGE_PATTERN = r"^(?:data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2})?$"
+HEX_COLOR_PATTERN = r"^#[0-9a-fA-F]{6}$"
+
+
 class Preferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
     theme: Literal["system", "light", "dark"] = "system"
     accent: Literal["blue", "purple", "green", "orange"] = "blue"
-    wallpaper: Literal["aurora", "ocean", "sunset", "silver"] = "aurora"
+    wallpaper: Literal["aurora", "ocean", "sunset", "silver", "custom"] = "aurora"
+    wallpaper_mode: Literal["solid", "gradient", "image"] = "solid"
+    wallpaper_color: str = Field(default="#101828", pattern=HEX_COLOR_PATTERN)
+    wallpaper_gradient_from: str = Field(default="#0b1220", pattern=HEX_COLOR_PATTERN)
+    wallpaper_gradient_to: str = Field(default="#1d4ed8", pattern=HEX_COLOR_PATTERN)
+    wallpaper_gradient_angle: int = Field(default=160, ge=0, le=360)
+    wallpaper_image: str = Field(
+        default="", max_length=WALLPAPER_IMAGE_MAX_CHARS, pattern=WALLPAPER_IMAGE_PATTERN
+    )
+    wallpaper_dim: int = Field(default=0, ge=0, le=90)
     timezone: str = Field(default="system", min_length=1, max_length=80)
-    widgets: list[Literal["clock", "status"]] = Field(
+    widgets: list[Literal["clock", "status", "calendar", "work", "notes", "search"]] = Field(
         default_factory=lambda: ["clock", "status"], max_length=8
     )
+    notes: str = Field(default="", max_length=4000)
     dock_size: Literal["small", "medium", "large"] = "medium"
     dock_autohide: bool = False
     restore_windows: bool = True
@@ -77,8 +96,16 @@ class PreferencePatch(BaseModel):
     theme: str | None = None
     accent: str | None = None
     wallpaper: str | None = None
+    wallpaper_mode: str | None = None
+    wallpaper_color: str | None = None
+    wallpaper_gradient_from: str | None = None
+    wallpaper_gradient_to: str | None = None
+    wallpaper_gradient_angle: int | None = None
+    wallpaper_image: str | None = None
+    wallpaper_dim: int | None = None
     timezone: str | None = None
     widgets: list[str] | None = None
+    notes: str | None = None
     dock_size: str | None = None
     dock_autohide: bool | None = None
     restore_windows: bool | None = None

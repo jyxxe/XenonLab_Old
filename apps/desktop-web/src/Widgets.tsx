@@ -1,7 +1,9 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {isActiveWork, isExpiredWorkClaim} from './work-state';
+import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
+import {monthMatrix, zonedToday} from './calendar.js';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
 type WorkItem={id:string;status:string;claim_active:boolean};
+type DetailedWorkItem={id:string;repository:string;issue_id:number;title:string;status:string;claim_active:boolean};
 type Job={job_id:string;status:string};
 const zone=(timezone:string)=>timezone==='system'?undefined:timezone;
 export function MenuClock({timezone}:{timezone:string}){
@@ -38,4 +40,79 @@ export function StatusWidget({apiPage,onOpen}:{apiPage:APIPage;onOpen:()=>void})
     {expired_>0&&<small>{workTruncated?'至少 ':''}{expired_} 项领取已过期，可在任务中心重领</small>}
     <small>点击打开系统面板 →</small>
   </button>;
+}
+const WEEKDAY_LABELS=['一','二','三','四','五','六','日'];
+export function CalendarWidget({timezone}:{timezone:string}){
+  const [now,setNow]=useState(()=>new Date());
+  useEffect(()=>{const timer=setInterval(()=>setNow(new Date()),30000);return()=>clearInterval(timer)},[]);
+  const today=zonedToday(timezone,now);
+  const weeks=today?monthMatrix(today.year,today.month):[];
+  if(!today) return null;
+  return <section className="widget widget-calendar" aria-label="日历">
+    <header><strong>{today.year}年{today.month+1}月</strong></header>
+    <table aria-label={`${today.year}年${today.month+1}月日历`}>
+      <thead><tr>{WEEKDAY_LABELS.map(label=><th key={label} scope="col" aria-label={`星期${label}`}>{label}</th>)}</tr></thead>
+      <tbody>
+        {weeks.map((week,row)=><tr key={row}>{week.map((cell,col)=>(
+          <td key={col} className={cell.inMonth?undefined:'outside'} aria-current={cell.inMonth&&cell.day===today.day?'date':undefined}>
+            {cell.day}
+          </td>))}</tr>)}
+      </tbody>
+    </table>
+  </section>;
+}
+export function WorkWidget({apiPage,onOpen}:{apiPage:APIPage;onOpen:()=>void}){
+  const [items,setItems]=useState<DetailedWorkItem[]|null>(null),[truncated,setTruncated]=useState(false);
+  const latest=useRef(apiPage);
+  latest.current=apiPage;
+  useEffect(()=>{let active=true;
+    const load=async()=>{try{const page=await latest.current('/work?limit=1000');if(active){setItems(page.data);setTruncated(Boolean(page.meta.next_cursor))}}catch{if(active)setItems(null)}};
+    load();const timer=setInterval(load,60000);return()=>{active=false;clearInterval(timer)};
+  },[]);
+  const active=(items??[]).filter(isActiveWork).sort((a,b)=>b.issue_id-a.issue_id).slice(0,5);
+  return <button className="widget widget-work" onClick={onOpen} title="打开任务中心">
+    <header><strong>任务队列</strong><i className={`status-dot${items===null?' bad':''}`}/></header>
+    {items===null?<small>加载失败，稍后重试</small>:active.length===0?<small>暂无进行中任务</small>:(
+      <ul>{active.map(item=>(
+        <li key={item.id}>
+          <span className="work-title">#{item.issue_id} {item.title}</span>
+          <em data-status={workDisplayStatus(item)}>{workDisplayStatus(item)}</em>
+        </li>))}</ul>
+    )}
+    <small>{items===null?'':`${truncated?'至少 ':''}${(items??[]).filter(isActiveWork).length} 项进行中 · 点击打开任务中心 →`}</small>
+  </button>;
+}
+export function NotesWidget({notes,onChange}:{notes:string;onChange:(value:string)=>void}){
+  const [value,setValue]=useState(notes);
+  const synced=useRef(notes);
+  const timer=useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(()=>{if(notes!==synced.current){synced.current=notes;setValue(notes);}},[notes]);
+  useEffect(()=>()=>clearTimeout(timer.current),[]);
+  const edit=(next:string)=>{
+    setValue(next);
+    clearTimeout(timer.current);
+    timer.current=setTimeout(()=>{synced.current=next;onChange(next);},800);
+  };
+  return <section className="widget widget-notes" aria-label="快速便签">
+    <header><strong>快速便签</strong></header>
+    <textarea
+      value={value}
+      maxLength={4000}
+      placeholder="随手记录，自动保存到账户偏好"
+      aria-label="便签内容"
+      onChange={event=>edit(event.target.value)}
+    />
+    {value.length>3500&&<small>{value.length} / 4000</small>}
+  </section>;
+}
+export function SearchWidget({onSearch}:{onSearch:(query:string)=>void}){
+  const [query,setQuery]=useState('');
+  const submit=()=>{const trimmed=query.trim();if(!trimmed)return;onSearch(trimmed);setQuery('');};
+  return <section className="widget widget-search" aria-label="知识库搜索">
+    <header><strong>搜索知识库</strong></header>
+    <form onSubmit={event=>{event.preventDefault();submit();}}>
+      <input value={query} placeholder="输入关键词" aria-label="知识库搜索关键词" onChange={event=>setQuery(event.target.value)} />
+      <button type="submit" disabled={!query.trim()}>搜索</button>
+    </form>
+  </section>;
 }

@@ -1243,6 +1243,83 @@
             ],
             "title": "Wallpaper"
           },
+          "wallpaper_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Mode"
+          },
+          "wallpaper_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Color"
+          },
+          "wallpaper_gradient_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient From"
+          },
+          "wallpaper_gradient_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient To"
+          },
+          "wallpaper_gradient_angle": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient Angle"
+          },
+          "wallpaper_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Image"
+          },
+          "wallpaper_dim": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Dim"
+          },
           "timezone": {
             "anyOf": [
               {
@@ -1267,6 +1344,17 @@
               }
             ],
             "title": "Widgets"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "dock_size": {
             "anyOf": [

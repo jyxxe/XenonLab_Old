@@ -125,6 +125,17 @@
 .preference-switch small{color:var(--text-muted);font-size:var(--font-size-xs)}
 .preference-actions{display:flex;gap:var(--spacing-2);margin:var(--spacing-4) 0}
 
+/* Custom wallpaper controls in the appearance panel */
+.wallpaper-custom{border:1px solid var(--border);border-radius:var(--radius-panel);margin:var(--spacing-2) 0 var(--spacing-3);padding:var(--spacing-3)}
+.wallpaper-custom label{display:block;margin:var(--spacing-2) 0}
+.wallpaper-custom input[type=range]{width:100%}
+.color-input{display:block;width:100%;height:36px;margin-top:var(--spacing-2);padding:2px;border:1px solid var(--border);border-radius:var(--radius-panel);background:var(--surface-sunken);cursor:pointer}
+.wallpaper-image-controls{display:flex;flex-direction:column;gap:var(--spacing-2);margin:var(--spacing-2) 0}
+.wallpaper-image-controls input[type=file]{font-size:var(--font-size-xs);color:var(--text-secondary)}
+.wallpaper-preview{margin:var(--spacing-3) 0 var(--spacing-2);border:1px solid var(--border);border-radius:var(--radius-panel);overflow:hidden;aspect-ratio:16/7;background:var(--surface-sunken)}
+.wallpaper-preview-surface{width:100%;height:100%;background-size:cover;background-position:center;background-repeat:no-repeat}
+.wallpaper-preview-surface[data-mode='other']{background-size:100% 100%}
+
 /* Dashboard (system panel) */
 .dashboard{display:flex;flex-direction:column;height:100%;min-height:520px}
 .dashboard-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--spacing-4);padding:var(--spacing-4) var(--spacing-5) 0;background:transparent;border:0}

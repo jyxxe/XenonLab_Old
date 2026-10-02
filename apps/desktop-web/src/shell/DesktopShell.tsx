@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ErrorState, Spinner, useToast} from '../design-system/primitives';
-import {ClockWidget, MenuClock, StatusWidget} from '../Widgets';
+import {CalendarWidget, ClockWidget, MenuClock, NotesWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
+import {customWallpaperStyle} from '../wallpaper.js';
 import {mergeApps} from './apps';
 import {CommandPalette, type Command, type CommandProvider} from './CommandPalette';
 import {Dock, type DockSize} from './Dock';
@@ -29,8 +30,16 @@ const defaultPreferences: UserPreferences = {
   theme: 'system',
   accent: 'blue',
   wallpaper: 'aurora',
+  wallpaper_mode: 'solid',
+  wallpaper_color: '#101828',
+  wallpaper_gradient_from: '#0b1220',
+  wallpaper_gradient_to: '#1d4ed8',
+  wallpaper_gradient_angle: 160,
+  wallpaper_image: '',
+  wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
+  notes: '',
   dock_size: 'medium',
   dock_autohide: false,
   restore_windows: true,
@@ -89,6 +98,8 @@ export function DesktopShell({
     const win = windows.find(item => item.id === activeId);
     return win ? apps.find(app => app.id === win.app_id) ?? null : null;
   }, [activeId, windows, apps]);
+  const customWallpaper = useMemo(() => customWallpaperStyle(preferences), [preferences]);
+  const knowledgeAvailable = useMemo(() => apps.some(app => app.id === 'knowledge'), [apps]);
 
   const connect = useCallback(async () => {
     setLoadError('');
@@ -512,7 +523,15 @@ export function DesktopShell({
   }
 
   return (
-    <div className="desktop ds-compact">
+    <div
+      className="desktop ds-compact"
+      data-wallpaper-custom={customWallpaper ? preferences.wallpaper_mode || 'solid' : undefined}
+      style={
+        customWallpaper
+          ? {backgroundColor: customWallpaper.backgroundColor, backgroundImage: customWallpaper.backgroundImage}
+          : undefined
+      }
+    >
       <MenuBar
         userLabel={userLabel}
         activeApp={activeApp}
@@ -596,7 +615,15 @@ export function DesktopShell({
       {(preferences.widgets || []).length > 0 && (
         <div className="widgets">
           {(preferences.widgets || []).includes('clock') && <ClockWidget timezone={preferences.timezone} />}
+          {(preferences.widgets || []).includes('calendar') && <CalendarWidget timezone={preferences.timezone} />}
           {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
+          {(preferences.widgets || []).includes('work') && <WorkWidget apiPage={apiPage} onOpen={() => openApp('development')} />}
+          {(preferences.widgets || []).includes('search') && knowledgeAvailable && (
+            <SearchWidget onSearch={query => openApp('knowledge', {action: 'search', query})} />
+          )}
+          {(preferences.widgets || []).includes('notes') && (
+            <NotesWidget notes={preferences.notes || ''} onChange={value => void applyPreferences({notes: value}).catch(() => undefined)} />
+          )}
         </div>
       )}
 

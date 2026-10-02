@@ -1,14 +1,23 @@
 import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
-import type {DesktopApp, UserPreferences} from './shell/types';
+import type {DesktopApp, UserPreferences, WallpaperMode, WidgetId} from './shell/types';
+import {customWallpaperStyle, WALLPAPER_IMAGE_MAX_CHARS} from './wallpaper.js';
 
 export type Preferences = UserPreferences;
 export const defaultPreferences: UserPreferences = {
   theme: 'system',
   accent: 'blue',
   wallpaper: 'aurora',
+  wallpaper_mode: 'solid',
+  wallpaper_color: '#101828',
+  wallpaper_gradient_from: '#0b1220',
+  wallpaper_gradient_to: '#1d4ed8',
+  wallpaper_gradient_angle: 160,
+  wallpaper_image: '',
+  wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
+  notes: '',
   dock_size: 'medium',
   dock_autohide: false,
   restore_windows: true,
@@ -16,10 +25,35 @@ export const defaultPreferences: UserPreferences = {
   reduced_motion: false,
 };
 
-const widgetOptions: Array<['clock' | 'status', string]> = [
+const widgetOptions: Array<[WidgetId, string]> = [
   ['clock', '时钟与日期'],
+  ['calendar', '日历'],
   ['status', '系统状态'],
+  ['work', '任务队列'],
+  ['search', '知识库搜索'],
+  ['notes', '快速便签'],
 ];
+
+// Wallpapers are user photos, so cap the stored data URL: downscale to a
+// 2048px JPEG in a canvas before it is written into server-side preferences.
+async function downscaleImageToDataUrl(file: File, maxEdge = 2048): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('canvas unavailable');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 export function DesktopPreferences({
   preferences,
@@ -39,6 +73,7 @@ export function DesktopPreferences({
   const changeVersion = useRef(0);
   const [message, setMessage] = useState('');
   const [timezone, setTimezone] = useState(preferences.timezone);
+  const customPreview = customWallpaperStyle(preferences);
 
   // Appearance changes apply immediately and the shell persists them; macOS-style
   // settings have no separate confirmation step for display options.
@@ -79,8 +114,124 @@ export function DesktopPreferences({
             <option value="ocean">深海</option>
             <option value="sunset">晚霞</option>
             <option value="silver">银色</option>
+            <option value="custom">自定义</option>
           </Select>
         </label>
+        {preferences.wallpaper === 'custom' && (
+          <div className="wallpaper-custom">
+            <label>
+              方式
+              <Select value={preferences.wallpaper_mode || 'solid'} onChange={event => update({wallpaper_mode: event.target.value as WallpaperMode})}>
+                <option value="solid">纯色</option>
+                <option value="gradient">渐变</option>
+                <option value="image">图片</option>
+              </Select>
+            </label>
+            {(preferences.wallpaper_mode || 'solid') === 'solid' && (
+              <label>
+                颜色
+                <input
+                  className="color-input"
+                  type="color"
+                  value={preferences.wallpaper_color || '#101828'}
+                  aria-label="壁纸颜色"
+                  onChange={event => update({wallpaper_color: event.target.value})}
+                />
+              </label>
+            )}
+            {preferences.wallpaper_mode === 'gradient' && (
+              <>
+                <label>
+                  起始颜色
+                  <input
+                    className="color-input"
+                    type="color"
+                    value={preferences.wallpaper_gradient_from || '#0b1220'}
+                    aria-label="渐变起始颜色"
+                    onChange={event => update({wallpaper_gradient_from: event.target.value})}
+                  />
+                </label>
+                <label>
+                  结束颜色
+                  <input
+                    className="color-input"
+                    type="color"
+                    value={preferences.wallpaper_gradient_to || '#1d4ed8'}
+                    aria-label="渐变结束颜色"
+                    onChange={event => update({wallpaper_gradient_to: event.target.value})}
+                  />
+                </label>
+                <label>
+                  角度 {preferences.wallpaper_gradient_angle ?? 160}°
+                  <input
+                    type="range"
+                    min={0}
+                    max={360}
+                    value={preferences.wallpaper_gradient_angle ?? 160}
+                    aria-label="渐变角度"
+                    onChange={event => update({wallpaper_gradient_angle: Number(event.target.value)})}
+                  />
+                </label>
+              </>
+            )}
+            {preferences.wallpaper_mode === 'image' && (
+              <div className="wallpaper-image-controls">
+                <label>
+                  图片文件
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    aria-label="选择壁纸图片"
+                    onChange={async event => {
+                      const file = event.target.files?.[0];
+                      event.target.value = '';
+                      if (!file) return;
+                      if (!file.type.startsWith('image/')) {
+                        setMessage('壁纸仅支持 PNG / JPEG / WebP 图片');
+                        return;
+                      }
+                      setMessage('正在处理图片…');
+                      try {
+                        const dataUrl = await downscaleImageToDataUrl(file);
+                        if (dataUrl.length > WALLPAPER_IMAGE_MAX_CHARS) {
+                          setMessage('图片过大，即使压缩后仍超出 2MB 限制，请换一张图片');
+                          return;
+                        }
+                        await update({wallpaper_image: dataUrl, wallpaper_mode: 'image'});
+                      } catch (error) {
+                        setMessage('图片读取失败：' + String(error));
+                      }
+                    }}
+                  />
+                </label>
+                {preferences.wallpaper_image ? (
+                  <Button size="sm" onClick={() => update({wallpaper_image: ''})}>移除自定义图片</Button>
+                ) : (
+                  <p className="muted">尚未设置图片，桌面暂时使用渐变兜底。</p>
+                )}
+              </div>
+            )}
+            <label>
+              压暗 {preferences.wallpaper_dim ?? 0}%
+              <input
+                type="range"
+                min={0}
+                max={90}
+                value={preferences.wallpaper_dim ?? 0}
+                aria-label="壁纸压暗程度"
+                onChange={event => update({wallpaper_dim: Number(event.target.value)})}
+              />
+            </label>
+            <div className="wallpaper-preview" aria-label="壁纸预览">
+              <div
+                className="wallpaper-preview-surface"
+                data-mode={customPreview?.imageMode ? 'image' : 'other'}
+                style={{backgroundColor: customPreview?.backgroundColor, backgroundImage: customPreview?.backgroundImage}}
+              />
+            </div>
+            <p className="muted">图片会在本机压缩到 2048px / 2MB 内再保存；自定义壁纸跟随账户在所有设备生效。</p>
+          </div>
+        )}
       </Panel>
 
       <Panel title="桌面">
