@@ -169,3 +169,34 @@ def test_restart_marks_stranded_running_rows_failed(tmp_path):
     assert counts["running"] == 0 and counts["failed"] == 1
     rows, _ = reopened.history(limit=10)
     assert rows[0]["error_code"] == "WORKER_RESTARTED"
+
+
+def test_queue_views_are_isolated_per_caller(tmp_path):
+    """Issue #74 review: queue/requests endpoints must not leak another
+    principal's subjects, request metadata or errors."""
+    settings = make_settings(tmp_path)
+    # bob must exist at app creation: dev tokens are snapshotted during startup.
+    settings.dev_tokens["bob"] = {"sub": "bob", "scope": "dev:read embedding:write", "agent_kind": "codex"}
+    app = create_app("embedding", settings)
+    app.state.model = StubModel()
+    client = TestClient(app)
+
+    assert client.post(
+        "/v1/embeddings", headers=auth("alice"), json={"model": "fast", "input": ["alice text"]}
+    ).status_code == 200
+    # bob has a request still running while alice inspects the queue.
+    client.app.state.store.start("d100m", 2, 9, "reject", "bob")
+
+    bob_queue = client.get("/api/v1/embedding/queue", headers=auth("bob")).json()["data"]
+    assert [row["caller"] for row in bob_queue["active"]] == ["bob"]
+    assert bob_queue["counts"]["running"] == 1
+    # alice sees only her own activity and counts, never bob's running row.
+    alice_queue = client.get("/api/v1/embedding/queue", headers=auth("alice")).json()["data"]
+    assert alice_queue["active"] == []
+    assert alice_queue["counts"] == {"running": 0, "completed": 1, "failed": 0}
+
+    alice_history = client.get("/api/v1/embedding/requests?limit=100", headers=auth("alice")).json()["data"]
+    assert [row["caller"] for row in alice_history] == ["alice"]
+    bob_history = client.get("/api/v1/embedding/requests?limit=100", headers=auth("bob")).json()["data"]
+    assert bob_history and all(row["caller"] == "bob" for row in bob_history)
+    assert not any(row["caller"] == "alice" for row in bob_history)

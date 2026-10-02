@@ -106,7 +106,7 @@ export function EmbeddingQueue({apiPage}: {apiPage: APIPage}) {
       <header className="app-head">
         <div>
           <h2>Embedding 队列</h2>
-          <p>D100M worker 的实时请求与最近已完成记录；历史保留最近 1000 条。</p>
+          <p>当前账户对 D100M worker 的在途请求与最近记录（历史保留 1000 条）。请求不排队等待：worker 忙碌时新请求直接返回 429，无优先级调度。</p>
         </div>
         <div className="app-head-actions">
           <Button onClick={() => void refresh()} disabled={loading}>{loading ? '读取中…' : '刷新'}</Button>
@@ -212,7 +212,7 @@ export function EmbeddingQueue({apiPage}: {apiPage: APIPage}) {
                 <EmptyState
                   icon="≡"
                   title="还没有请求记录"
-                  description="Embedding 服务收到第一个请求后，这里会显示最近 1000 条已完成或失败的记录。"
+                  description="当前账户发出第一个 Embedding 请求后，这里会显示最近 1000 条已完成或失败的记录；其他账户的请求不会出现在此列表。"
                 />
               )}
             </div>

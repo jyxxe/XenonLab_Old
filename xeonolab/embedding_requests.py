@@ -79,14 +79,21 @@ class EmbeddingRequestStore:
             (RUNNING, RUNNING, FINISHED_HISTORY),
         )
 
-    def active(self):
+    def active(self, caller=None):
+        """Running requests. The queue view is caller-scoped (issue #74 review):
+        history, activity and counts must never expose another principal's
+        subject IDs, request metadata or errors."""
+        query = "SELECT * FROM embedding_requests WHERE status=?"
+        parameters: list = [RUNNING]
+        if caller is not None:
+            query += " AND caller=?"
+            parameters.append(caller)
+        query += " ORDER BY id"
         with connect(self.database) as db:
-            rows = db.execute(
-                "SELECT * FROM embedding_requests WHERE status=? ORDER BY id", (RUNNING,)
-            ).fetchall()
+            rows = db.execute(query, parameters).fetchall()
         return [dict(row) for row in rows]
 
-    def history(self, limit=100, cursor="", status=None):
+    def history(self, limit=100, cursor="", status=None, caller=None):
         """Newest-first finished and running requests; cursor is the last seen id."""
         query = "SELECT * FROM embedding_requests"
         parameters: list = []
@@ -97,6 +104,9 @@ class EmbeddingRequestStore:
         if status:
             conditions.append("status=?")
             parameters.append(status)
+        if caller is not None:
+            conditions.append("caller=?")
+            parameters.append(caller)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY id DESC LIMIT ?"
@@ -106,10 +116,14 @@ class EmbeddingRequestStore:
         next_cursor = str(rows[limit - 1]["id"]) if len(rows) > limit else None
         return rows[:limit], next_cursor
 
-    def counts(self):
+    def counts(self, caller=None):
+        query = "SELECT status,COUNT(*) AS total FROM embedding_requests"
+        parameters: list = []
+        if caller is not None:
+            query += " WHERE caller=?"
+            parameters.append(caller)
+        query += " GROUP BY status"
         with connect(self.database) as db:
-            rows = db.execute(
-                "SELECT status,COUNT(*) AS total FROM embedding_requests GROUP BY status"
-            ).fetchall()
+            rows = db.execute(query, parameters).fetchall()
         observed = {row["status"]: row["total"] for row in rows}
         return {status: observed.get(status, 0) for status in (RUNNING, COMPLETED, FAILED)}
