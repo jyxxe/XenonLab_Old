@@ -60,6 +60,7 @@ export function LibraryApp({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const rowNavigation = useRef(0);
+  const [tableTarget, setTableTarget] = useState<{id: string; loading: boolean; error: unknown} | null>(null);
 
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
@@ -91,6 +92,7 @@ export function LibraryApp({
 
   function openTable(next: Table, expandPath = true) {
     ++rowNavigation.current;
+    setTableTarget(null);
     setView('library');
     setSelection(new Set());
     setActiveRowId(null);
@@ -103,14 +105,37 @@ export function LibraryApp({
     void session.open(next, session.includeDeleted);
   }
 
+  async function openTableTarget(id: string) {
+    const request = ++rowNavigation.current;
+    setView('library');
+    setTableTarget({id, loading: true, error: null});
+    setSelection(new Set());
+    setActiveRowId(null);
+    setConflict(null);
+    setDialog(null);
+    setAskAI(null);
+    session.clear();
+    try {
+      // Revalidate the current table ACL even when its metadata is cached in
+      // the catalogue. The table may also be beyond the loaded directory page.
+      const next = await api(`/tables/${encodeURIComponent(id)}`) as Table;
+      if (request !== rowNavigation.current) return;
+      openTable(next);
+    } catch (error) {
+      if (request === rowNavigation.current) setTableTarget({id, loading: false, error});
+    }
+  }
+
   function selectView(next: LibraryViewKind) {
     ++rowNavigation.current;
+    setTableTarget(null);
     setView(next);
     if (next === 'theorems' && !theorems.items.length && !theorems.loading) void theorems.load();
   }
 
   async function openRow(tableId: string, rowId: string, remember = true) {
     const request = ++rowNavigation.current;
+    setTableTarget(null);
     const known = catalogue.tables.find(item => item.id === tableId) || (await api(`/tables/${tableId}`).catch(() => null));
     if (request !== rowNavigation.current) return;
     if (!known) {
@@ -149,6 +174,7 @@ export function LibraryApp({
       void openRow(tableId, rowId);
     } else if (entry.kind === 'theorem') {
       ++rowNavigation.current;
+      setTableTarget(null);
       setView('theorems');
       void theorems.open(entry.id);
     }
@@ -330,6 +356,11 @@ export function LibraryApp({
 
   useEffect(() => {
     if (!intent) return;
+    if (intent.action === 'openTable' && intent.table_id) {
+      void openTableTarget(intent.table_id);
+      return () => { ++rowNavigation.current; };
+    }
+    setTableTarget(null);
     if (intent.action === 'refresh') {
       void catalogue.load();
       if (session.table) void session.refresh();
@@ -370,6 +401,7 @@ export function LibraryApp({
   }
 
   const catalogueError = catalogue.error ? describeError(catalogue.error, '读取目录') : null;
+  const tableTargetError = tableTarget?.error ? describeError(tableTarget.error, '打开知识表') : null;
 
   return (
     <div className="knowledge">
@@ -489,7 +521,11 @@ export function LibraryApp({
           />
         )}
 
-        {view === 'library' && !table && (
+        {view === 'library' && tableTarget && (
+          tableTarget.loading ? <p role="status"><Spinner label="正在打开知识表" /> 正在打开知识表…</p> : tableTargetError && <ErrorState title={tableTargetError.title} message={tableTargetError.message} requestId={tableTargetError.requestId} errorCode={tableTargetError.code} onRetry={() => void openTableTarget(tableTarget.id)} />
+        )}
+
+        {view === 'library' && !table && !tableTarget && (
           <div className="library-welcome">
             <h2>XeLibrary</h2>
             <p>从左侧路径树打开一张知识表，或使用搜索与查询控制台。</p>

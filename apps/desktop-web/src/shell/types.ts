@@ -64,7 +64,7 @@ export type RegistryApp = {
 
 /** `askAI` carries an editable draft composed by XeLibrary's selection
  * extension point; the chat side receives it as the initial user input. */
-export type AppIntent = {id: string; action: 'search' | 'query' | 'theorems' | 'refresh' | 'askAI'; query?: string; prompt?: string};
+export type AppIntent = {id: string; action: 'search' | 'query' | 'theorems' | 'refresh' | 'askAI' | 'openTable'; query?: string; prompt?: string; table_id?: string};
 export type AppMenuEntry = {id: string; label: string; intent?: Omit<AppIntent, 'id'>; action?: 'refresh' | 'reload' | 'external'};
 
 export type DesktopApp = {
