@@ -249,6 +249,29 @@ def test_encoded_webp_has_a_hard_output_size_limit(monkeypatch, tmp_path):
     assert not destination.exists()
 
 
+def test_wallpaper_with_bad_png_idat_crc_is_invalid(tmp_path):
+    encoded = bytearray(_image((11, 12, 13)))
+    offset = 8
+    while offset + 12 <= len(encoded):
+        length = int.from_bytes(encoded[offset:offset + 4], "big")
+        chunk_type = bytes(encoded[offset + 4:offset + 8])
+        if chunk_type == b"IDAT":
+            crc_offset = offset + 8 + length
+            encoded[crc_offset] ^= 0x01
+            break
+        offset += 12 + length
+    else:
+        pytest.fail("generated PNG has no IDAT chunk")
+
+    destination = tmp_path / "bad-crc.webp"
+    with pytest.raises(APIError) as error:
+        desktop.process_wallpaper_image(bytes(encoded), destination)
+
+    assert error.value.status == 422
+    assert error.value.code == "INVALID_WALLPAPER"
+    assert not destination.exists()
+
+
 @pytest.mark.anyio
 async def test_image_processing_runs_off_loop_and_capacity_returns_429(settings, monkeypatch, tmp_path):
     for token in ("alice", "bob", "opencode"):

@@ -54,8 +54,9 @@ def process_wallpaper_image(payload: bytes, temporary):
     except APIError:
         temporary.unlink(missing_ok=True)
         raise
-    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError,
+    except (UnidentifiedImageError, OSError, ValueError, SyntaxError, Image.DecompressionBombError,
             Image.DecompressionBombWarning):
+        temporary.unlink(missing_ok=True)
         raise APIError(422, "INVALID_WALLPAPER", "file is not a supported, safe image") from None
     except Exception:
         temporary.unlink(missing_ok=True)
