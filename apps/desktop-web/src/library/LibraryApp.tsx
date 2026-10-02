@@ -4,6 +4,7 @@ import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
 import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
+import {TableSnapshotDownload} from './TableSnapshotDownload';
 import {TableView, type SortState} from './TableView';
 import {createUploadStore} from '../upload-state.js';
 import {Inspector, type ConflictInfo, type InspectorTab} from './Inspector';
@@ -568,6 +569,7 @@ export function LibraryApp({
                 <Button size="sm" variant="ghost" onClick={() => setAskAI('ask')} title="就当前选择的记录向 AI 提问">{selection.size > 1 ? `Ask AI（${selection.size} 行）` : 'Ask AI'}</Button>
               </div>
             </header>
+            {canAdmin && <TableSnapshotDownload key={`${table.id}:${subject}:${authEpoch}`} tableId={table.id} apiRaw={apiRaw} />}
             <TableView
               table={table}
               columns={table.columns || []}
