@@ -13,8 +13,9 @@ import {
   indexStatusFromJobs,
   isKeywordResult,
   libraryPrefsStorageKey,
-  mergeServerPrefs,
   mergeRecent,
+  mergeServerPrefs,
+  mergeTombstones,
   parseFieldFilters,
   rowHasAttachment,
   searchWarnings,
@@ -166,11 +167,41 @@ test('recent/favorites helpers stay bounded and deduplicate', () => {
   const updated = mergeRecent(recent, {kind: 'table', id: 'a', title: 'A2', at: 2});
   assert.equal(updated.length, 1);
   assert.equal(updated[0].title, 'A2');
-  const favorites = toggleFavorite([], {kind: 'table', id: 'a', title: 'A', at: 1});
-  assert.equal(favorites.length, 1);
-  assert.deepEqual(toggleFavorite(favorites, {kind: 'table', id: 'a', title: 'A', at: 1}), []);
+  const added = toggleFavorite([], {kind: 'table', id: 'a', title: 'A', at: 1});
+  assert.equal(added.favorites.length, 1);
+  assert.equal(added.tombstones.length, 0);
+  const removed = toggleFavorite(added.favorites, {kind: 'table', id: 'a', title: 'A', at: 1}, added.tombstones, 5);
+  assert.deepEqual(removed.favorites, []);
+  assert.deepEqual(removed.tombstones, [{kind: 'table', id: 'a', title: 'A', at: 5, deleted: true}]);
+  // Re-adding clears the tombstone so future removals stay attributable.
+  const reAdded = toggleFavorite(removed.favorites, {kind: 'table', id: 'a', title: 'A', at: 9}, removed.tombstones, 9);
+  assert.equal(reAdded.favorites.length, 1);
+  assert.equal(reAdded.tombstones.length, 0);
   assert.notEqual(libraryPrefsStorageKey('subject:one', 'recent'), libraryPrefsStorageKey('subject:two', 'recent'));
   assert.equal(libraryPrefsStorageKey(null, 'favorites'), 'xeonolab.library.anonymous.favorites');
+});
+
+test('mergeServerPrefs honours tombstones and stale cached copies cannot revive deletions', () => {
+  const server = [{kind: 'table', id: 'a', title: 'A', at: 1}];
+  const tombstones = [{kind: 'table', id: 'a', at: 5, deleted: true}];
+  // Device B still holds a stale local copy of the deleted favourite.
+  const revived = mergeServerPrefs(
+    [{kind: 'table', id: 'a', title: 'A', at: 1}],
+    server,
+    'favorites',
+    tombstones,
+  );
+  assert.deepEqual(revived, []);
+  // An entry re-added after the deletion timestamp survives the tombstone.
+  const reAdded = mergeServerPrefs(
+    [],
+    [{kind: 'table', id: 'a', title: 'A', at: 9}],
+    'favorites',
+    tombstones,
+  );
+  assert.equal(reAdded.length, 1);
+  assert.equal(mergeTombstones([{kind: 'table', id: 'a', at: 3, deleted: true}], [{kind: 'table', id: 'a', at: 7, deleted: true}]).length, 1);
+  assert.equal(mergeTombstones([], [{kind: 'table', id: 'a', at: 7, deleted: true}])[0].at, 7);
 });
 
 test('changedFields, rowHasAttachment, withOffset, and formatters behave', () => {

@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import type {API, APIPage} from '../shell/types';
-import {libraryPrefsStorageKey, mergeRecent, mergeServerPrefs, parseFieldFilters, toggleFavorite} from './logic.js';
+import type {API, APIPage, APIRaw} from '../shell/types';
+import {libraryPrefsStorageKey, mergeRecent, mergeServerPrefs, mergeTombstones, parseFieldFilters, toggleFavorite} from './logic.js';
 import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
 export const SEARCH_LIMIT = 25;
@@ -514,47 +514,107 @@ export function useTheorems(apiPage: APIPage) {
   };
 }
 
-export function useLibraryPrefs(subject: string | null | undefined, api?: API) {
+export function useLibraryPrefs(subject: string | null | undefined, api?: API, apiRaw?: APIRaw) {
   const owner = subject || null;
   const recentKey = libraryPrefsStorageKey(owner, 'recent');
   const favoritesKey = libraryPrefsStorageKey(owner, 'favorites');
+  const tombstonesKey = libraryPrefsStorageKey(owner, 'tombstones');
   const [cache, setCache] = useState(() => ({
     owner: owner || 'anonymous',
     recent: read(recentKey),
     favorites: read(favoritesKey),
+    tombstones: readTombstones(tombstonesKey),
   }));
   const cacheOwner = owner || 'anonymous';
+  // ETag of the last server read; guards PATCHes against lost updates.
+  const revisionRef = useRef<string | null>(null);
 
-  // Issue #72: recents/favorites follow the account across devices. The server
-  // copy is merged over the local cache on load; later changes push back.
+  const refreshFromServer = useCallback(async () => {
+    if (!apiRaw || !owner) return null;
+    const response = await apiRaw('/users/me/preferences');
+    revisionRef.current = response.headers.get('ETag');
+    const body = await response.json();
+    return (body?.data ?? null) as {
+      library_recents?: RecentEntry[];
+      library_favorites?: RecentEntry[];
+      library_favorite_tombstones?: Array<{kind: string; id: string; at: number; deleted: boolean}>;
+    } | null;
+  }, [apiRaw, owner]);
+
+  // Issue #72: recents/favorites follow the account across devices. Writes are
+  // guarded with If-Match; on a lost update the fresh server copy is merged and
+  // the write retried once (issue #72 review: multi-device merge protocol).
+  const pushServer = useCallback(
+    async (payload: Record<string, unknown>) => {
+      if (!api) return;
+      const attempt = () =>
+        api('/users/me/preferences', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(revisionRef.current ? {'If-Match': revisionRef.current} : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+      try {
+        await attempt();
+      } catch (error) {
+        if (!apiRaw || !/STALE_REVISION|412/.test(String(error))) return;
+        const prefs = await refreshFromServer().catch(() => null);
+        if (!prefs) return;
+        const tombstones = mergeTombstones(readTombstones(tombstonesKey), prefs.library_favorite_tombstones);
+        const mergedFavorites = mergeServerPrefs(read(favoritesKey), prefs.library_favorites, 'favorites', tombstones);
+        const mergedRecent = mergeServerPrefs(read(recentKey), prefs.library_recents, 'recent');
+        write(favoritesKey, mergedFavorites);
+        write(recentKey, mergedRecent);
+        writeTombstones(tombstonesKey, tombstones);
+        setCache({owner: cacheOwner, recent: mergedRecent, favorites: mergedFavorites, tombstones});
+        const retry: Record<string, unknown> = {};
+        if ('library_favorites' in payload) {
+          retry.library_favorites = mergedFavorites;
+          retry.library_favorite_tombstones = tombstones;
+        }
+        if ('library_recents' in payload) retry.library_recents = mergedRecent;
+        try {
+          await attempt();
+        } catch {
+          /* best-effort sync; the next load re-merges from the server */
+        }
+      }
+    },
+    [api, apiRaw, cacheOwner, favoritesKey, recentKey, refreshFromServer, tombstonesKey],
+  );
+
   useEffect(() => {
     if (!api || !owner) return;
     let active = true;
-    api('/users/me/preferences')
-      .then((prefs: {library_recents?: RecentEntry[]; library_favorites?: RecentEntry[]}) => {
-        if (!active) return;
+    refreshFromServer()
+      .then(prefs => {
+        if (!active || !prefs) return;
+        const tombstones = mergeTombstones(readTombstones(tombstonesKey), prefs.library_favorite_tombstones);
         const mergedRecent = mergeServerPrefs(read(recentKey), prefs.library_recents, 'recent');
-        const mergedFavorites = mergeServerPrefs(read(favoritesKey), prefs.library_favorites, 'favorites');
+        const mergedFavorites = mergeServerPrefs(read(favoritesKey), prefs.library_favorites, 'favorites', tombstones);
         write(recentKey, mergedRecent);
         write(favoritesKey, mergedFavorites);
-        setCache({owner: cacheOwner, recent: mergedRecent, favorites: mergedFavorites});
+        writeTombstones(tombstonesKey, tombstones);
+        setCache({owner: cacheOwner, recent: mergedRecent, favorites: mergedFavorites, tombstones});
+        // Push back what the server is missing (local-only entries or newer
+        // deletion markers) so a third device converges as well.
+        const favoritesDrift = JSON.stringify(mergedFavorites) !== JSON.stringify(prefs.library_favorites || []);
+        const tombstonesDrift =
+          JSON.stringify(tombstones) !== JSON.stringify(prefs.library_favorite_tombstones || []);
+        if (favoritesDrift || tombstonesDrift) {
+          void pushServer({library_favorites: mergedFavorites, library_favorite_tombstones: tombstones});
+        }
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
-  }, [api, cacheOwner, favoritesKey, owner, recentKey]);
+  }, [api, cacheOwner, favoritesKey, owner, pushServer, recentKey, refreshFromServer, tombstonesKey]);
 
-  const pushServer = useCallback((section: 'library_recents' | 'library_favorites', entries: RecentEntry[]) => {
-    if (!api) return;
-    void api('/users/me/preferences', {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({[section]: entries}),
-    }).catch(() => undefined);
-  }, [api]);
   if (cache.owner !== cacheOwner) {
-    setCache({owner: cacheOwner, recent: read(recentKey), favorites: read(favoritesKey)});
+    setCache({owner: cacheOwner, recent: read(recentKey), favorites: read(favoritesKey), tombstones: readTombstones(tombstonesKey)});
   }
   const recent = cache.owner === cacheOwner ? cache.recent : read(recentKey);
   const favorites = cache.owner === cacheOwner ? cache.favorites : read(favoritesKey);
@@ -564,22 +624,42 @@ export function useLibraryPrefs(subject: string | null | undefined, api?: API) {
       const previous = current.owner === cacheOwner ? current.recent : read(recentKey);
       const next = mergeRecent(previous, entry);
       write(recentKey, next);
-      pushServer('library_recents', next);
-      return {owner: cacheOwner, recent: next, favorites: current.owner === cacheOwner ? current.favorites : read(favoritesKey)};
+      void pushServer({library_recents: next});
+      return {owner: cacheOwner, recent: next, favorites: current.owner === cacheOwner ? current.favorites : read(favoritesKey), tombstones: current.owner === cacheOwner ? current.tombstones : readTombstones(tombstonesKey)};
     });
-  }, [cacheOwner, favoritesKey, pushServer, recentKey]);
+  }, [cacheOwner, favoritesKey, pushServer, recentKey, tombstonesKey]);
 
   const toggle = useCallback((entry: RecentEntry) => {
+    const at = Date.now();
     setCache(current => {
       const previous = current.owner === cacheOwner ? current.favorites : read(favoritesKey);
-      const next = toggleFavorite(previous, entry);
-      write(favoritesKey, next);
-      pushServer('library_favorites', next);
-      return {owner: cacheOwner, recent: current.owner === cacheOwner ? current.recent : read(recentKey), favorites: next};
+      const previousTombstones = current.owner === cacheOwner ? current.tombstones : readTombstones(tombstonesKey);
+      const next = toggleFavorite(previous, entry, previousTombstones, at);
+      write(favoritesKey, next.favorites);
+      writeTombstones(tombstonesKey, next.tombstones);
+      void pushServer({library_favorites: next.favorites, library_favorite_tombstones: next.tombstones});
+      return {owner: cacheOwner, recent: current.owner === cacheOwner ? current.recent : read(recentKey), favorites: next.favorites, tombstones: next.tombstones};
     });
-  }, [cacheOwner, favoritesKey, pushServer, recentKey]);
+  }, [cacheOwner, favoritesKey, pushServer, recentKey, tombstonesKey]);
 
   return {recent, favorites, remember, toggle};
+}
+
+function readTombstones(key: string): Array<{kind: string; id: string; at: number; deleted: boolean}> {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(value) ? value.filter(item => item && item.kind && item.id && item.deleted) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTombstones(key: string, tombstones: Array<{kind: string; id: string; at: number; deleted: boolean}>) {
+  try {
+    localStorage.setItem(key, JSON.stringify(tombstones));
+  } catch {
+    /* storage can be unavailable; sync is best-effort */
+  }
 }
 
 function read(key: string): RecentEntry[] {

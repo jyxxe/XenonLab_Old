@@ -21,7 +21,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
   const search = useSearch(apiPage);
   const query = useQueryConsole(apiPage);
   const theorems = useTheorems(apiPage);
-  const prefs = useLibraryPrefs(subject, api);
+  const prefs = useLibraryPrefs(subject, api, apiRaw);
 
   const [view, setView] = useState<LibraryViewKind>('library');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());

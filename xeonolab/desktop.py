@@ -62,11 +62,17 @@ class Preferences(BaseModel):
     reduced_motion: bool = False
     library_recents: list[dict] = Field(default_factory=list, max_length=50)
     library_favorites: list[dict] = Field(default_factory=list, max_length=50)
+    library_favorite_tombstones: list[dict] = Field(default_factory=list, max_length=200)
 
     @field_validator("library_recents", "library_favorites")
     @classmethod
     def _clean_library_entries_fields(cls, value):
         return _clean_library_entries(value)
+
+    @field_validator("library_favorite_tombstones")
+    @classmethod
+    def _clean_library_tombstones(cls, value):
+        return _clean_library_tombstones(value)
 
     @field_validator("timezone")
     @classmethod
@@ -98,6 +104,26 @@ def _clean_library_entries(value):
     return cleaned[:50]
 
 
+def _clean_library_tombstones(value):
+    """Deletion markers for cross-device favorites sync (issue #72 review):
+    a tombstone with a newer `at` than an entry suppresses its revival."""
+    cleaned = []
+    for entry in value or []:
+        if not isinstance(entry, dict):
+            continue
+        kind, entry_id = entry.get("kind"), entry.get("id")
+        if not isinstance(kind, str) or not kind or not isinstance(entry_id, str) or not entry_id:
+            continue
+        at = entry.get("at")
+        cleaned.append({
+            "kind": kind[:32],
+            "id": entry_id[:128],
+            "at": at if isinstance(at, (int, float)) and not isinstance(at, bool) else 0,
+            "deleted": True,
+        })
+    return cleaned[:200]
+
+
 class PreferencePatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     theme: str | None = None
@@ -112,11 +138,17 @@ class PreferencePatch(BaseModel):
     reduced_motion: bool | None = None
     library_recents: list[dict] | None = None
     library_favorites: list[dict] | None = None
+    library_favorite_tombstones: list[dict] | None = None
 
     @field_validator("library_recents", "library_favorites")
     @classmethod
     def _clean_patch_library_entries(cls, value):
         return None if value is None else _clean_library_entries(value)
+
+    @field_validator("library_favorite_tombstones")
+    @classmethod
+    def _clean_patch_library_tombstones(cls, value):
+        return None if value is None else _clean_library_tombstones(value)
 
 
 class Layout(BaseModel):
@@ -143,6 +175,8 @@ def create_app(settings=None):
 
         if "revision" not in {row[1] for row in db.execute("PRAGMA table_info(apps)")}:
             db.execute("ALTER TABLE apps ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        if "revision" not in {row[1] for row in db.execute("PRAGMA table_info(preferences)")}:
+            db.execute("ALTER TABLE preferences ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
 
     def canonical_origin(value):
         parsed = urlparse(value)
@@ -295,24 +329,36 @@ def create_app(settings=None):
 
     @app.get("/api/v1/users/me/preferences")
     def get_preferences(request: Request, actor=Depends(scope("desktop:read"))):
+        from fastapi.responses import JSONResponse
+
         with connect(path) as db:
-            row = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
-        return response(
+            row = db.execute("SELECT definition,revision FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
+        body = response(
             request,
-            Preferences.model_validate_json(row[0]).model_dump() if row else Preferences().model_dump(),
+            Preferences.model_validate_json(row["definition"]).model_dump()
+            if row
+            else Preferences().model_dump(),
         )
+        # Content-revision ETag so multi-device library pref writers can detect
+        # lost updates (issue #72 review); legacy clients that never send
+        # If-Match keep the old last-write-wins behaviour.
+        return JSONResponse(body, headers={"ETag": etag(row["revision"] if row else 0)})
 
     @app.patch("/api/v1/users/me/preferences")
     def patch_preferences(body: PreferencePatch, request: Request, actor=Depends(scope("desktop:read"))):
         with transaction(path) as db:
-            row = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
-            old = json.loads(row[0]) if row else Preferences().model_dump()
+            row = db.execute("SELECT definition,revision FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
+            old = json.loads(row["definition"]) if row else Preferences().model_dump()
+            current_revision = row["revision"] if row else 0
+            if request.headers.get("If-Match"):
+                precondition(request, current_revision)
             try:
                 updated = Preferences.model_validate({**old, **body.model_dump(exclude_unset=True)})
             except ValueError:
                 raise APIError(422, "INVALID_PREFERENCES", "invalid preference or timezone") from None
             db.execute(
-                "INSERT OR REPLACE INTO preferences VALUES(?,?)", (actor.sub, updated.model_dump_json())
+                "INSERT OR REPLACE INTO preferences(owner,definition,revision) VALUES(?,?,?)",
+                (actor.sub, updated.model_dump_json(), current_revision + 1),
             )
         return response(request, updated.model_dump())
 

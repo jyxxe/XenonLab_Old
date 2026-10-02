@@ -265,23 +265,50 @@ export function indexStatusFromJobs(jobs = []) {
   return {state, detail, latest};
 }
 
-export function mergeServerPrefs(local, server, kind) {
-  
-  // Union of local and server entries keyed by kind+id, keeping the fresher
-  // copy of each; the server ordering wins for ties so all devices converge.
-  const key = entry => `${entry.kind}:${entry.id}`;
+export function libraryPrefsKey(entry) {
+  return `${entry.kind}:${entry.id}`;
+}
+
+// Deletion markers travel with the favorites list (issue #72 review): a
+// tombstone newer than an entry suppresses that entry's revival on any device
+// that still has a stale cached copy.
+export function mergeServerPrefs(local, server, kind, tombstones = []) {
+  const newestDeletion = new Map();
+  for (const tombstone of tombstones || []) {
+    if (!tombstone || !tombstone.kind || !tombstone.id) continue;
+    const key = libraryPrefsKey(tombstone);
+    const at = Number(tombstone.at) || 0;
+    if (at > (newestDeletion.get(key) ?? -Infinity)) newestDeletion.set(key, at);
+  }
   const merged = new Map();
   for (const entry of server || []) {
-    if (entry && entry.kind && entry.id) merged.set(key(entry), {...entry});
+    if (!entry || !entry.kind || !entry.id || entry.deleted) continue;
+    const key = libraryPrefsKey(entry);
+    if (Number(entry.at) <= (newestDeletion.get(key) ?? -Infinity)) continue;
+    merged.set(key, {...entry});
   }
   for (const entry of local || []) {
-    if (!entry || !entry.kind || !entry.id) continue;
-    const existing = merged.get(key(entry));
-    if (!existing || Number(entry.at) > Number(existing.at)) merged.set(key(entry), {...entry});
+    if (!entry || !entry.kind || !entry.id || entry.deleted) continue;
+    const key = libraryPrefsKey(entry);
+    if (Number(entry.at) <= (newestDeletion.get(key) ?? -Infinity)) continue;
+    const existing = merged.get(key);
+    if (!existing || Number(entry.at) > Number(existing.at)) merged.set(key, {...entry});
   }
   const list2 = [...merged.values()];
   if (kind === 'recent') return list2.sort((a, b) => Number(b.at) - Number(a.at)).slice(0, 8);
   return list2.slice(0, 50);
+}
+
+// Union of deletion markers keyed by kind+id, keeping the newest per key.
+export function mergeTombstones(local, server) {
+  const merged = new Map();
+  for (const tombstone of [...(server || []), ...(local || [])]) {
+    if (!tombstone || !tombstone.kind || !tombstone.id || !tombstone.deleted) continue;
+    const key = libraryPrefsKey(tombstone);
+    const existing = merged.get(key);
+    if (!existing || Number(tombstone.at) > Number(existing.at)) merged.set(key, {...tombstone});
+  }
+  return [...merged.values()];
 }
 
 export function mergeRecent(list, entry, limit = 8) {
@@ -289,10 +316,24 @@ export function mergeRecent(list, entry, limit = 8) {
   return [entry, ...filtered].slice(0, limit);
 }
 
-export function toggleFavorite(list, entry) {
+// Toggling favorites also maintains deletion tombstones so the removal wins
+// over stale cached copies on other devices (issue #72 review).
+export function toggleFavorite(list, entry, tombstones = [], at = Date.now()) {
   const exists = list.some(item => item.kind === entry.kind && item.id === entry.id);
-  if (exists) return list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
-  return [...list, entry].slice(0, 50);
+  const key = libraryPrefsKey(entry);
+  if (exists) {
+    return {
+      favorites: list.filter(item => !(item.kind === entry.kind && item.id === entry.id)),
+      tombstones: [
+        ...tombstones.filter(tombstone => libraryPrefsKey(tombstone) !== key),
+        {kind: entry.kind, id: entry.id, title: entry.title || '', at, deleted: true},
+      ].slice(-200),
+    };
+  }
+  return {
+    favorites: [...list, {...entry, at}].slice(0, 50),
+    tombstones: tombstones.filter(tombstone => libraryPrefsKey(tombstone) !== key),
+  };
 }
 
 export function libraryPrefsStorageKey(subject, section) {
