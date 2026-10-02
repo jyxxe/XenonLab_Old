@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
@@ -48,6 +48,7 @@ export function LibraryApp({
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
   const [sort, setSort] = useState<SortState>(null);
   const [filter, setFilter] = useState('');
+  const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1023);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
@@ -60,6 +61,16 @@ export function LibraryApp({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const rowNavigation = useRef(0);
+  const content = useRef<HTMLElement>(null);
+  const searchReturn = useRef<{version: number; top: number} | null>(null);
+
+  useLayoutEffect(() => {
+    if (searchReturn.current?.version !== search.resultVersion) searchReturn.current = null;
+    if (view === 'search') {
+      if (content.current) content.current.scrollTop = searchReturn.current?.top ?? 0;
+      searchReturn.current = null;
+    }
+  }, [view, search.resultVersion]);
 
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
@@ -88,6 +99,7 @@ export function LibraryApp({
   }, [notice]);
 
   function openTable(next: Table) {
+    searchReturn.current = null;
     ++rowNavigation.current;
     setView('library');
     setSelection(new Set());
@@ -102,12 +114,14 @@ export function LibraryApp({
   }
 
   function selectView(next: LibraryViewKind) {
+    if (next !== 'search') searchReturn.current = null;
     ++rowNavigation.current;
     setView(next);
     if (next === 'theorems' && !theorems.items.length && !theorems.loading) void theorems.load();
   }
 
-  async function openRow(tableId: string, rowId: string, remember = true) {
+  async function openRow(tableId: string, rowId: string, remember = true, fromSearch = false) {
+    if (!fromSearch) searchReturn.current = null;
     const request = ++rowNavigation.current;
     const known = catalogue.tables.find(item => item.id === tableId) || (await api(`/tables/${tableId}`).catch(() => null));
     if (request !== rowNavigation.current) return;
@@ -134,7 +148,9 @@ export function LibraryApp({
   }
 
   async function openHit(hit: SearchHit) {
-    await openRow(hit.table_id, hit.row_id);
+    const position = {version: search.resultVersion, top: content.current?.scrollTop ?? 0};
+    searchReturn.current = position;
+    await openRow(hit.table_id, hit.row_id, true, true);
   }
 
   function openEntry(entry: RecentEntry) {
@@ -146,6 +162,7 @@ export function LibraryApp({
       const [tableId, rowId] = entry.id.split(':');
       void openRow(tableId, rowId);
     } else if (entry.kind === 'theorem') {
+      searchReturn.current = null;
       ++rowNavigation.current;
       setView('theorems');
       void theorems.open(entry.id);
@@ -153,6 +170,7 @@ export function LibraryApp({
   }
 
   function onSelectRow(rowId: string, event: React.MouseEvent) {
+    searchReturn.current = null;
     ++rowNavigation.current;
     setActiveRowId(rowId);
     setInspectorOpen(true);
@@ -400,7 +418,7 @@ export function LibraryApp({
         theoremCount={theorems.items.length || null}
       />
 
-      <main className="knowledge-content" aria-label="知识库主区域">
+      <main ref={content} className="knowledge-content" aria-label="知识库主区域">
         {notice && (
           <div className={`library-toast library-toast-${notice.tone}`} role={notice.tone === 'danger' ? 'alert' : 'status'}>
             <div className="library-toast-content">
@@ -414,6 +432,8 @@ export function LibraryApp({
 
         {view === 'search' && (
           <SearchView
+            showFilters={searchFiltersOpen}
+            onShowFilters={setSearchFiltersOpen}
             mode={search.mode}
             onMode={search.setMode}
             kind={search.kind}
