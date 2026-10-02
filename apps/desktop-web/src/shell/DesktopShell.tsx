@@ -662,13 +662,18 @@ export function DesktopShell({
 
       {(preferences.widgets || []).length > 0 && (
         <div className="widgets">
-          {(preferences.widgets || []).includes('clock') && <ClockWidget timezone={preferences.timezone} />}
-          {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
-          {(preferences.widgets || []).includes('calendar') && <CalendarWidget timezone={preferences.timezone} />}
-          {(preferences.widgets || []).includes('app-shortcuts') && <AppShortcutsWidget apps={apps} selected={preferences.shortcut_apps || []} onOpen={openApp} />}
-          {(preferences.widgets || []).includes('work') && <WorkWidget apiPage={apiPage} allowed={workAvailable} onOpen={() => openApp('issues')} />}
-          {(preferences.widgets || []).includes('search') && <SearchWidget available={knowledgeSearchAvailable} onSearch={query => openApp('knowledge', {action: 'search', query})} />}
-          {(preferences.widgets || []).includes('notes') && <NotesWidget notes={preferences.notes || ''} onSave={saveNotes} />}
+          {(preferences.widgets || []).map(id => {
+            switch (id) {
+              case 'clock': return <ClockWidget key={id} timezone={preferences.timezone} />;
+              case 'status': return <StatusWidget key={id} apiPage={apiPage} onOpen={() => openApp('system')} />;
+              case 'calendar': return <CalendarWidget key={id} timezone={preferences.timezone} />;
+              case 'app-shortcuts': return <AppShortcutsWidget key={id} apps={apps} selected={preferences.shortcut_apps || []} onOpen={openApp} />;
+              case 'work': return <WorkWidget key={id} apiPage={apiPage} allowed={workAvailable} onOpen={() => openApp('issues')} />;
+              case 'search': return <SearchWidget key={id} available={knowledgeSearchAvailable} onSearch={query => openApp('knowledge', {action: 'search', query})} />;
+              case 'notes': return <NotesWidget key={id} notes={preferences.notes || ''} onSave={saveNotes} />;
+              default: return null;
+            }
+          })}
         </div>
       )}
 

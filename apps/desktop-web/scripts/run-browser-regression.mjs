@@ -16,6 +16,7 @@ const tests = [
   'tests/browser-acceptance-session.test.mjs',
   'tests/browser-acceptance-work.test.mjs',
   'tests/browser-acceptance-shell.test.mjs',
+  'tests/browser-acceptance-widget-order.test.mjs',
   'tests/browser-acceptance-issues-narrow.test.mjs',
   'tests/browser-acceptance-query-drafts.test.mjs',
   'tests/browser-acceptance-account-patch.test.mjs',
