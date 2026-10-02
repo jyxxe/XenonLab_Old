@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import ClientDisconnect, Request
 
 from xeonolab.common import APIError
-from xeonolab.services import create_app
+from xeonolab.services import _sse_frame_kind, create_app
 
 from .conftest import auth
 
@@ -144,6 +144,16 @@ def test_streaming_forwards_sse_deltas_and_tool_calls_without_provider_headers(s
     assert provider.closed is True
 
 
+def test_sse_frame_validation_accepts_chat_chunks_tool_calls_and_heartbeats():
+    assert _sse_frame_kind(b": ping\n\n") == "keepalive"
+    assert _sse_frame_kind(b"event: ping\ndata: \n\n") == "keepalive"
+    assert _sse_frame_kind(
+        b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}\n\n'
+    ) == "data"
+    assert _sse_frame_kind(b"data: not-json\n\n") == "malformed"
+    assert _sse_frame_kind(b'data: {"choices":[]}\n\n') == "data"
+
+
 def test_streaming_rejects_unknown_model_and_missing_llm_scope(settings, monkeypatch):
     settings.dev_tokens["alice"]["scope"] += " llm:use"
     monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
@@ -239,7 +249,7 @@ def test_streaming_truncates_and_closes_on_midstream_provider_error(settings, mo
             self.closed = False
 
         async def __aiter__(self):
-            yield b"data: partial\n\n"
+            yield b'data: {"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n'
             raise httpx.ReadError("provider-secret-for-test")
 
         async def aclose(self):
@@ -263,7 +273,7 @@ def test_streaming_truncates_and_closes_on_midstream_provider_error(settings, mo
         json={"model": "deepseek-flash", "stream": True},
     )
     assert response.status_code == 200
-    assert response.content.startswith(b"data: partial\n\n")
+    assert response.content.startswith(b'data: {"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n')
     assert b'"code":"PROVIDER_ERROR"' in response.content
     assert b"provider-secret-for-test" not in response.content
     assert b"[DONE]" not in response.content
@@ -357,7 +367,7 @@ def test_streaming_body_disconnect_closes_provider(settings, monkeypatch):
         closed = False
 
         async def __aiter__(self):
-            yield b"data: first\n\n"
+            yield b'data: {"choices":[{"index":0,"delta":{"content":"first"},"finish_reason":null}]}\n\n'
             body_started.set()
             await asyncio.Event().wait()
 
@@ -403,6 +413,91 @@ def test_streaming_body_disconnect_closes_provider(settings, monkeypatch):
     asyncio.run(run())
     assert body_started.is_set()
     assert chunks.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_asgi20_disconnect_waits_for_shielded_provider_and_client_cleanup(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    started_closing = asyncio.Event()
+    stream_close_gate = asyncio.Event()
+    client_close_gate = asyncio.Event()
+    client_close_started = asyncio.Event()
+    class HeldCloseStream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.close_calls = 0
+
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":null}]}\n\n'
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            self.close_calls += 1
+            started_closing.set()
+            await stream_close_gate.wait()
+
+    held_stream = HeldCloseStream()
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.close_calls = 0
+            self.response = httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=held_stream
+            )
+
+        async def aclose(self):
+            self.close_calls += 1
+            client_close_started.set()
+            await client_close_gate.wait()
+            self.closed = True
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        request_body_sent = False
+        response_started = asyncio.Event()
+
+        async def request_receive():
+            nonlocal request_body_sent
+            if not request_body_sent:
+                request_body_sent = True
+                return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+            await response_started.wait()
+            return {"type": "http.disconnect"}
+
+        scope = {
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.0"},
+            "http_version": "1.1", "method": "POST", "scheme": "http",
+            "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+            "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123),
+        }
+        response = await endpoint(Request(scope, request_receive), SimpleNamespace())
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                response_started.set()
+
+        response_task = asyncio.create_task(response(scope, request_receive, send))
+        await response_started.wait()
+        await started_closing.wait()
+        await asyncio.sleep(0)
+        assert not response_task.done()
+        assert app.state.llm_stream_slots.qsize() == 7
+        stream_close_gate.set()
+        await client_close_started.wait()
+        await asyncio.sleep(0)
+        assert not response_task.done()
+        assert app.state.llm_stream_slots.qsize() == 7
+        client_close_gate.set()
+        await response_task
+
+    asyncio.run(run())
+    assert held_stream.close_calls == 1
+    assert StreamingProvider.instances[-1].close_calls == 1
     assert StreamingProvider.instances[-1].closed is True
     assert app.state.llm_stream_slots.qsize() == 8
 

@@ -14,11 +14,14 @@ count.
 
 Before response headers, capacity exhaustion returns HTTP 429 with
 `Retry-After: 5`, an oversized body returns 413, a slow request body returns
-408, a provider failure returns 502, and the overall provider deadline returns
-504. Once SSE headers have been sent, provider errors, timeouts, malformed or
-oversized streams are represented by a safe OpenAI-style `data: {"error":...}`
-event; the gateway does not append a success `data: [DONE]` marker after such an
-error. Clients must treat that event as a failed completion.
+408, a provider failure before stream headers returns 502, and a provider
+response-header timeout before streaming begins returns 504. Once SSE headers
+have been sent, provider errors, stream timeouts, invalid JSON or
+structurally invalid Chat Completions chunks, incomplete streams, and oversized
+streams are represented by a safe OpenAI-style `data: {"error":...}` event;
+the gateway does not append a success `data: [DONE]` marker after such an error.
+SSE comments and empty heartbeat events are preserved. Clients must treat the
+error event as a failed completion.
 
 The fake-provider tests verify incremental SSE forwarding, tool-call chunks,
 disconnect cleanup, capacity rejection, and safe error events. Actual

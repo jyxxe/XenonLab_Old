@@ -8,6 +8,7 @@ import re
 import ssl
 from pathlib import Path
 
+import anyio
 import httpx
 from fastapi import Depends, Request
 from pydantic import BaseModel, Field
@@ -39,15 +40,43 @@ def _sse_frame_kind(frame):
     if event_name == b"error":
         return "error"
     data = b"\n".join(data_lines).strip()
+    if not data:
+        return "keepalive"
     if data == b"[DONE]":
         return "done"
-    if data:
-        try:
-            payload = json.loads(data)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return "data"
-        if isinstance(payload, dict) and "error" in payload:
-            return "error"
+    try:
+        payload = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "malformed"
+    if isinstance(payload, dict) and "error" in payload:
+        return "error"
+    if not isinstance(payload, dict) or not isinstance(payload.get("choices"), list):
+        return "malformed"
+    for choice in payload["choices"]:
+        if not isinstance(choice, dict) or not isinstance(choice.get("index"), int):
+            return "malformed"
+        if not isinstance(choice.get("delta"), dict):
+            return "malformed"
+        if "finish_reason" not in choice or (
+            choice["finish_reason"] is not None and not isinstance(choice["finish_reason"], str)
+        ):
+            return "malformed"
+        delta = choice["delta"]
+        if "role" in delta and not isinstance(delta["role"], str):
+            return "malformed"
+        if "content" in delta and not isinstance(delta["content"], (str, list, type(None))):
+            return "malformed"
+        tool_calls = delta.get("tool_calls", [])
+        if not isinstance(tool_calls, list):
+            return "malformed"
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict) or not isinstance(tool_call.get("index"), int):
+                return "malformed"
+            function = tool_call.get("function", {})
+            if not isinstance(function, dict):
+                return "malformed"
+            if any(key in function and not isinstance(function[key], str) for key in ("name", "arguments")):
+                return "malformed"
     return "data"
 
 
@@ -276,11 +305,11 @@ def create_app(service=None, settings=None):
                     "description": "JSON completion, or SSE stream. Midstream failures are safe error data events without data: [DONE].",
                     "content": {"application/json": {}, "text/event-stream": {}},
                 },
-                408: {"description": "Request body or provider stream deadline exceeded."},
+                408: {"description": "The inbound request body exceeded its read deadline."},
                 413: {"description": "Request body exceeds the configured byte limit."},
                 429: {"description": "Per-process stream capacity reached; includes Retry-After."},
                 502: {"description": "Provider request failed before streaming began."},
-                504: {"description": "Provider response headers exceeded the request deadline."},
+                504: {"description": "Provider response headers exceeded the request deadline before streaming began."},
             },
         )
         async def chat(request: Request, actor=Depends(scope("llm:use"))):
@@ -398,9 +427,13 @@ def create_app(service=None, settings=None):
                     if cleanup_task is None:
                         cleanup_task = asyncio.create_task(perform_cleanup())
                     try:
-                        await asyncio.shield(cleanup_task)
+                        with anyio.CancelScope(shield=True):
+                            await asyncio.shield(cleanup_task)
                     except asyncio.CancelledError:
-                        await cleanup_task
+                        # Raw asyncio cancellation bypasses AnyIO's cancel scope. Keep
+                        # waiting in a fresh shield until provider/client cleanup ends.
+                        with anyio.CancelScope(shield=True):
+                            await cleanup_task
                         raise
 
                 try:
@@ -463,7 +496,7 @@ def create_app(service=None, settings=None):
                                     "service": "llm-gateway",
                                     "event": "provider_stream.interrupted",
                                     "code": code,
-                                    "request_id": request.state.request_id,
+                                    "request_id": getattr(request.state, "request_id", ""),
                                 },
                                 separators=(",", ":"),
                             )
@@ -484,6 +517,10 @@ def create_app(service=None, settings=None):
                                     kind = _sse_frame_kind(frame)
                                     if kind == "error":
                                         record_stream_error("provider_error_event")
+                                        yield _SAFE_STREAM_ERROR
+                                        return
+                                    if kind == "malformed":
+                                        record_stream_error("malformed_chat_completion_chunk")
                                         yield _SAFE_STREAM_ERROR
                                         return
                                     yield frame
