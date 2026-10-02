@@ -19,7 +19,7 @@ const registry:any[]=legacyRegistry;
 const tables=[
   {id:'example-table',name:'部署验收',path:'/示例/平台'},
 ];
-const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false};
+const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false};
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -72,7 +72,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
   calls.push({method, path, body});
   if (path === '/users/me') {
-    return {subject: 'fixture-user-0001', kind: 'human', scopes: ['xelibrary:read', 'dev:read', 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['xelibrary:admin','embedding:read','embedding:write'] : [])]};
+    return {subject: 'fixture-user-0001', kind: 'human', scopes: ['xelibrary:read', 'dev:read', 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read','embedding:write'] : [])]};
   }
   if(path==='/apps?include_unavailable=true')return [...registry];
   if (path === '/apps') {if(method==='POST'){const saved={...body,revision:1};registry.push(saved);return saved}return [...registry]}
@@ -104,7 +104,10 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   }
   if (path === '/embed/models') return [{id: 'D100M-Embedding', alias: 'fast', status: 'ready', dimensions: 256, max_tokens: 128}, {id: 'Qwen/Qwen3-VL-Embedding-2B', alias: 'quality', status: 'not_configured'}];
   if (path === '/embed/text' && method === 'POST') return {data: {model: 'D100M-Embedding', data: [{embedding: [0.125, -0.5, 0.25]}]}};
-  if (path === '/jobs?limit=50') return {data: [{job_id: 'fixture-job-1', table_id: 'example-table', status: 'running', created_at: '2026-10-02T00:00:00Z'}], meta: {counts: {queued: 1, running: 1, completed: 2, failed: 0}}};
+  if (path === '/embedding/jobs?limit=50') {
+    if (control.failEmbeddingQueue) throw Error('403 embedding:read required');
+    return {data: [{job_id: 'fixture-job-1', table_id: 'example-table', status: 'running', created_at: '2026-10-02T00:00:00Z'}], meta: {counts: {queued: 1, running: 1, completed: 2, failed: 0}}};
+  }
   if (path.startsWith('/tables?')) {
     control.tablesInFlight++;
     try {
@@ -128,6 +131,7 @@ const apiRaw = async (path: string, init?: RequestInit) => {
   if (path === '/embed/text' && init?.method === 'POST') {
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : null;
     calls.push({method:'POST', path, body});
+    if (control.busyEmbedding) return new Response(JSON.stringify({error:{message:'D100M worker busy; retry later'}}), {status:429, headers:{'Content-Type':'application/json'}});
     return new Response(JSON.stringify({model: 'D100M-Embedding', data: [{embedding: [0.125, -0.5, 0.25]}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   if (path === '/users/me/wallpaper' && (!init?.method || init.method === 'GET')) {

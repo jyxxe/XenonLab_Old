@@ -185,6 +185,7 @@ class Identity:
     issued_at: float = 0
     credential_epoch: str = ""
     ancestors: tuple[str, ...] = ()
+    token_scopes: set[str] | None = None
 
     def require(self, scope):
         if scope not in self.scopes:

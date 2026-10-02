@@ -211,6 +211,14 @@ def install(app):
         if not set(grants) <= SCOPES or not set(grants) <= available:
             raise APIError(403, "PERMISSION_ESCALATION", "grants must be a subset of inherited permissions")
 
+    def request_scopes(actor):
+        # Keep validated token claims distinct from active account grants so
+        # a root can explicitly adopt a new OIDC role scope. Child managers
+        # remain limited to their delegated effective account scopes.
+        if not actor.ancestors and actor.token_scopes is not None:
+            return actor.token_scopes
+        return actor.scopes
+
     def audit(db, actor, event, target):
         db.execute(
             "INSERT INTO account_audit VALUES(?,?,?,?,?)",
@@ -255,6 +263,7 @@ def install(app):
                 actor.issued_at,
                 actor.credential_epoch,
                 tuple(row["id"] for row in chain(db, actor.sub)[1:]),
+                token_scopes=set(actor.scopes),
             )
 
     app.state.authorization_resolver = resolve
@@ -335,9 +344,9 @@ def install(app):
                 raise APIError(422, "INVALID_PARENT", "human parent and maximum depth 128 required")
             if not all(node["enabled"] for node in chain(db, body.parent_id)):
                 raise APIError(409, "PARENT_DISABLED", "parent disabled")
-            validate(body.grants, effective(db, body.parent_id) & actor.scopes)
+            validate(body.grants, effective(db, body.parent_id) & request_scopes(actor))
             if body.inherit_all:
-                validate(effective(db, body.parent_id), actor.scopes)
+                validate(effective(db, body.parent_id), request_scopes(actor))
             if db.execute(
                 "SELECT 1 FROM accounts WHERE lower(username)=lower(?)", (body.username,)
             ).fetchone():
@@ -378,7 +387,9 @@ def install(app):
             # Existing grants may become ineffective after parent permissions shrink.
             if body.grants is not None:
                 validate(
-                    grants, (effective(db, row["parent"]) if row["parent"] else actor.scopes) & actor.scopes
+                    grants,
+                    (effective(db, row["parent"]) if row["parent"] else request_scopes(actor))
+                    & request_scopes(actor),
                 )
             if row["parent"] is None and (
                 body.enabled is False or not {"desktop:read", "desktop:admin"} <= set(grants)

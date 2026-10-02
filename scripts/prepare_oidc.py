@@ -5,6 +5,8 @@ import os
 import secrets
 from pathlib import Path
 
+from xeonolab.role_scopes import OIDC_ROLE_SCOPES
+
 root = Path("runtime/deploy-secrets")
 root.mkdir(parents=True, exist_ok=True, mode=0o700)
 os.chmod(root, 0o700)
@@ -69,7 +71,7 @@ def client(cid, scope, kind, secret):
     }
 
 
-admin_scopes = "desktop:read desktop:admin xelibrary:read xelibrary:write xelibrary:query xelibrary:attach xelibrary:admin deploy:read llm:use"
+admin_scopes = " ".join(OIDC_ROLE_SCOPES["platform-admin"])
 realm = {
     "realm": "xeonolab",
     "enabled": True,

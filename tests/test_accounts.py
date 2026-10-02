@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from xeonolab.common import connect
 from xeonolab.desktop import create_app
+from xeonolab.role_scopes import OIDC_ROLE_SCOPES
 
 from .conftest import auth, put_acl
 
@@ -93,6 +94,32 @@ def test_account_tree_first_use_requires_explicit_bootstrap_and_preserves_scopes
     assert created.status_code == 201, created.text
     assert set(created.json()["data"]["effective_scopes"]) == {"desktop:admin", "desktop:read"}
     assert "accounts:manage" not in created.json()["data"]["effective_scopes"]
+
+
+def test_platform_admin_oidc_role_can_explicitly_grant_embedding_to_a_human_child(accounts):
+    client, settings, _app = accounts
+    root_before = client.get("/api/v1/auth/accounts", headers=auth("admin")).json()["data"][0]
+    assert not {"embedding:read", "embedding:write"} & set(root_before["effective_scopes"])
+
+    # This models refreshed human OIDC tokens after the platform-admin mapper is
+    # updated. The registered root record does not inherit these scopes implicitly.
+    settings.role_scopes = OIDC_ROLE_SCOPES
+    settings.dev_tokens["admin"]["realm_access"] = {"roles": ["platform-admin"]}
+    assert not {"embedding:read", "embedding:write"} & scopes(client, "admin")
+
+    explicit_grants = sorted(set(root_before["grants"]) | {"embedding:read", "embedding:write"})
+    updated = client.patch(
+        "/api/v1/auth/accounts/admin", headers=auth("admin"), json={"grants": explicit_grants}
+    )
+    assert updated.status_code == 200, updated.text
+    assert {"embedding:read", "embedding:write"} <= set(updated.json()["data"]["effective_scopes"])
+
+    child_id = child(
+        client,
+        grants=["desktop:read", "embedding:read", "embedding:write"],
+        actor="admin",
+    )
+    assert {"embedding:read", "embedding:write"} <= scopes(client, child_id)
 
 
 def test_tree_inheritance_sibling_boundary_and_live_shrink(accounts):

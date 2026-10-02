@@ -1201,3 +1201,28 @@ def test_job_queue_view_is_admin_only_and_filterable(library, settings):
     assert library.get("/api/v1/jobs?limit=0", headers=auth("admin")).status_code == 422
     assert library.get("/api/v1/jobs?limit=201", headers=auth("admin")).status_code == 422
     assert library.get("/api/v1/jobs?status=unknown", headers=auth("admin")).status_code == 422
+
+
+def test_embedding_index_queue_read_is_embedding_scope_and_strictly_owner_only(library, settings):
+    from xeonolab.jobs import JobStore
+
+    settings.dev_tokens["alice"]["scope"] += " embedding:read"
+    settings.dev_tokens["bob"]["scope"] += " embedding:read"
+    jobs = JobStore(settings.data_dir / "catalogue.sqlite")
+    jobs.create("alice-queued", "alice", "table-a")
+    jobs.create("alice-done", "alice", "table-b")
+    jobs.update("alice-done", status="completed", error="")
+    jobs.create("bob-only", "bob", "table-a")
+    jobs.create("admin-only", "admin", "table-a")
+
+    own = library.get("/api/v1/embedding/jobs", headers=auth("alice"))
+    assert own.status_code == 200, own.text
+    body = own.json()
+    assert {job["job_id"] for job in body["data"]} == {"alice-queued", "alice-done"}
+    assert all("owner" not in job for job in body["data"])
+    assert body["meta"]["counts"] == {"queued": 1, "running": 0, "completed": 1, "failed": 0}
+    filtered = library.get("/api/v1/embedding/jobs?status=completed", headers=auth("alice"))
+    assert [job["job_id"] for job in filtered.json()["data"]] == ["alice-done"]
+    assert library.get("/api/v1/embedding/jobs", headers=auth("opencode")).status_code == 403
+    assert library.get("/api/v1/embedding/jobs?limit=0", headers=auth("alice")).status_code == 422
+    assert library.get("/api/v1/jobs", headers=auth("alice")).status_code == 403

@@ -42,13 +42,14 @@ export function Embedding({api, apiPage, apiRaw}: AppViewProps) {
       if (!active) return;
       const verifiedScopes = Array.isArray(me.scopes) ? me.scopes.filter((scope: unknown): scope is string => typeof scope === 'string') : [];
       setScopes(verifiedScopes);
+      if (!verifiedScopes.includes('embedding:write')) { setVector(null); setResultModel(''); }
       if (verifiedScopes.includes('embedding:read')) {
         void apiRaw('/embed/models').then(jsonResponse).then(body => {
           if (active) setModels(Array.isArray(body?.data) ? body.data : []);
         }).catch(error => { if (active) setModelsError(errorText(error)); });
       } else setModels([]);
-      if (verifiedScopes.includes('xelibrary:admin')) {
-        void apiPage('/jobs?limit=50').then(page => {
+      if (verifiedScopes.includes('embedding:read')) {
+        void apiPage('/embedding/jobs?limit=50').then(page => {
           if (!active) return;
           setJobs(Array.isArray(page.data) ? page.data : []);
           setCounts(page.meta.counts && typeof page.meta.counts === 'object' ? page.meta.counts : {});
@@ -81,16 +82,16 @@ export function Embedding({api, apiPage, apiRaw}: AppViewProps) {
   const modelReady = availableModel?.status === 'ready';
   const canReadModels = scopes.includes('embedding:read');
   const canWrite = scopes.includes('embedding:write');
-  const canReadQueue = scopes.includes('xelibrary:admin');
+  const canReadQueue = scopes.includes('embedding:read');
 
   return <main className="embedding-app">
     <header className="app-head">
-      <div><h2>Embedding</h2><p>文本编码与当前账号有权查看的索引任务。</p></div>
+      <div><h2>Embedding</h2><p>文本编码与当前账号有权查看的知识库索引任务。</p></div>
       <Button onClick={() => setTick(value => value + 1)} disabled={refreshing} loading={refreshing}>刷新</Button>
     </header>
     {identityError ? <ErrorState title="无法验证当前权限" message={identityError} onRetry={() => setTick(value => value + 1)}/> : null}
     <section className="embedding-panel" aria-labelledby="embedding-text-title">
-      <div className="embedding-panel-head"><div><h3 id="embedding-text-title">文本编码</h3><p>由当前账户的 embedding:write 权限控制，最多输入 32,768 个字符。</p></div>
+      <div className="embedding-panel-head"><div><h3 id="embedding-text-title">文本编码</h3><p>由当前账户的 embedding:write 权限控制；同步生成，worker 忙时返回 429，不进入等待队列。</p></div>
         {!canReadModels ? <Badge>状态不可读</Badge> : modelReady ? <Badge tone="success">{availableModel?.id} · 可用</Badge> : availableModel ? <Badge tone="warning">模型不可用</Badge> : <Badge>正在读取</Badge>}
       </div>
       {canReadModels && modelsError ? <ErrorState title="模型状态读取失败" message={modelsError} onRetry={() => setTick(value => value + 1)}/> : null}
@@ -108,8 +109,8 @@ export function Embedding({api, apiPage, apiRaw}: AppViewProps) {
       </> : <EmptyState title="需要生成权限" description="当前账户没有 embedding:write 权限。"/>}
     </section>
     <section className="embedding-panel" aria-labelledby="embedding-queue-title">
-      <div className="embedding-panel-head"><div><h3 id="embedding-queue-title">Embedding / 索引队列</h3><p>显示此账户最新 50 个知识库索引任务；计数来自队列 API，不代表全局模型队列。</p></div></div>
-      {!canReadQueue ? <EmptyState title="需要知识库管理员权限" description="当前账户没有 xelibrary:admin 权限，队列 API 会拒绝读取。"/> : queueError ? <ErrorState title="队列读取失败" message={queueError} onRetry={() => setTick(value => value + 1)}/> : <>
+      <div className="embedding-panel-head"><div><h3 id="embedding-queue-title">知识库 Embedding 索引任务</h3><p>显示此账户最新 50 个索引作业；同步文本编码不会排队，这里也不代表全局模型 worker 队列。</p></div></div>
+      {!canReadQueue ? <EmptyState title="需要 embedding:read 权限" description="当前账户没有读取本人索引任务的权限。"/> : queueError ? <ErrorState title="队列读取失败" message={queueError} onRetry={() => setTick(value => value + 1)}/> : <>
         <div className="embedding-counts" aria-label="本人索引任务计数">{['queued','running','completed','failed'].map(status => <span key={status}>{({queued:'排队',running:'运行中',completed:'完成',failed:'失败'} as Record<string,string>)[status]} <b>{counts[status] ?? 0}</b></span>)}</div>
         {jobs.length ? <div className="embedding-queue-scroll"><table className="ds-table"><thead><tr><th>任务</th><th>知识表</th><th>状态</th><th>更新时间</th></tr></thead><tbody>{jobs.map(job => <tr key={job.job_id}><td>{job.job_id}</td><td>{job.table_id}</td><td>{job.status}</td><td>{job.updated_at || job.created_at || '—'}{job.error ? <small className="embedding-job-error">{job.error}</small> : null}</td></tr>)}</tbody></table></div> : <EmptyState title="没有可显示的索引任务" description="队列 API 没有返回当前账户的任务。"/>}
       </>}

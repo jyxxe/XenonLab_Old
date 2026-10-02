@@ -282,6 +282,17 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("document.querySelector('.embedding-result')?.innerText.includes('3 维')"), 'real-shaped embedding response displayed');
     assert.match(await cdp.evaluate("document.querySelector('.embedding-queue-scroll').innerText"), /fixture-job-1/);
     assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embed/text'&&call.method==='POST'&&call.body.input==='fixture text')"), true, 'text is submitted through API boundary');
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=true');
+    await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('D100M worker busy')"), '429 worker busy response remains visible and is not queued');
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=false');
+    await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=true');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-panel')[1]?.innerText.includes('403 embedding:read required')"), 'queue API denial surfaced');
+    await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=false;window.shellFixture.control.embeddingEnabled=false;window.shellFixture.resetCalls()');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-panel')[1]?.innerText.includes('需要 embedding:read 权限')"), 'queue hidden without verified embedding scope');
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embedding/jobs?limit=50')"), false, 'no queue request is sent without scope');
     await cdp.evaluate('window.shellFixture.control.embeddingEnabled=false');
 
     const keyboardBefore = await rectOf(cdp, '.window[data-app-id=knowledge]');
