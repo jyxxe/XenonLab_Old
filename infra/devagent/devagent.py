@@ -252,13 +252,15 @@ def project_events(forgejo, config, reconcile=False):
             )
 
 
-def runtime_environment(config, automatic=False, review=False):
+def runtime_environment(config, automatic=False):
     # Operator config and project .opencode files cannot supply plugins or override policy.
     policy = json.loads(Path(config["policy_file"]).read_text())
+    # Omission means unlimited OpenCode iterations. Ignore caps left by older policies.
+    for agent in policy.get("agent", {}).values():
+        agent.pop("steps", None)
+        agent.pop("maxSteps", None)
     if automatic:
         agent = policy.setdefault("agent", {}).setdefault("maintainer", {})
-        limit = config.get("automatic_review_steps", 24) if review else config.get("automatic_steps", 12)
-        agent["steps"] = min(agent.get("steps", 32), limit)
         permission = agent.setdefault("permission", {})
         permission["edit"] = "deny"
         original = permission.get("bash", {})
@@ -319,9 +321,7 @@ def runtime_environment(config, automatic=False, review=False):
 
 def run_model(config, state, task, manual=False):
     title = "XeonoLab " + task["id"]
-    env = runtime_environment(config, automatic=not manual, review=task["resource"].startswith("pr:"))
-    policy = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-    step_limit = policy.get("agent", {}).get("maintainer", {}).get("steps", 32)
+    env = runtime_environment(config, automatic=not manual)
     if manual:
         prompt = task["payload"]
     else:
@@ -330,7 +330,7 @@ def run_model(config, state, task, manual=False):
             "to other project Agents through Issues. Do not edit code or run development/test work "
             "in this automatic task. Read the actual diff and relevant source before approving; reject "
             "unrelated, obsolete, duplicate or incorrect changes with REQUEST_CHANGES and evidence. "
-            f"Only target feature/platform-v1. Use at most {step_limit} steps for this event. "
+            "Only target feature/platform-v1. Complete the focused review and authorized actions for this event. "
             "Inspect this PR and explicitly linked Issues only; when no Issue is linked, its stated "
             "requirements define review scope. Do not enumerate unrelated Issues, history or runtime paths. "
             "Pending CI means comment "
@@ -413,7 +413,7 @@ def run_model(config, state, task, manual=False):
                         tokens[k + "." + ck] = tokens.get(k + "." + ck, 0) + cv
     status = (
         "done"
-        if result.returncode == 0 and not error and session and finish_reason == "stop" and steps < step_limit
+        if result.returncode == 0 and not error and session and finish_reason == "stop"
         else "failed"
     )
     with state.db:
@@ -429,7 +429,7 @@ def run_model(config, state, task, manual=False):
         tokens=tokens,
         finish_reason=finish_reason,
         steps=steps,
-        step_limit_reached=steps >= step_limit,
+        step_limit_reached=False,
     )
     if manual and status == "done":
         texts = []

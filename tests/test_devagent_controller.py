@@ -166,7 +166,7 @@ def test_project_config_cannot_override_installed_policy(tmp_path, monkeypatch):
     env = controller.runtime_environment({"policy_file": str(policy)})
     assert "OPENCODE_CONFIG" not in env
     assert env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "true"
-    assert json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]["maintainer"]["steps"] == 32
+    assert "steps" not in json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]["maintainer"]
 
 
 def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
@@ -178,10 +178,7 @@ def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
     automatic = json.loads(controller.runtime_environment(config, automatic=True)["OPENCODE_CONFIG_CONTENT"])
     manual = json.loads(controller.runtime_environment(config)["OPENCODE_CONFIG_CONTENT"])
     auto = automatic["agent"]["maintainer"]
-    assert auto["steps"] == 12 and auto["permission"]["edit"] == "deny"
-    review = json.loads(controller.runtime_environment(config, automatic=True, review=True)["OPENCODE_CONFIG_CONTENT"])
-    assert review["agent"]["maintainer"]["steps"] == 24
-    assert review["agent"]["maintainer"]["permission"]["edit"] == "deny"
+    assert "steps" not in auto and auto["permission"]["edit"] == "deny"
     assert "uv run *" not in auto["permission"]["bash"]
     assert "git *" not in auto["permission"]["bash"]
     assert auto["permission"]["bash"]["*auth.json*"] == "deny"
@@ -190,10 +187,24 @@ def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
     assert auto["permission"]["bash"]["devctl merge *"] == "allow"
     assert auto["permission"]["bash"]["devctl review *"] == "allow"
     assert auto["permission"]["bash"]["devctl pr-create *"] == "deny"
-    assert manual["agent"]["maintainer"]["steps"] == 48
+    assert "steps" not in manual["agent"]["maintainer"]
     assert manual["agent"]["maintainer"]["permission"]["edit"] == "allow"
     assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl deploy *"] == "allow"
     assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl merge *"] == "allow"
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_old_policy_and_runtime_step_caps_are_removed(tmp_path, automatic):
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"agent": {
+        "maintainer": {"steps": 48, "maxSteps": 16},
+        "general": {"disable": True, "steps": 8},
+    }}))
+    env = controller.runtime_environment({"policy_file": str(policy), "automatic_steps": 1,
+                                          "automatic_review_steps": 2}, automatic=automatic)
+    agents = json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]
+    assert all("steps" not in agent and "maxSteps" not in agent for agent in agents.values())
+    assert agents["general"]["disable"] is True
 
 
 def test_checkpoint_push_repository_timestamp_does_not_wake_prs():
@@ -308,7 +319,9 @@ def test_closed_pr_events_supersede_old_work_without_starting_model(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 12, "done"), ("stop", 24, "failed"), ("stop", 32, "failed")]
+    "reason,steps,expected", [("tool-calls", 1, "failed"), ("tool-calls", 512, "failed"),
+                             ("stop", 1, "done"), ("stop", 12, "done"), ("stop", 24, "done"),
+                             ("stop", 48, "done"), ("stop", 512, "done")]
 )
 def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypatch, reason, steps, expected):
     state = controller.State(tmp_path / "state")
@@ -331,12 +344,14 @@ def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypat
             kwargs["stdout"].write((json.dumps(event) + "\n") * steps)
 
         def communicate(self, *args, **kwargs):
-            pass
+            assert "Use at most" not in args[0]
 
     monkeypatch.setattr(controller.subprocess, "Popen", Process)
     assert controller.run_model(config, state, task) == expected
     assert state.db.execute("SELECT status FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == expected
     assert "--continue" not in commands[0]
+    audit = state.db.execute("SELECT metadata FROM audit WHERE event=?", ("model." + expected,)).fetchone()
+    assert json.loads(audit[0])["step_limit_reached"] is False
 
 
 @pytest.mark.parametrize('case', [
