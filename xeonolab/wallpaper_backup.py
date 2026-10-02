@@ -177,7 +177,15 @@ def _validate_rows(root: Path, database: Path) -> list[dict]:
                     prefs = json.loads(definition)
                 except (TypeError, json.JSONDecodeError) as exc:
                     raise WallpaperBackupError("invalid desktop preference JSON") from exc
-                if prefs.get("wallpaper") == "custom" and not any(row["owner"] == owner for row in records):
+                # Older preference rows used ``custom`` only for an uploaded
+                # image. New rows also use it for solid and gradient backgrounds,
+                # which have no asset by design.
+                wallpaper_mode = prefs.get("wallpaper_mode", "image")
+                if (
+                    prefs.get("wallpaper") == "custom"
+                    and wallpaper_mode == "image"
+                    and not any(row["owner"] == owner for row in records)
+                ):
                     raise WallpaperBackupError("custom preference has no wallpaper metadata")
     except sqlite3.Error as exc:
         raise WallpaperBackupError(f"cannot validate desktop preferences: {exc}") from exc

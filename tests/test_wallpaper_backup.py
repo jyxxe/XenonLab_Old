@@ -70,6 +70,41 @@ def test_desktop_wallpaper_snapshot_restores_account_assets_and_preferences(sett
             assert all(abs(left - right) <= 4 for left, right in zip(actual, expected_pixel))
 
 
+@pytest.mark.parametrize("mode", ["solid", "gradient"])
+def test_desktop_wallpaper_backup_restores_custom_non_image_modes(settings, tmp_path, mode):
+    _enable_wallpaper_scope(settings)
+    client = TestClient(create_app("desktop-web", settings))
+    patch = {
+        "wallpaper": "custom",
+        "wallpaper_mode": mode,
+        "wallpaper_color": "#123456",
+        "wallpaper_gradient_from": "#102030",
+        "wallpaper_gradient_to": "#405060",
+        "wallpaper_gradient_angle": 225,
+    }
+    assert client.patch(
+        "/api/v1/users/me/preferences", headers=auth(), json=patch
+    ).status_code == 200
+
+    backup = create_desktop_wallpaper_backup(
+        settings.data_dir, tmp_path.parent / f"{tmp_path.name}-{mode}-backup"
+    )
+    manifest = verify_desktop_wallpaper_backup(backup)
+    assert manifest["wallpapers"] == []
+
+    restored_root = restore_desktop_wallpaper_backup(
+        backup, tmp_path.parent / f"{tmp_path.name}-{mode}-restore"
+    )
+    restored = TestClient(create_app("desktop-web", replace(settings, data_dir=restored_root)))
+    preferences = restored.get("/api/v1/users/me/preferences", headers=auth()).json()["data"]
+    assert preferences["wallpaper"] == "custom"
+    assert preferences["wallpaper_mode"] == mode
+    assert preferences["wallpaper_color"] == "#123456"
+    assert preferences["wallpaper_gradient_from"] == "#102030"
+    assert preferences["wallpaper_gradient_to"] == "#405060"
+    assert preferences["wallpaper_gradient_angle"] == 225
+
+
 def test_wallpaper_backup_rejects_missing_assets_and_owner_tampering(settings, tmp_path):
     settings.dev_tokens["alice"]["scope"] += " desktop:read"
     client = TestClient(create_app("desktop-web", settings))
