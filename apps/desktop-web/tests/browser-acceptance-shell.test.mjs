@@ -217,7 +217,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     }))()`);
     assert.ok(chromeState.menubar.includes('文件'), 'file menu is present');
     assert.ok(chromeState.menubar.includes('窗口'), 'window menu is present');
-    for (const title of ['LaunchPad', '知识库', '系统设置']) assert.ok(chromeState.dock.includes(title), `dock contains ${title}`);
+    for (const title of ['LaunchPad', '知识库', 'Embedding', '系统设置']) assert.ok(chromeState.dock.includes(title), `dock contains ${title}`);
 
     // Real pointer events exercise outside-click capture, separators and focus restoration.
     const click = async selector => {
@@ -270,6 +270,30 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-menu-popover'))"), 'registry app menu');
     await cdp.evaluate("[...document.querySelectorAll('.ds-menu-popover button')].find(button=>button.innerText.includes('Query Console')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-query'))"), 'menu intent opens Query Console');
+
+    // Embedding is a separate native app; both encoding and owner-scoped queue data
+    // use the same authenticated API boundary and only render fixture responses.
+    await cdp.evaluate('window.shellFixture.control.embeddingEnabled=true');
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"Embedding\"]').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=embedding] .embedding-app'))"), 'Embedding app');
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-app').innerText.includes('D100M-Embedding')"), 'model readiness from API');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-text');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'fixture text');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-result')?.innerText.includes('3 维')"), 'real-shaped embedding response displayed');
+    assert.match(await cdp.evaluate("document.querySelector('.embedding-queue-scroll').innerText"), /fixture-job-1/);
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embed/text'&&call.method==='POST'&&call.body.input==='fixture text')"), true, 'text is submitted through API boundary');
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=true');
+    await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('D100M worker busy')"), '429 worker busy response remains visible and is not queued');
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=false');
+    await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=true');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-panel')[1]?.innerText.includes('403 embedding:read required')"), 'queue API denial surfaced');
+    await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=false;window.shellFixture.control.embeddingEnabled=false;window.shellFixture.resetCalls()');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-panel')[1]?.innerText.includes('需要 embedding:read 权限')"), 'queue hidden without verified embedding scope');
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embedding/jobs?limit=50')"), false, 'no queue request is sent without scope');
+    await cdp.evaluate('window.shellFixture.control.embeddingEnabled=false');
 
     const keyboardBefore = await rectOf(cdp, '.window[data-app-id=knowledge]');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar').focus()");

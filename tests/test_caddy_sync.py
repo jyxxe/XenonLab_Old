@@ -6,6 +6,15 @@ import pytest
 from infra.systemd import caddy_sync
 
 
+def test_embedding_api_is_routed_to_its_scope_checking_service_before_library_fallback():
+    root = Path(__file__).resolve().parents[1]
+    for filename in ("xeonolab.caddy", "cloudflare-origin.caddy"):
+        source = (root / "infra" / "network" / filename).read_text()
+        assert "@embedding_api path /api/v1/embed/*" in source
+        assert "reverse_proxy 192.168.0.107:8104" in source
+        assert source.index("handle @embedding_api") < source.index("handle /api/v1/*")
+
+
 def make_layout(tmp_path):
     caddy_dir = tmp_path / "etc" / "caddy"
     caddy_dir.mkdir(parents=True)

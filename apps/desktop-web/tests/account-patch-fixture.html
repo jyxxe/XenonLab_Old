@@ -15,6 +15,8 @@
       import {APIRequestError} from '/src/api-error.js';
 
       const parentScopes = ['accounts:manage', 'desktop:admin', 'desktop:read', 'xelibrary:query', 'xelibrary:read'];
+      const signedScopes = [...parentScopes, 'embedding:read', 'embedding:write'];
+      const candidates = ['embedding:read', 'embedding:write'];
       const rows = [
         {id: 'root', parent: null, username: 'admin', name: 'Root', enabled: true, inherit_all: false,
           grants: [...parentScopes], effective_scopes: [...parentScopes], kind: 'human'},
@@ -25,14 +27,15 @@
       window.__accountPatchCalls = [];
 
       async function api(path, init = {}) {
-        if (path === '/users/me') return {subject: 'root', kind: 'human', scopes: parentScopes};
+        if (path === '/users/me') return {subject: 'root', kind: 'human', scopes: signedScopes};
+        if (path === '/auth/accounts/root-scope-candidates') return {candidate_scopes: [...candidates]};
         if (path.startsWith('/auth/accounts?limit=')) return rows.map(row => ({...row}));
         if (path.startsWith('/auth/api-keys?owner=')) return [];
         if (path.startsWith('/auth/accounts/') && init.method === 'PATCH') {
           const id = decodeURIComponent(path.slice('/auth/accounts/'.length));
           const body = JSON.parse(init.body);
           window.__accountPatchCalls.push({id, body});
-          if (body.grants?.some(scope => !parentScopes.includes(scope))) {
+          if (body.grants?.some(scope => !parentScopes.includes(scope) && !candidates.includes(scope))) {
             throw new APIRequestError('grants must be a subset of inherited permissions', 403, 'PERMISSION_ESCALATION');
           }
           const index = rows.findIndex(row => row.id === id);

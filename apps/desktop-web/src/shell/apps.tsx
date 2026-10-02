@@ -4,6 +4,7 @@ import {Knowledge} from '../Knowledge';
 import {Work} from '../Work';
 import {System} from './System';
 import {Settings} from '../Settings';
+import {Embedding} from '../Embedding';
 import {Development} from './Development';
 import {Issues} from './Issues';
 import {isRetiredRegistryAppId} from './window-manager.js';
@@ -101,6 +102,19 @@ export function builtinApps(): DesktopApp[] {
       dock: true,
       description: '服务、队列与部署状态',
       component: System as React.ComponentType<any>,
+    },
+    {
+      id: 'embedding',
+      title: 'Embedding',
+      icon: '⟡',
+      kind: 'native',
+      permissions: [],
+      defaultSize: [980, 760],
+      minSize: [620, 520],
+      singleton: true,
+      dock: true,
+      description: '文本编码与本人索引队列',
+      component: Embedding as React.ComponentType<any>,
     },
     {
       id: 'settings',
