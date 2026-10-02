@@ -11,7 +11,7 @@ process. No repository script contains credentials or edits a production host.
 ## Route boundary
 
 [`infra/network/oidc-backchannel.caddy`](../../infra/network/oidc-backchannel.caddy)
-defines `https://xenon.jyxxe.com` on 443 with `tls internal`. Only loopback
+defines `https://xenon.jyxxe.com` on 443 with `tls internal`.
 The fragment has a top-level `respond @outside ... 403` guard before the
 `handle_path` route, so non-loopback requests cannot reach Keycloak even for
 `/auth/*`. Loopback requests under `/auth/*` are stripped by `handle_path` and
