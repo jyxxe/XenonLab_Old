@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '../src/design-system/tokens.css';
 import '../src/design-system/primitives.css';
@@ -51,6 +51,9 @@ const state = {
   saved: [] as Array<{rowId: string; values: Record<string, any>; revision: number}>,
   moved: '',
   created: [] as any[],
+  chatKind: 'iframe' as 'iframe' | 'native',
+  openedApp: '',
+  notices: [] as string[],
 };
 
 async function route(path: string, init: RequestInit = {}): Promise<{data: any; meta: Record<string, any>}> {
@@ -212,10 +215,49 @@ const apiRaw = async (path: string, init?: RequestInit) => {
   return new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}});
 };
 
+const appIntents: Array<Record<string, unknown>> = [];
+
 (window as any).libraryFixture = {
   calls,
   state,
+  appIntents,
   resetCalls: () => calls.splice(0, calls.length),
 };
 
-createRoot(document.getElementById('root')!).render(<LibraryApp api={api} apiPage={apiPage} apiRaw={apiRaw} />);
+// Mirrors the desktop shell wiring: a registered chat iframe app and an
+// openApp that records intents instead of opening windows. Toggling
+// window.libraryFixture.state.chatKind forces React to re-read the list.
+function ShellFixture() {
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let last = state.chatKind;
+    const timer = setInterval(() => {
+      if (state.chatKind !== last) {
+        last = state.chatKind;
+        setRevision(value => value + 1);
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, []);
+  const apps = revision >= 0 ? [
+    {id: 'chat', title: 'AI 对话', icon: '✦', kind: state.chatKind, origin: 'https://chat.fixture.local', entry: '/', permissions: [], defaultSize: [1080, 780], minSize: [720, 520], singleton: true, dock: true},
+    {id: 'knowledge', title: '知识库', icon: '▤', kind: 'native', permissions: [], defaultSize: [1180, 780], minSize: [820, 520], singleton: true, dock: true},
+  ] : [];
+  return (
+    <LibraryApp
+      api={api}
+      apiPage={apiPage}
+      apiRaw={apiRaw}
+      apps={apps as any}
+      openApp={(id: string, intent?: Record<string, unknown>) => {
+        appIntents.push({id, ...(intent || {})});
+        state.openedApp = id;
+      }}
+      notify={(toast: {title: string}) => {
+        state.notices = [...(state.notices || []), toast.title];
+      }}
+    />
+  );
+}
+
+createRoot(document.getElementById('root')!).render(<ShellFixture />);
