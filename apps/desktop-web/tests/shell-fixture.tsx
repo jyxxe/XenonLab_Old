@@ -19,7 +19,7 @@ const registry:any[]=legacyRegistry;
 const tables=[
   {id:'example-table',name:'部署验收',path:'/示例/平台'},
 ];
-const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,delayEmbedding:false,embeddingPending:0,qualityReady:false};
+const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,delayEmbedding:false,embeddingPending:0,qualityReady:false,embeddingReadOnly:false,malformedEmbedding:false};
 let finishEmbedding: (() => void) | null = null;
 const stored = (key: string, fallback: any) => {
   try {
@@ -73,7 +73,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
   calls.push({method, path, body});
   if (path === '/users/me') {
-    return {subject: 'fixture-user-0001', kind: 'human', scopes: ['xelibrary:read', 'dev:read', 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read','embedding:write'] : [])]};
+    return {subject: 'fixture-user-0001', kind: 'human', scopes: ['xelibrary:read', 'dev:read', 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read',...(control.embeddingReadOnly ? [] : ['embedding:write'])] : [])]};
   }
   if(path==='/apps?include_unavailable=true')return [...registry];
   if (path === '/apps') {if(method==='POST'){const saved={...body,revision:1};registry.push(saved);return saved}return [...registry]}
@@ -140,7 +140,10 @@ const apiRaw = async (path: string, init?: RequestInit) => {
       finishEmbedding = null;
     }
     if (busy) return new Response(JSON.stringify({error:{message:'D100M worker busy; retry later'}}), {status:429, headers:{'Content-Type':'application/json'}});
-    return new Response(JSON.stringify({model: 'D100M-Embedding', data: [{embedding: [0.125, -0.5, 0.25]}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
+    const inputs = Array.isArray(body.input) ? body.input : [body.input];
+    const data = inputs.map((_: string, index: number) => ({index, embedding:[0.125 + index, -0.5, 0.25]})).reverse();
+    if (control.malformedEmbedding && data.length > 1) data[0].index = data[1].index;
+    return new Response(JSON.stringify({model: 'D100M-Embedding', data}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   if (path === '/users/me/wallpaper' && (!init?.method || init.method === 'GET')) {
     if (!preferences.custom_wallpaper_available) return new Response(null, {status: 404});
