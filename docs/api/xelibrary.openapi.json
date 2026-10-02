@@ -645,6 +645,193 @@
         }
       }
     },
+    "/api/v1/tables/{tid}/rows:bulkInsert": {
+      "post": {
+        "summary": "Bulk Insert",
+        "operationId": "bulk_insert_api_v1_tables__tid__rows_bulkInsert_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkInsert"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tables/{tid}/rows:bulkUpdate": {
+      "post": {
+        "summary": "Bulk Update",
+        "operationId": "bulk_update_api_v1_tables__tid__rows_bulkUpdate_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tables/{tid}/rows:bulkDelete": {
+      "post": {
+        "summary": "Bulk Delete",
+        "operationId": "bulk_delete_api_v1_tables__tid__rows_bulkDelete_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDelete"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tables/{tid}/rows:bulk/{job_id}": {
+      "get": {
+        "summary": "Bulk Job Status",
+        "operationId": "bulk_job_status_api_v1_tables__tid__rows_bulk__job_id__get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/rows/{rid}/revisions": {
       "get": {
         "summary": "Revisions",
@@ -2698,6 +2885,143 @@
           "upload"
         ],
         "title": "Body_upload_api_v1_attachments_post"
+      },
+      "BulkDelete": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BulkDeleteItem"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rows"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 8,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "BulkDelete"
+      },
+      "BulkDeleteItem": {
+        "properties": {
+          "row_id": {
+            "type": "string",
+            "title": "Row Id"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "row_id",
+          "revision"
+        ],
+        "title": "BulkDeleteItem"
+      },
+      "BulkInsert": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RowWrite"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rows"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 8,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "BulkInsert"
+      },
+      "BulkUpdate": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BulkUpdateItem"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rows"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 8,
+                "pattern": "^[A-Za-z0-9._:-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "BulkUpdate"
+      },
+      "BulkUpdateItem": {
+        "properties": {
+          "row_id": {
+            "type": "string",
+            "title": "Row Id"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "values": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "row_id",
+          "revision",
+          "values"
+        ],
+        "title": "BulkUpdateItem"
       },
       "Column": {
         "properties": {

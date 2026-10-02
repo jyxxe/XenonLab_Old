@@ -15,10 +15,11 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 
-from fastapi import Depends, Header, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, Header, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from .bulk_jobs import BulkJobStore
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
 from .query import evaluate, json_ast, parse, path_matches, sort_key
 from .uploads import register_upload_routes
@@ -118,6 +119,32 @@ class RowWrite(BaseModel):
     values: dict
 
 
+class BulkInsert(BaseModel):
+    rows: list[RowWrite] = Field(min_length=1)
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class BulkUpdateItem(BaseModel):
+    row_id: str
+    revision: int = Field(ge=1)
+    values: dict
+
+
+class BulkUpdate(BaseModel):
+    rows: list[BulkUpdateItem] = Field(min_length=1)
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class BulkDeleteItem(BaseModel):
+    row_id: str
+    revision: int = Field(ge=1)
+
+
+class BulkDelete(BaseModel):
+    rows: list[BulkDeleteItem] = Field(min_length=1)
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
 class SchemaWrite(BaseModel):
     columns: list[Column] = Field(min_length=1, max_length=128)
 
@@ -155,6 +182,7 @@ def create_app(settings=None):
     (root / "tables").mkdir(exist_ok=True)
     (root / "objects" / "sha256").mkdir(parents=True, exist_ok=True)
     catalogue = root / "catalogue.sqlite"
+    bulk_jobs = BulkJobStore(catalogue)
     with transaction(catalogue) as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS tables(id TEXT PRIMARY KEY, path TEXT, name TEXT,
@@ -847,6 +875,152 @@ def create_app(settings=None):
                 db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (rid,))
         audit(actor, "row.deleted", f"{tid}:{rid}")
         return response(request, {"deleted": True})
+
+    def _bulk_thresholds():
+        sync_limit = int(os.getenv("XELIBRARY_BULK_SYNC_LIMIT", "100"))
+        max_rows = int(os.getenv("XELIBRARY_BULK_MAX_ROWS", "5000"))
+        if sync_limit < 1 or max_rows < sync_limit:
+            raise APIError(500, "BULK_CONFIG_INVALID", "bulk threshold configuration invalid")
+        return sync_limit, max_rows
+
+    def _bulk_guard(items, actor, tid, max_rows):
+        if len(items) > max_rows:
+            raise APIError(413, "BULK_TOO_LARGE", f"batch exceeds {max_rows} rows; split the batch")
+        authorize(actor, tid, "write")
+
+    def _bulk_apply(job_id, tid, kind, rows, actor):
+        """Apply a persisted bulk job row by row (issue #83).
+
+        Every item reuses the single-row semantics - schema validation, table and
+        row ACL, per-item revision checks, change log, FTS maintenance and Qdrant
+        cleanup - and commits in its own transaction, so partial success never
+        rolls back rows that were already applied.
+        """
+        bulk_jobs.start(job_id)
+        done = 0
+        try:
+            for index, item in enumerate(rows):
+                failed = False
+                try:
+                    if kind == "insert":
+                        authorize(actor, tid, "write")
+                        with table_transaction(tid) as db:
+                            values = validate_values(columns(db), item.values)
+                            rid, stamp = str(uuid4()), now()
+                            db.execute(
+                                "INSERT INTO data VALUES(?,?,?,?,?,?)",
+                                (rid, 1, stamp, stamp, None, json.dumps(values)),
+                            )
+                            row = load_row(db, rid)
+                            change(db, row, "create")
+                            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+                            index_cjk_row(db, rid, values.values())
+                        result = {"index": index, "status": "created", "row_id": rid, "revision": 1}
+                    elif kind == "update":
+                        authorize(actor, tid, "write", item.row_id)
+                        with table_transaction(tid) as db:
+                            row = load_row(db, item.row_id)
+                            if item.revision != row["_revision"]:
+                                raise APIError(412, "STALE_REVISION", "revision mismatch")
+                            remove_qdrant_points(tid, item.row_id)
+                            values = {**row["values"], **validate_values(columns(db), item.values, True)}
+                            db.execute(
+                                "UPDATE data SET values_json=?,_revision=_revision+1,_updated_at=? WHERE _row_id=?",
+                                (json.dumps(values), now(), item.row_id),
+                            )
+                            row = load_row(db, item.row_id)
+                            change(db, row, "update")
+                            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
+                            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (item.row_id, " ".join(str(x) for x in values.values())))
+                            index_cjk_row(db, item.row_id, values.values())
+                        result = {"index": index, "status": "updated", "row_id": item.row_id, "revision": row["_revision"]}
+                    else:
+                        authorize(actor, tid, "write", item.row_id)
+                        with table_transaction(tid) as db:
+                            row = load_row(db, item.row_id)
+                            if item.revision != row["_revision"]:
+                                raise APIError(412, "STALE_REVISION", "revision mismatch")
+                            remove_qdrant_points(tid, item.row_id)
+                            db.execute(
+                                "UPDATE data SET _deleted_at=?,_revision=_revision+1 WHERE _row_id=?",
+                                (now(), item.row_id),
+                            )
+                            change(db, load_row(db, item.row_id, True), "delete")
+                            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
+                            if cjk_fts_exists(db):
+                                db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (item.row_id,))
+                        audit(actor, "row.deleted", f"{tid}:{item.row_id}")
+                        result = {"index": index, "status": "deleted", "row_id": item.row_id}
+                except APIError as error:
+                    failed = True
+                    result = {
+                        "index": index, "status": "failed",
+                        "error": {"code": error.code, "message": error.message},
+                    }
+                except Exception:
+                    logging.getLogger("xelibrary.bulk").exception("bulk item %s failed", index)
+                    failed = True
+                    result = {
+                        "index": index, "status": "failed",
+                        "error": {"code": "INTERNAL_ERROR", "message": "item failed; see service logs"},
+                    }
+                done += 1
+                bulk_jobs.record(job_id, result, failed)
+        except Exception:
+            bulk_jobs.fail(job_id, "bulk worker crashed; partial results retained")
+            raise
+
+    def _bulk_submit(kind, items, request, background, actor, tid, batch_id):
+        sync_limit, max_rows = _bulk_thresholds()
+        _bulk_guard(items, actor, tid, max_rows)
+        existing = bulk_jobs.find_batch(batch_id) if batch_id else None
+        if existing is not None:
+            return JSONResponse(response(request, {
+                "mode": existing["status"], "job_id": existing["id"], "duplicate": True,
+                "status": existing["status"], "total": existing["total"],
+                "done": existing["done"], "failed": existing["failed"],
+            }))
+        payload = [item.model_dump() for item in items]
+        job_id = bulk_jobs.create(tid, kind, payload, actor.sub, batch_id)
+        if len(items) <= sync_limit:
+            _bulk_apply(job_id, tid, kind, items, actor)
+            job = bulk_jobs.get(job_id)
+            return JSONResponse(response(request, {
+                "mode": "sync", "job_id": job_id, "status": job["status"],
+                "total": job["total"], "done": job["done"], "failed": job["failed"],
+                "results": job["results"],
+            }))
+        background.add_task(_bulk_apply, job_id, tid, kind, items, actor)
+        return JSONResponse(response(request, {
+            "mode": "job", "job_id": job_id, "status": "queued", "total": len(items),
+        }), status_code=202)
+
+    @app.post("/api/v1/tables/{tid}/rows:bulkInsert")
+    def bulk_insert(tid: str, body: BulkInsert, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
+        return _bulk_submit("insert", body.rows, request, background, actor, tid, body.batch_id)
+
+    @app.post("/api/v1/tables/{tid}/rows:bulkUpdate")
+    def bulk_update(tid: str, body: BulkUpdate, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
+        return _bulk_submit("update", body.rows, request, background, actor, tid, body.batch_id)
+
+    @app.post("/api/v1/tables/{tid}/rows:bulkDelete")
+    def bulk_delete(tid: str, body: BulkDelete, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
+        return _bulk_submit("delete", body.rows, request, background, actor, tid, body.batch_id)
+
+    @app.get("/api/v1/tables/{tid}/rows:bulk/{job_id}")
+    def bulk_job_status(tid: str, job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        authorize(actor, tid, "read")
+        job = bulk_jobs.get(job_id)
+        if job is None or job["table_id"] != tid:
+            raise APIError(404, "JOB_NOT_FOUND", "bulk job not found")
+        if job["owner"] != actor.sub and "xelibrary:admin" not in actor.scopes:
+            raise APIError(403, "FORBIDDEN", "bulk job belongs to another caller")
+        return response(request, {
+            "job_id": job["id"], "table_id": job["table_id"], "kind": job["kind"],
+            "batch_id": job["batch_id"], "status": job["status"], "total": job["total"],
+            "done": job["done"], "failed": job["failed"], "results": job["results"],
+            "error": job["error"], "created_at": job["created_at"], "updated_at": job["updated_at"],
+        })
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/revisions")
     def revisions(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
