@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {Badge, Button, Checkbox, ErrorState, Input, Modal, Spinner} from '../design-system/primitives';
+import {Badge, Button, Checkbox, ErrorState, Input, Modal, Select, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
 import './library.css';
@@ -65,6 +65,8 @@ export function LibraryApp({
   const canAdmin = scopes.includes('xelibrary:admin');
   const table = session.table;
   const {jobs, error: jobsError, reload: reloadJobs} = useJobs(apiPage, table?.id ?? '', canAdmin && view === 'library' && Boolean(table));
+
+  const movePaths = useMemo(() => [...new Set(['/', ...catalogue.tables.flatMap(item => ancestorPaths(item.path))])].sort((left, right) => left.localeCompare(right, 'zh')), [catalogue.tables]);
 
   const tableNames = useMemo(() => new Map(catalogue.tables.map(item => [item.id, item.name])), [catalogue.tables]);
   const tableName = (id: string) => tableNames.get(id) || id.slice(0, 8);
@@ -610,6 +612,14 @@ export function LibraryApp({
 
       <Modal open={dialog === 'move'} title={`移动 ${table?.name || ''}`} onClose={() => setDialog(null)} footer={<><Button variant="ghost" onClick={() => setDialog(null)}>取消</Button><Button variant="primary" disabled={busy || !movePath.startsWith('/')} onClick={() => void moveTable()}>移动知识表</Button></>}>
         {actionError ? <ErrorState title={describeError(actionError, '移动表').title} requestId={describeError(actionError).requestId} errorCode={describeError(actionError).code} message={describeError(actionError, '移动表').message} /> : null}
+        <label style={{display: 'grid', gap: 4, marginBottom: 12}}>
+          已加载目录（可选）
+          <Select value={movePaths.includes(movePath) ? movePath : ''} onChange={event => { if (event.target.value) setMovePath(event.target.value); }}>
+            <option value="">选择已有路径</option>
+            {movePaths.map(path => <option key={path} value={path}>{path}</option>)}
+          </Select>
+          <small className="muted">候选仅来自当前已加载的可见目录，不代表完整目录或目标写权限；也可在下方输入新路径。</small>
+        </label>
         <label>
           目标路径
           <Input value={movePath} onChange={event => setMovePath(event.target.value)} placeholder="/数学/分析" />
