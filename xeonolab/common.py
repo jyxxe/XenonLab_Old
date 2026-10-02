@@ -317,6 +317,7 @@ def token_identity(token, settings):
         claims.get("iat", 0),
         claims.get("account_epoch", ""),
         tuple(claims.get("ancestors", ())),
+        token_scopes=set(scopes),
     )
 
 

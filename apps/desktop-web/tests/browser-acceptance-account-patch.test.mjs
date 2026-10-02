@@ -45,6 +45,21 @@ test('account edits omit unchanged grants and remove revoked grants only on expl
     });
     await page.getByText('已不可授予的旧权限').waitFor({state: 'detached'});
     assert.equal(await page.getByRole('status').filter({hasText: '账号已更新'}).count(), 1);
+
+    // Root-only signed candidates are visible but never preselected; a child
+    // remains limited to the parent's active grants.
+    assert.equal(await page.getByLabel('读取向量').count(), 0);
+    await page.getByRole('button', {name: /Root/}).click();
+    const embeddingRead = page.getByLabel('读取向量');
+    await embeddingRead.waitFor();
+    await page.waitForTimeout(100); // Let the selection effect load this account's grants.
+    assert.equal(await embeddingRead.isChecked(), false);
+    await embeddingRead.check();
+    await page.getByRole('button', {name: '保存账号设置'}).click();
+    await page.waitForFunction(() => window.__accountPatchCalls?.length === 4);
+    assert.deepEqual(await page.evaluate(() => window.__accountPatchCalls[3]), {
+      id: 'root', body: {grants: ['accounts:manage', 'desktop:admin', 'desktop:read', 'embedding:read', 'xelibrary:query', 'xelibrary:read']},
+    });
   } finally {
     await browser.close();
     await server.close();

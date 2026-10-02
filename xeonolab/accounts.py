@@ -263,7 +263,9 @@ def install(app):
                 actor.issued_at,
                 actor.credential_epoch,
                 tuple(row["id"] for row in chain(db, actor.sub)[1:]),
-                token_scopes=set(actor.scopes),
+                # Only token_identity's verified OIDC claims are candidate
+                # grants. API-key scopes are database policy, not JWT claims.
+                token_scopes=None if token.startswith("xek_") else actor.token_scopes,
             )
 
     app.state.authorization_resolver = resolve
@@ -332,6 +334,20 @@ def install(app):
                 next_cursor=rows[limit - 1]["id"] if len(rows) > limit else None,
                 scope_catalog=sorted(SCOPES),
             )
+
+    @app.get("/api/v1/auth/accounts/root-scope-candidates")
+    def root_scope_candidates(request: Request, actor=Depends(identity)):
+        # This endpoint reveals only what this signed-in human root could
+        # explicitly add to their own root grants. It is not delegated to
+        # account managers or API keys and does not activate any permission.
+        if actor.kind != "human" or actor.token_scopes is None:
+            raise APIError(403, "SIGNED_HUMAN_ROOT_REQUIRED", "signed-in human root required")
+        with connect(path) as db:
+            row = load(db, actor.sub)
+            if row["parent"] is not None:
+                raise APIError(403, "SIGNED_HUMAN_ROOT_REQUIRED", "signed-in human root required")
+            candidates = (actor.token_scopes & SCOPES) - effective(db, actor.sub)
+            return response(request, {"candidate_scopes": sorted(candidates)})
 
     @app.post("/api/v1/auth/accounts", status_code=201)
     def create(body: Child, request: Request, actor=Depends(identity)):
