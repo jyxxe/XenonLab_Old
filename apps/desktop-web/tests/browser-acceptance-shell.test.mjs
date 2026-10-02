@@ -761,6 +761,33 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.call('Page.reload');
     await waitFor(()=>cdp.evaluate("document.querySelectorAll('nav.dock .dock-item').length===1"),'explicitly empty Dock restored');
 
+    // A retired registry entry must not surface in the real shell. Existing server
+    // layouts migrate that entry to the native app while preserving unrelated state.
+    for (const scenario of ['legacy-xelibrary', 'legacy-xelibrary-duplicate']) {
+      await cdp.call('Page.navigate', {url: `http://127.0.0.1:${portNumber}/tests/shell-fixture.html?scenario=${scenario}`});
+      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), `${scenario} restored as native Knowledge`);
+      await waitFor(() => cdp.evaluate("window.shellFixture.layout.dock.includes('knowledge') && !window.shellFixture.layout.dock.includes('xelibrary') && !window.shellFixture.layout.windows.some(win=>win.app_id==='xelibrary')"), `${scenario} layout migration persisted`);
+      assert.equal(await cdp.evaluate("window.shellFixture.registry.some(app=>app.id==='xelibrary')"), true, 'fixture confirms the legacy registry entry was supplied');
+      assert.equal(await cdp.evaluate("document.querySelectorAll('.window[data-app-id=xelibrary]').length"), 0, 'no legacy iframe window is rendered');
+      assert.equal(await cdp.evaluate("document.querySelectorAll('.window[data-app-id=knowledge]').length"), 1, 'one native knowledge window is restored');
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock button[title=\"知识库\"]'))"), true, 'native Knowledge appears on the Dock');
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock button[title=\"AI 对话\"]'))"), true, 'unrelated chat window remains reachable from the Dock');
+      assert.equal(await cdp.evaluate("document.documentElement.dataset.theme==='dark' && document.documentElement.dataset.wallpaper==='aurora' && Boolean(document.querySelector('.widget-clock')) && Boolean(document.querySelector('.widget-status'))"), true, 'unrelated theme, wallpaper, and widgets remain applied');
+      const windows = await cdp.evaluate('window.shellFixture.layout.windows');
+      const knowledge = windows.find(win => win.app_id === 'knowledge');
+      const chat = windows.find(win => win.app_id === 'chat');
+      assert.ok(knowledge, 'persisted layout uses the native knowledge app id');
+      assert.deepEqual([knowledge.x, knowledge.y, knowledge.width, knowledge.height], [scenario.endsWith('duplicate') ? 120 : 70, scenario.endsWith('duplicate') ? 90 : 60, scenario.endsWith('duplicate') ? 1000 : 900, scenario.endsWith('duplicate') ? 650 : 600], 'the retained Knowledge window keeps its geometry');
+      assert.deepEqual([chat.title, chat.x, chat.y, chat.width, chat.height, chat.minimized], ['AI 对话自定义标题', 160, 120, 850, 560, true], 'unrelated window personalization survives');
+
+      await cdp.evaluate("document.querySelector('button[title=\"LaunchPad\"]').click()");
+      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), `${scenario} LaunchPad`);
+      const launchpadTitles = await cdp.evaluate("[...document.querySelectorAll('.launchpad-app strong')].map(item=>item.textContent)");
+      assert.equal(launchpadTitles.includes('XeLibrary legacy iframe'), false, 'LaunchPad hides the legacy external app');
+      assert.equal(launchpadTitles.filter(title => title === '知识库').length, 1, 'LaunchPad exposes one native Knowledge app');
+      await cdp.key('Escape', 'Escape');
+    }
+
     // Exercise the real App/auth/session boundary with a synthetic server session.
     // Every refresh rotates its bearer token, reproducing production parent renders.
     await cdp.call('Page.addScriptToEvaluateOnNewDocument', {source: `(() => {
