@@ -358,6 +358,37 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     // Settings persist through the platform API and drive the document theme.
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统设置\"]').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=settings] .settings-panel'))"), 'settings window');
+    await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('日历')).querySelector('input').click()");
+    await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('应用快捷入口')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.widget-calendar')&&document.querySelector('.widget-shortcuts'))"), 'calendar and app shortcut widgets');
+    await cdp.evaluate("[...document.querySelectorAll('.widget-shortcut-options label')].find(label=>label.innerText.includes('知识库')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("window.shellFixture.preferences.shortcut_apps.includes('knowledge')"), 'authorized app shortcut saved');
+    assert.match(await cdp.evaluate("document.querySelector('.widget-calendar').getAttribute('aria-label')"), /日历/);
+    await cdp.evaluate("document.querySelector('.widget-shortcuts button[aria-label=\"打开知识库\"]').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), 'authorized app opened from shortcut widget');
+    const wallpaperPath = path.join(os.tmpdir(), `xeonolab-wallpaper-${process.pid}.png`);
+    await fs.writeFile(wallpaperPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/4ZsAAAAASUVORK5CYII=', 'base64'));
+    const documentNode = await cdp.call('DOM.getDocument', {depth: -1});
+    const wallpaperInput = await cdp.call('DOM.querySelector', {nodeId: documentNode.root.nodeId, selector: 'input[aria-label="选择自定义壁纸"]'});
+    await cdp.call('DOM.setFileInputFiles', {files: [wallpaperPath], nodeId: wallpaperInput.nodeId});
+    await waitFor(() => cdp.evaluate("window.shellFixture.preferences.wallpaper==='custom'"), 'custom wallpaper choice persisted through API');
+    await waitFor(() => cdp.evaluate("document.querySelector('.desktop[data-wallpaper-custom=\"image\"]')?.style.backgroundImage.includes('blob:')"), 'saved wallpaper loaded for shell background');
+    const renderedWallpaper = await cdp.evaluate(`(async () => {
+      const background = getComputedStyle(document.querySelector('.desktop')).backgroundImage;
+      const url = background.match(/url\\(["']?(blob:[^"')]+)["']?\\)/)?.[1];
+      if (!url) return false;
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return image.naturalWidth > 0 && image.naturalHeight > 0;
+    })()`);
+    assert.equal(renderedWallpaper, true, 'the rendered account wallpaper decodes in the browser');
+    assert.ok(await cdp.evaluate("window.shellFixture.calls.some(call=>call.method==='PUT'&&call.path==='/users/me/wallpaper')"), 'wallpaper upload uses authenticated server API');
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 390, height: 844, deviceScaleFactor: 1, mobile: true});
+    const mobileWallpaperControl = await cdp.evaluate("(() => {const input=document.querySelector('input[aria-label=\"选择自定义壁纸\"]');input.scrollIntoView({block:'center'});const rect=input.getBoundingClientRect();return {left:rect.left,right:rect.right,width:innerWidth}})()");
+    assert.ok(mobileWallpaperControl.left >= 0 && mobileWallpaperControl.right <= mobileWallpaperControl.width, 'wallpaper control fits the 390px settings viewport');
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 913, deviceScaleFactor: 1, mobile: false});
+    await fs.rm(wallpaperPath, {force: true});
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"减少动态效果\"]').click()");
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='true'"), 'reduced motion applied');
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"Dock 自动隐藏\"]').click()");

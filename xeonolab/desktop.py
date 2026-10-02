@@ -1,17 +1,100 @@
+import asyncio
+import io
 import json
 import os
 import re
+import threading
 import time
+import warnings
 from ipaddress import ip_address
 from typing import Literal
 from urllib.parse import urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import anyio
 from fastapi import Depends, Query, Request
+from fastapi.responses import Response
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
+from .wallpaper_backup import wallpaper_data_lock
+from .wallpaper_limits import WALLPAPER_MAX_BYTES, WALLPAPER_MAX_PIXELS
+
+
+class _BoundedImageBuffer(io.BytesIO):
+    def write(self, data):
+        if self.tell() + len(data) > WALLPAPER_MAX_BYTES:
+            raise APIError(
+                413, "WALLPAPER_TOO_LARGE_AFTER_ENCODING", "encoded wallpaper exceeds the 5 MiB limit"
+            )
+        return super().write(data)
+
+
+def process_wallpaper_image(payload: bytes, temporary):
+    """Decode and encode an untrusted image. Always called in a bounded worker thread."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as source:
+                if source.format not in ("JPEG", "PNG", "WEBP"):
+                    raise ValueError("unsupported image format")
+                if source.width * source.height > WALLPAPER_MAX_PIXELS or getattr(source, "n_frames", 1) != 1:
+                    raise ValueError("image dimensions or frame count outside limits")
+                source.verify()
+            with Image.open(io.BytesIO(payload)) as source:
+                image = ImageOps.exif_transpose(source)
+                image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+                with _BoundedImageBuffer() as output:
+                    image.save(output, format="WEBP", quality=90, method=4)
+                    size = output.tell()
+                    temporary.write_bytes(output.getvalue())
+        return size
+    except APIError:
+        temporary.unlink(missing_ok=True)
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError,
+            Image.DecompressionBombWarning):
+        raise APIError(422, "INVALID_WALLPAPER", "file is not a supported, safe image") from None
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def publish_wallpaper(database, wallpaper_root, data_dir, owner, asset_id, temporary, size):
+    target = wallpaper_root / (str(UUID(asset_id)) + ".webp")
+    with wallpaper_data_lock(data_dir):
+        previous_id = None
+        try:
+            with transaction(database) as db:
+                previous = db.execute(
+                    "SELECT asset_id FROM desktop_wallpapers WHERE owner=?", (owner,)
+                ).fetchone()
+                previous_id = previous[0] if previous else None
+                os.replace(temporary, target)
+                db.execute(
+                    "INSERT OR REPLACE INTO desktop_wallpapers VALUES(?,?,?,?,?)",
+                    (owner, asset_id, "image/webp", size, time.time()),
+                )
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
+            raise
+        if previous_id:
+            wallpaper_root.joinpath(str(UUID(previous_id)) + ".webp").unlink(missing_ok=True)
+
+
+async def _wait_for_wallpaper_worker(worker):
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # Starlette/AnyIO request task groups use cancellation scopes, which can
+        # re-cancel every await in an ordinary except block. Shield the wait so
+        # the processing slot and temporary file remain owned until the thread exits.
+        with anyio.CancelScope(shield=True):
+            await worker
+        raise
 
 
 class Sandbox(BaseModel):
@@ -50,11 +133,19 @@ class Preferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
     theme: Literal["system", "light", "dark"] = "system"
     accent: Literal["blue", "purple", "green", "orange"] = "blue"
-    wallpaper: Literal["aurora", "ocean", "sunset", "silver"] = "aurora"
+    wallpaper: Literal["aurora", "ocean", "sunset", "silver", "custom"] = "aurora"
+    wallpaper_mode: Literal["solid", "gradient", "image"] = "solid"
+    wallpaper_color: str = Field(default="#101828", pattern=r"^#[0-9a-fA-F]{6}$")
+    wallpaper_gradient_from: str = Field(default="#0b1220", pattern=r"^#[0-9a-fA-F]{6}$")
+    wallpaper_gradient_to: str = Field(default="#1d4ed8", pattern=r"^#[0-9a-fA-F]{6}$")
+    wallpaper_gradient_angle: int = Field(default=160, ge=0, le=360)
+    wallpaper_dim: int = Field(default=0, ge=0, le=90)
     timezone: str = Field(default="system", min_length=1, max_length=80)
-    widgets: list[Literal["clock", "status"]] = Field(
+    widgets: list[Literal["clock", "status", "calendar", "app-shortcuts", "work", "notes", "search"]] = Field(
         default_factory=lambda: ["clock", "status"], max_length=8
     )
+    shortcut_apps: list[str] = Field(default_factory=list, max_length=12)
+    notes: str = Field(default="", max_length=4000)
     dock_size: Literal["small", "medium", "large"] = "medium"
     dock_autohide: bool = False
     restore_windows: bool = True
@@ -77,13 +168,32 @@ class PreferencePatch(BaseModel):
     theme: str | None = None
     accent: str | None = None
     wallpaper: str | None = None
+    wallpaper_mode: str | None = None
+    wallpaper_color: str | None = None
+    wallpaper_gradient_from: str | None = None
+    wallpaper_gradient_to: str | None = None
+    wallpaper_gradient_angle: int | None = None
+    wallpaper_dim: int | None = None
     timezone: str | None = None
     widgets: list[str] | None = None
+    shortcut_apps: list[str] | None = Field(default=None, max_length=12)
+    notes: str | None = Field(default=None, max_length=4000)
     dock_size: str | None = None
     dock_autohide: bool | None = None
     restore_windows: bool | None = None
     animations: bool | None = None
     reduced_motion: bool | None = None
+
+
+def preferences_from_definition(definition: str | None) -> Preferences:
+    """Load old account rows without changing the meaning of uploaded custom wallpapers."""
+    if definition is None:
+        return Preferences()
+    value = json.loads(definition)
+    if value.get("wallpaper") == "custom" and "wallpaper_mode" not in value:
+        # The previous schema used `custom` exclusively for the account image.
+        value["wallpaper_mode"] = "image"
+    return Preferences.model_validate(value)
 
 
 class Layout(BaseModel):
@@ -100,12 +210,18 @@ def create_app(settings=None):
     install_accounts(app)
     install(app)
     path = app.state.settings.data_dir / "desktop.sqlite"
+    wallpaper_root = app.state.settings.data_dir / "wallpapers"
+    wallpaper_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    wallpaper_root.chmod(0o700)
+    app.state.wallpaper_processing_slots = threading.BoundedSemaphore(2)
     with transaction(path) as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS apps(id TEXT PRIMARY KEY,definition TEXT);
         CREATE TABLE IF NOT EXISTS layouts(owner TEXT PRIMARY KEY,layout TEXT);
         CREATE TABLE IF NOT EXISTS preferences(owner TEXT PRIMARY KEY,definition TEXT);
         CREATE TABLE IF NOT EXISTS app_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,target TEXT,at REAL);
+        CREATE TABLE IF NOT EXISTS desktop_wallpapers(owner TEXT PRIMARY KEY,asset_id TEXT NOT NULL,
+          media_type TEXT NOT NULL,size INTEGER NOT NULL,updated_at REAL NOT NULL);
         """)
 
         if "revision" not in {row[1] for row in db.execute("PRAGMA table_info(apps)")}:
@@ -264,24 +380,110 @@ def create_app(settings=None):
     def get_preferences(request: Request, actor=Depends(scope("desktop:read"))):
         with connect(path) as db:
             row = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
-        return response(
-            request,
-            Preferences.model_validate_json(row[0]).model_dump() if row else Preferences().model_dump(),
-        )
+            has_wallpaper = db.execute(
+                "SELECT 1 FROM desktop_wallpapers WHERE owner=?", (actor.sub,)
+            ).fetchone() is not None
+        result = preferences_from_definition(row[0] if row else None).model_dump()
+        result["custom_wallpaper_available"] = has_wallpaper
+        return response(request, result)
 
     @app.patch("/api/v1/users/me/preferences")
     def patch_preferences(body: PreferencePatch, request: Request, actor=Depends(scope("desktop:read"))):
         with transaction(path) as db:
             row = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
-            old = json.loads(row[0]) if row else Preferences().model_dump()
+            old = preferences_from_definition(row[0] if row else None).model_dump()
             try:
                 updated = Preferences.model_validate({**old, **body.model_dump(exclude_unset=True)})
             except ValueError:
                 raise APIError(422, "INVALID_PREFERENCES", "invalid preference or timezone") from None
+            if updated.wallpaper == "custom" and updated.wallpaper_mode == "image" and not db.execute(
+                "SELECT 1 FROM desktop_wallpapers WHERE owner=?", (actor.sub,)
+            ).fetchone():
+                raise APIError(409, "WALLPAPER_NOT_FOUND", "upload a custom wallpaper before selecting it")
             db.execute(
                 "INSERT OR REPLACE INTO preferences VALUES(?,?)", (actor.sub, updated.model_dump_json())
             )
-        return response(request, updated.model_dump())
+            has_wallpaper = db.execute(
+                "SELECT 1 FROM desktop_wallpapers WHERE owner=?", (actor.sub,)
+            ).fetchone() is not None
+        return response(request, {**updated.model_dump(), "custom_wallpaper_available": has_wallpaper})
+
+    def wallpaper_file(asset_id):
+        # Only UUIDs generated by this service are ever used to form a path.
+        return wallpaper_root / (str(UUID(asset_id)) + ".webp")
+
+    @app.put(
+        "/api/v1/users/me/wallpaper",
+        openapi_extra={"requestBody": {"required": True, "content": {
+            "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+        }}},
+    )
+    async def upload_wallpaper(request: Request, actor=Depends(scope("desktop:read"))):
+        slots = app.state.wallpaper_processing_slots
+        if not slots.acquire(blocking=False):
+            raise APIError(429, "WALLPAPER_PROCESSING_BUSY", "wallpaper image processing is at capacity")
+        temporary = None
+        try:
+            raw = bytearray()
+            async for chunk in request.stream():
+                if len(raw) + len(chunk) > WALLPAPER_MAX_BYTES:
+                    raise APIError(413, "WALLPAPER_TOO_LARGE", "wallpaper exceeds the 5 MiB limit")
+                raw.extend(chunk)
+            if not raw:
+                raise APIError(422, "INVALID_WALLPAPER", "choose a non-empty JPEG, PNG, or WebP image")
+            asset_id = str(uuid4())
+            temporary = wallpaper_root / (asset_id + ".tmp")
+            worker = asyncio.create_task(asyncio.to_thread(process_wallpaper_image, bytes(raw), temporary))
+            size = await _wait_for_wallpaper_worker(worker)
+            worker = asyncio.create_task(asyncio.to_thread(
+                publish_wallpaper, path, wallpaper_root, app.state.settings.data_dir,
+                actor.sub, asset_id, temporary, size
+            ))
+            await _wait_for_wallpaper_worker(worker)
+            return response(request, {"wallpaper": "custom", "media_type": "image/webp", "size": size})
+        finally:
+            slots.release()
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    @app.get(
+        "/api/v1/users/me/wallpaper",
+        response_class=Response,
+        responses={200: {"content": {"image/webp": {
+            "schema": {"type": "string", "format": "binary"}
+        }}}},
+    )
+    def get_wallpaper(request: Request, actor=Depends(scope("desktop:read"))):
+        with wallpaper_data_lock(app.state.settings.data_dir), connect(path) as db:
+            row = db.execute(
+                "SELECT asset_id,media_type,size FROM desktop_wallpapers WHERE owner=?", (actor.sub,)
+            ).fetchone()
+            if row is None:
+                raise APIError(404, "WALLPAPER_NOT_FOUND", "no custom wallpaper is saved for this account")
+            target = wallpaper_file(row["asset_id"])
+            if not target.is_file():
+                raise APIError(404, "WALLPAPER_NOT_FOUND", "saved wallpaper file is unavailable")
+            content = target.read_bytes()
+        return Response(content, media_type=row["media_type"], headers={
+            "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"
+        })
+
+    @app.delete("/api/v1/users/me/wallpaper")
+    def delete_wallpaper(request: Request, actor=Depends(scope("desktop:read"))):
+        with wallpaper_data_lock(app.state.settings.data_dir):
+            with transaction(path) as db:
+                row = db.execute(
+                    "SELECT asset_id FROM desktop_wallpapers WHERE owner=?", (actor.sub,)
+                ).fetchone()
+                db.execute("DELETE FROM desktop_wallpapers WHERE owner=?", (actor.sub,))
+                stored = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
+                old = json.loads(stored[0]) if stored else Preferences().model_dump()
+                if old.get("wallpaper") == "custom" and old.get("wallpaper_mode", "image") == "image":
+                    old["wallpaper"] = "aurora"
+                db.execute("INSERT OR REPLACE INTO preferences VALUES(?,?)", (actor.sub, json.dumps(old)))
+            if row:
+                wallpaper_file(row["asset_id"]).unlink(missing_ok=True)
+        return response(request, {"deleted": True, "wallpaper": old["wallpaper"]})
 
     @app.get("/api/v1/users/me/app-audit")
     def registry_audit(request: Request, actor=Depends(scope("desktop:admin"))):
