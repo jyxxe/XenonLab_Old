@@ -7,6 +7,9 @@ export const MIN_WIDTH: number;
 export const MIN_HEIGHT: number;
 export const MIN_VISIBLE_X: number;
 export const MIN_VISIBLE_Y: number;
+export const LEGACY_XELIBRARY_APP_ID: string;
+export function isRetiredRegistryAppId(id: string): boolean;
+export function migrateLegacyAppReferences<T extends Record<string, any>>(layout: T): T;
 
 export function workArea(viewport: {width: number; height: number}): Rect;
 export function clamp(value: number, min: number, max: number): number;

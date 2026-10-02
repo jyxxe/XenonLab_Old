@@ -469,7 +469,7 @@ function App() {
 
   return (
     <ToastProvider>
-      <DesktopShell api={api} apiPage={apiPage} apiRaw={apiRaw} token={token} onLogout={handleLogout} />
+      <DesktopShell api={api} apiPage={apiPage} apiRaw={apiRaw} onLogout={handleLogout} />
       <output hidden data-testid="session-status" data-phase={sessionStatus.phase} />
       {sessionBanner}
     </ToastProvider>

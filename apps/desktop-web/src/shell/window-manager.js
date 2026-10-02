@@ -11,6 +11,29 @@ export const MIN_HEIGHT = 200;
 export const MIN_VISIBLE_X = 96;
 export const MIN_VISIBLE_Y = 40;
 
+/** The old external XeLibrary registry app is replaced by the native Knowledge app. */
+export const LEGACY_XELIBRARY_APP_ID = 'xelibrary';
+
+export function isRetiredRegistryAppId(id) {
+  return id === LEGACY_XELIBRARY_APP_ID;
+}
+
+export function migrateLegacyAppReferences(layout) {
+  if (!layout || typeof layout !== 'object' || Array.isArray(layout)) return layout;
+  const migrate = id => id === LEGACY_XELIBRARY_APP_ID ? 'knowledge' : id;
+  const dock = Array.isArray(layout.dock) ? [...new Set(layout.dock.map(migrate))] : layout.dock;
+  const hasNativeKnowledgeWindow = Array.isArray(layout.windows)
+    && layout.windows.some(win => win && typeof win === 'object' && win.app_id === 'knowledge');
+  const windows = Array.isArray(layout.windows)
+    ? layout.windows
+      .filter(win => !(hasNativeKnowledgeWindow && win && typeof win === 'object' && win.app_id === LEGACY_XELIBRARY_APP_ID))
+      .map(win => win && typeof win === 'object' && win.app_id === LEGACY_XELIBRARY_APP_ID
+        ? {...win, app_id: 'knowledge', title: '知识库'}
+        : win)
+    : layout.windows;
+  return {...layout, dock, windows};
+}
+
 export function workArea(viewport) {
   const width = Math.max(MIN_WIDTH, viewport.width - WINDOW_MARGIN * 2);
   const height = Math.max(MIN_HEIGHT, viewport.height - MENUBAR_HEIGHT - DOCK_CLEARANCE);
