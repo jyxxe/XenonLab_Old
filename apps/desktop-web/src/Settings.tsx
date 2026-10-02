@@ -5,11 +5,13 @@ import {AppRegistry} from './AppRegistry';
 import {DesktopPreferences} from './DesktopPreferences';
 import {ACLManager} from './ACLManager';
 import type {DesktopApp, UserPreferences} from './shell/types';
+import type {APIRaw} from './shell/types';
 
 type API = (path: string, init?: RequestInit) => Promise<any>;
 
 export function Settings({
   api,
+  apiRaw,
   saveLayout,
   preferences,
   applyPreferences,
@@ -17,6 +19,7 @@ export function Settings({
   apps, dockIds, togglePin, movePinned,
 }: {
   api: API;
+  apiRaw: APIRaw;
   apps: DesktopApp[];
   dockIds: string[];
   togglePin: (id: string) => void;
@@ -53,7 +56,7 @@ export function Settings({
         ) : tab === 'apps' ? (
           <AppRegistry api={api} changed={refreshApps} />
         ) : (
-          <DesktopPreferences apps={apps} dockIds={dockIds} togglePin={togglePin} movePinned={movePinned} api={api} preferences={preferences} apply={applyPreferences} saveLayout={saveLayout} />
+          <DesktopPreferences apps={apps} dockIds={dockIds} togglePin={togglePin} movePinned={movePinned} api={api} apiRaw={apiRaw} preferences={preferences} apply={applyPreferences} saveLayout={saveLayout} />
         )}
       </div>
     </div>
