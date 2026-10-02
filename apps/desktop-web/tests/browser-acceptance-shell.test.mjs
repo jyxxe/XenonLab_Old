@@ -304,15 +304,49 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("document.querySelector('.dock-minimized button').click()");
     await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('.window[data-app-id=knowledge]')).visibility==='visible'"), 'restored window');
 
-    // Window: maximize respects the menu bar and dock, and restores its previous rect.
+    // Window: maximize fills the viewport and temporarily hides the Dock.
     const beforeMax = await rectOf(cdp, '.window[data-app-id=knowledge]');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').click()");
     await sleep(150);
     const maximized = await rectOf(cdp, '.window[data-app-id=knowledge]');
-    assert.equal(maximized.y, 42, 'maximized window starts below the menu bar and keeps a margin');
-    assert.ok(maximized.h <= 900 - 30 - 90, 'maximized window leaves room for the dock');
+    assert.equal(maximized.x, 0);
+    assert.equal(maximized.y, 30, 'maximized window starts immediately below the menu bar');
+    assert.equal(maximized.w, 1440);
+    assert.equal(maximized.y + maximized.h, await cdp.evaluate('innerHeight'));
+    await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('nav.dock')).opacity==='0'"), 'Dock hides while maximized');
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR, {recursive:true});
+      const screenshot = await cdp.call('Page.captureScreenshot', {format:'png'});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue133-maximized.png'),Buffer.from(screenshot.data,'base64'));
+    }
+
+    // Compact widgets and each Dock size must leave maximized content reachable.
+    for (const [width, height] of [[1366,768],[820,1180],[390,844]]) {
+      await cdp.call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor: 1, mobile: width < 768});
+      await sleep(250);
+      const rect = await rectOf(cdp, '.window[data-app-id=knowledge]');
+      assert.deepEqual(rect, {x:0,y:30,w:width,h:height-30}, 'maximized frame follows viewport edges');
+      if (width < 1024) assert.equal(await cdp.evaluate("getComputedStyle(document.querySelector('.widgets')).visibility"), 'hidden');
+      for (const size of ['small','medium','large']) {
+        await cdp.evaluate(`document.querySelector('nav.dock').classList.remove('dock-size-small','dock-size-medium','dock-size-large');document.querySelector('nav.dock').classList.add('dock-size-${size}')`);
+        assert.equal(await cdp.evaluate("document.elementFromPoint(innerWidth/2,innerHeight-20)?.closest('.window')?.dataset.appId"), 'knowledge', `${size} Dock does not cover bottom content`);
+      }
+    }
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width:1440,height:900,deviceScaleFactor:1,mobile:false});
+    await sleep(250);
+    await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .min').click()");
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'minimizing removes temporary Dock hiding');
+    await cdp.evaluate("document.querySelector('.dock-minimized button').click()");
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), true, 'restoring maximized window hides Dock again');
+    await cdp.call('Input.dispatchMouseEvent', {type:'mouseMoved',x:720,y:899});
+    await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('nav.dock')).opacity==='1'"), 'bottom edge reveals Dock over maximized app');
+    await click('nav.dock button[title="系统设置"]');
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'normal foreground window shows Dock while maximized window remains behind');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').focus()");
+    await waitFor(() => cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), 'keyboard focus on maximized window hides Dock');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').click()");
     await sleep(150);
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'restore retains the non-autohide preference');
     const restored = await rectOf(cdp, '.window[data-app-id=knowledge]');
     assert.ok(Math.abs(restored.x - beforeMax.x) <= 4 && Math.abs(restored.w - beforeMax.w) <= 4, 'restore returns the previous rectangle');
 
@@ -676,6 +710,10 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate(`(() => {const frame=document.querySelector('.iframe-app iframe');window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'http://127.0.0.1:${stalledPort}',data:{type:'app.ready'}}))})()`);
     await waitFor(() => cdp.evaluate("document.querySelector('.iframe-toolbar')?.innerText.includes('应用已连接')"), 'trusted iframe ready');
     assert.equal(await cdp.evaluate("document.querySelector('.iframe-app iframe').getAttribute('sandbox')"), 'allow-same-origin allow-scripts allow-forms', 'sandbox restrictions retained');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .max').click()");
+    const chatMax = await rectOf(cdp, '.window[data-app-id=chat]');
+    assert.deepEqual(chatMax, {x:0,y:30,w:1440,h:870}, 'OpenWebUI iframe window fills the desktop');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .max').click()");
     const frameId=await cdp.evaluate("document.querySelector('.iframe-app iframe').id");
     await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .min').click()");
     assert.equal(await cdp.evaluate("Boolean(document.getElementById('"+frameId+"'))"), true, 'minimize retains connected iframe');

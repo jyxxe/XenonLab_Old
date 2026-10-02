@@ -22,7 +22,7 @@ import {
   restoreWindows,
   serializeWindows,
   toggleMaximize,
-  workArea,
+  maximizedRect,
 } from './window-manager.js';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp, RegistryApp, UserPreferences, WindowState} from './types';
 
@@ -97,7 +97,9 @@ export function DesktopShell({
 
   const [appIntents, setAppIntents] = useState<Record<string, AppIntent>>({});
 
-  const activeId = activeWindow(windows)?.id ?? null;
+  const active = activeWindow(windows);
+  const activeId = active?.id ?? null;
+  const maximizedActive = Boolean(active?.maximized);
   const activeApp = useMemo(() => {
     const win = windows.find(item => item.id === activeId);
     return win ? apps.find(app => app.id === win.app_id) ?? null : null;
@@ -229,7 +231,7 @@ export function DesktopShell({
       setWindows(current =>
         current.map(win => {
           const app = apps.find(item => item.id === win.app_id);
-          return {...win, ...(win.maximized ? workArea(viewport.current) : clampRect(win, viewport.current, minSizeOf(app)))};
+          return {...win, ...(win.maximized ? maximizedRect(viewport.current) : clampRect(win, viewport.current, minSizeOf(app)))};
         }),
       );
     };
@@ -565,7 +567,7 @@ export function DesktopShell({
   }
 
   return (
-    <div className="desktop ds-compact" data-has-widgets={(preferences.widgets || []).length ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
+    <div className="desktop ds-compact" data-maximized-active={maximizedActive ? 'true' : undefined} data-has-widgets={(preferences.widgets || []).length ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
       backgroundColor: customWallpaper.backgroundColor,
       backgroundImage: customWallpaper.backgroundImage,
       backgroundSize: customWallpaper.backgroundSize,
@@ -671,7 +673,7 @@ export function DesktopShell({
         windows={windows}
         activeWindowId={activeId}
         dockIds={dockIds}
-        autoHide={preferences.dock_autohide}
+        autoHide={preferences.dock_autohide || maximizedActive}
         size={(preferences.dock_size || 'medium') as DockSize}
         badges={badges}
         onLaunch={openApp}
