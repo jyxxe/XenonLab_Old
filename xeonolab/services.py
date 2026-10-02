@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import ssl
 from pathlib import Path
@@ -204,18 +206,93 @@ def create_app(service=None, settings=None):
         def models(actor=Depends(scope("llm:use"))):
             return {"object": "list", "data": [{"id": "deepseek-flash", "object": "model"}]}
 
-        @app.post("/v1/chat/completions")
+        @app.post(
+            "/v1/chat/completions",
+            responses={200: {"content": {"text/event-stream": {}}}},
+        )
         async def chat(request: Request, actor=Depends(scope("llm:use"))):
             key = provider_key()
             if not key:
                 raise APIError(503, "PROVIDER_NOT_CONFIGURED", "LLM provider credential required")
             body = await request.json()
-            if not isinstance(body, dict) or body.get("model") != "deepseek-flash" or body.get("stream"):
-                raise APIError(422, "UNSUPPORTED_REQUEST", "only non-streaming deepseek-flash configured")
+            if not isinstance(body, dict) or body.get("model") != "deepseek-flash":
+                raise APIError(422, "UNSUPPORTED_REQUEST", "only deepseek-flash configured")
+            stream_requested = body.get("stream") is True
+            if body.get("stream") and not stream_requested:
+                raise APIError(422, "UNSUPPORTED_REQUEST", "stream must be a boolean")
             body = {**body, "model": os.getenv("LLM_PROVIDER_MODEL", "deepseek-flash")}
             context = ssl.create_default_context()
             if os.getenv("LLM_TLS_MAX_VERSION") == "1.2":
                 context.maximum_version = ssl.TLSVersion.TLSv1_2
+
+            if stream_requested:
+                timeout = httpx.Timeout(connect=10, read=120, write=30, pool=10)
+                client = httpx.AsyncClient(timeout=timeout, trust_env=False, verify=context)
+                upstream = None
+                try:
+                    upstream_request = client.build_request(
+                        "POST",
+                        os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/")
+                        + "/v1/chat/completions",
+                        headers={
+                            "Authorization": "Bearer " + key,
+                            "Accept": "text/event-stream",
+                            "Accept-Encoding": "identity",
+                        },
+                        json=body,
+                    )
+                    upstream = await client.send(upstream_request, stream=True)
+                except httpx.HTTPError:
+                    await client.aclose()
+                    raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
+
+                content_type = upstream.headers.get("content-type", "").lower()
+                if upstream.status_code != 200 or not content_type.startswith("text/event-stream"):
+                    await upstream.aclose()
+                    await client.aclose()
+                    raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed")
+
+                async def stream_chunks():
+                    def record_stream_error(code):
+                        logging.getLogger("xeonolab").warning(
+                            json.dumps(
+                                {
+                                    "service": "llm-gateway",
+                                    "event": "provider_stream.interrupted",
+                                    "code": code,
+                                    "request_id": request.state.request_id,
+                                },
+                                separators=(",", ":"),
+                            )
+                        )
+
+                    try:
+                        async with asyncio.timeout(600):
+                            async for chunk in upstream.aiter_bytes():
+                                if chunk:
+                                    yield chunk
+                    except httpx.HTTPError:
+                        # A truncated SSE stream has no successful terminal marker; do not
+                        # leak upstream exception details or credentials into a new event.
+                        record_stream_error("upstream_read_failed")
+                        return
+                    except TimeoutError:
+                        record_stream_error("stream_timeout")
+                        return
+                    finally:
+                        try:
+                            await upstream.aclose()
+                        finally:
+                            await client.aclose()
+
+                from fastapi.responses import StreamingResponse
+
+                return StreamingResponse(
+                    stream_chunks(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
+
             async with httpx.AsyncClient(timeout=120, trust_env=False, verify=context) as client:
                 result = await client.post(
                     os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/") + "/v1/chat/completions",

@@ -97,7 +97,8 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
+              },
+              "text/event-stream": {}
             }
           }
         }
