@@ -5,6 +5,7 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  stableWindowOrder,
   isRetiredRegistryAppId,
   migrateLegacyAppReferences,
   nextWindowId,
@@ -178,4 +179,17 @@ test('maximized geometry fits compact screens regardless of app minimum size', (
     const [win] = restoreWindows([{id:'compact',app_id:'knowledge',maximized:true}],()=>app,viewport);
     assert.deepEqual({x:win.x,y:win.y,width:win.width,height:win.height}, maximizedRect(viewport));
   }
+});
+
+test('window DOM order remains stable while focus and stacking still change', () => {
+  const initial = [{id:'c'}, {id:'a'}, {id:'b'}];
+  const focused = focusWindow(initial, 'a');
+  assert.equal(activeWindow(focused).id, 'a');
+  assert.deepEqual(focused.map(w=>w.id), ['c','b','a']);
+  assert.deepEqual(stableWindowOrder(initial).map(w=>w.id), ['a','b','c']);
+  assert.deepEqual(stableWindowOrder(focused).map(w=>w.id), ['a','b','c']);
+  assert.deepEqual(initial.map(w=>w.id), ['c','a','b'], 'render ordering never mutates persisted stacking');
+  const extended = stableWindowOrder([...focused,{id:'aa'}]);
+  assert.deepEqual(extended.filter(w=>w.id!=='aa').map(w=>w.id), ['a','b','c']);
+  assert.deepEqual(stableWindowOrder(focused.filter(w=>w.id!=='b')).map(w=>w.id), ['a','c']);
 });

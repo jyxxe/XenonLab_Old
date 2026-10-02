@@ -126,6 +126,11 @@ export function toggleMaximize(win, viewport) {
   };
 }
 
+/** Keep DOM order independent of stacking: moving an iframe node reloads its document. */
+export function stableWindowOrder(windows) {
+  return [...windows].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
 /** Move the referenced window to the top of the stack (end of the array). */
 export function focusWindow(windows, id) {
   const index = windows.findIndex(win => win.id === id);

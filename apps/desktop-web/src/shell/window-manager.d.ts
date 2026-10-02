@@ -40,3 +40,5 @@ export function restoreWindows(
   viewport: {width: number; height: number},
 ): WindowState[];
 export function serializeWindows(windows: WindowState[]): Array<Record<string, unknown>>;
+
+export function stableWindowOrder(windows: WindowState[]): WindowState[];
