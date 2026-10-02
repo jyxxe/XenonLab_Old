@@ -297,7 +297,7 @@ test('trusted same-page session change revalidates identity and discards an old 
       data: {type: 'auth.session_changed', access_token: 'bob-token-2'},
     })));
     await bobRefreshIdentityResponse;
-    await page.waitForFunction(() => !document.querySelector('.library-query-history')?.textContent.includes('身份正在验证'));
+    await page.waitForFunction(expression => document.querySelector('.library-query-editor')?.value === expression, bobExpression);
     assert.equal(await editor.inputValue(), bobExpression, 'same-user session refresh restores that subject’s draft');
     assert.equal(await page.locator('.library-query-results').count(), 0, 'session change clears old result rows even for the same subject');
   } finally {
