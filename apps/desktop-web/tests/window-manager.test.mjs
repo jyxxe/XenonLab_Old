@@ -5,6 +5,8 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  isRetiredRegistryAppId,
+  migrateLegacyAppReferences,
   nextWindowId,
   restoreWindows,
   resizeRect,
@@ -15,6 +17,27 @@ import {
 
 const viewport = {width: 1440, height: 900};
 const app = {title: 'Knowledge', defaultSize: [1200, 800], minSize: [820, 520]};
+
+test('legacy XeLibrary layout references migrate to native Knowledge without changing other preferences', () => {
+  assert.equal(isRetiredRegistryAppId('xelibrary'), true);
+  assert.equal(isRetiredRegistryAppId('custom-app'), false, 'unrelated external apps remain eligible');
+  const source = {
+    dock: ['settings', 'xelibrary', 'knowledge', 'chat'],
+    dock_initialized: true,
+    windows: [
+      {id: 'legacy', app_id: 'xelibrary', title: 'Legacy library', x: 20, y: 40, width: 900, height: 600, minimized: true},
+      {id: 'other', app_id: 'chat', title: 'Chat', x: 30, y: 50, width: 800, height: 500},
+    ],
+    revision: 7,
+  };
+  const migrated = migrateLegacyAppReferences(source);
+  assert.deepEqual(migrated.dock, ['settings', 'knowledge', 'chat']);
+  assert.deepEqual(migrated.windows[0], {...source.windows[0], app_id: 'knowledge', title: '知识库'});
+  assert.deepEqual(migrated.windows[1], source.windows[1]);
+  assert.equal(migrated.dock_initialized, true);
+  assert.equal(migrated.revision, 7);
+  assert.deepEqual(source.dock, ['settings', 'xelibrary', 'knowledge', 'chat'], 'migration does not mutate stored input');
+});
 
 test('default geometry stays inside the work area and respects minimums', () => {
   const rect = defaultRect(app, viewport);
