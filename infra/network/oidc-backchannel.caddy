@@ -1,0 +1,18 @@
+https://xenon.jyxxe.com {
+	tls internal
+
+	@outside not remote_ip 127.0.0.1 ::1
+	respond @outside "forbidden" 403
+
+	handle_path /auth/* {
+		reverse_proxy 192.168.0.109:8180 {
+			header_up Host xenon.jyxxe.com
+			header_up X-Forwarded-Host xenon.jyxxe.com
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Prefix /auth
+		}
+	}
+	handle {
+		respond "not found" 404
+	}
+}
