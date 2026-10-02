@@ -76,7 +76,9 @@ test('Issues toolbar stays inside a 390px viewport',async t=>{
   const server=await createServer({root:appRoot,server:{host:'127.0.0.1',port:portNumber,strictPort:true,watch:null}});
   await server.listen();
   const tempDir=await fs.mkdtemp(path.join(os.tmpdir(),'xeonolab-issues-narrow-'));
-  const chrome=spawn(chromePath,['--headless=new','--no-first-run','--no-default-browser-check',`--user-data-dir=${path.join(tempDir,'profile')}`,'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1','--remote-allow-origins=*','about:blank'],{stdio:'ignore'});
+  // The rootless runner's job container runs as UID 0; Chrome requires this flag for that UID.
+  // Match Playwright's default; the rootless CI job has a 64 MiB /dev/shm.
+  const chrome=spawn(chromePath,['--headless=new','--disable-dev-shm-usage',...(process.getuid?.()===0?['--no-sandbox']:[]),'--no-first-run','--no-default-browser-check',`--user-data-dir=${path.join(tempDir,'profile')}`,'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1','--remote-allow-origins=*','about:blank'],{stdio:'ignore'});
   let cdp;
   try{
     const endpoint=await waitFor(async()=>{
