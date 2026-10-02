@@ -1,7 +1,7 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
-import type {API, APIPage, APIRaw, AppIntent} from '../shell/types';
+import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
 import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
 import {TableView, type SortState} from './TableView';
@@ -10,11 +10,28 @@ import {SearchView} from './SearchView';
 import {QueryConsole} from './QueryConsole';
 import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
+import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {ancestorPaths, classifySchemaChange, describeError} from './logic.js';
-import type {RecentEntry, Row, SearchHit, Table} from './types';
+import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
-export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: APIPage; apiRaw: APIRaw; intent?: AppIntent}) {
+export function LibraryApp({
+  api,
+  apiPage,
+  apiRaw,
+  intent,
+  apps,
+  openApp,
+  notify,
+}: {
+  api: API;
+  apiPage: APIPage;
+  apiRaw: APIRaw;
+  intent?: AppIntent;
+  apps?: DesktopApp[];
+  openApp?: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
+  notify?: (toast: {title: string; tone?: 'info' | 'success' | 'danger'}) => void;
+}) {
   const {scopes, subject} = useScopes(api);
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
@@ -34,6 +51,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const [notice, setNotice] = useState<{tone: 'info' | 'danger' | 'success'; message: string; code?: string; requestId?: string} | null>(null);
   const [dialog, setDialog] = useState<null | 'new' | 'move' | 'schema' | 'delete'>(null);
+  const [askAI, setAskAI] = useState<SelectionAIAction | null>(null);
   const [schemaDraft, setSchemaDraft] = useState<Column[]>([]);
   const [destructiveConfirmed, setDestructiveConfirmed] = useState(false);
   const [movePath, setMovePath] = useState('');
@@ -313,6 +331,12 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
       if (session.table) void session.refresh();
       return;
     }
+    if (intent.action === 'askAI') {
+      // Drafts only make sense with a concrete selection; without one the
+      // effect is a no-op so the dialog never pretends to have context.
+      if (session.table) setAskAI('ask');
+      return;
+    }
     selectView(intent.action === 'query' ? 'query' : intent.action === 'theorems' ? 'theorems' : 'search');
     if (intent.action === 'search') {
       search.reset();
@@ -324,6 +348,22 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
       return () => clearTimeout(timer);
     }
   }, [intent]);
+
+  // Chat availability comes from the shell's merged registry; XeLibrary itself
+  // never hardcodes a chat origin. When no chat app exists the draft can still
+  // be composed and copied.
+  const chatApp = (apps || []).find(app => app.id === 'chat' && app.kind === 'iframe') || null;
+  const selectedRows = useMemo(
+    () => (selection.size ? session.rows.filter(row => selection.has(row._row_id)) : activeRowId ? session.rows.filter(row => row._row_id === activeRowId) : []),
+    [selection, activeRowId, session.rows],
+  );
+
+  function confirmAskAI(prompt: string) {
+    setAskAI(null);
+    if (!chatApp) return;
+    if (openApp) openApp('chat', {action: 'askAI', prompt});
+    if (notify) notify({title: 'AI 草稿已投递到对话窗口，请核对后发送。', tone: 'info'});
+  }
 
   const catalogueError = catalogue.error ? describeError(catalogue.error, '读取目录') : null;
 
@@ -473,6 +513,7 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
                 <Button size="sm" onClick={() => { setSchemaDraft((table.columns || []).map(column => ({...column}))); setDestructiveConfirmed(false); setDialog('schema'); }} disabled={!canAdmin}>字段定义</Button>
                 <Button size="sm" variant="danger" onClick={() => setDialog('delete')} disabled={!canAdmin}>删除表</Button>
                 <Button size="sm" variant="ghost" onClick={() => setInspectorOpen(value => !value)}>{inspectorOpen ? '隐藏 Inspector' : '显示 Inspector'}</Button>
+                <Button size="sm" variant="ghost" onClick={() => setAskAI('ask')} title="就当前选择的记录向 AI 提问">{selection.size > 1 ? `Ask AI（${selection.size} 行）` : 'Ask AI'}</Button>
               </div>
             </header>
             <TableView
@@ -498,6 +539,11 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
               onRetry={() => void session.refresh()}
               onRefresh={() => void session.refresh()}
               onContextMenu={() => undefined}
+              onAskAI={rows => {
+                setSelection(new Set(rows.map(row => row._row_id)));
+                if (rows.length === 1) setActiveRowId(rows[0]._row_id);
+                setAskAI('ask');
+              }}
               canWrite={canWrite}
             />
           </>
@@ -536,6 +582,20 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
       )}
 
       <NewTableDialog open={dialog === 'new'} onClose={() => setDialog(null)} onCreate={createTable} />
+
+      {askAI && table && (
+        <AskAIDialog
+          open
+          action={askAI}
+          onAction={setAskAI}
+          table={table}
+          rows={selectedRows}
+          columns={table.columns || []}
+          chatAvailable={Boolean(chatApp)}
+          onConfirm={confirmAskAI}
+          onClose={() => setAskAI(null)}
+        />
+      )}
 
       <Modal open={dialog === 'move'} title={`移动 ${table?.name || ''}`} onClose={() => setDialog(null)} footer={<><Button variant="ghost" onClick={() => setDialog(null)}>取消</Button><Button variant="primary" disabled={busy || !movePath.startsWith('/')} onClick={() => void moveTable()}>移动知识表</Button></>}>
         {actionError ? <ErrorState title={describeError(actionError, '移动表').title} requestId={describeError(actionError).requestId} errorCode={describeError(actionError).code} message={describeError(actionError, '移动表').message} /> : null}
