@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {isActiveWork, isExpiredWorkClaim} from './work-state';
+import type {DesktopApp} from './shell/types';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
 type WorkItem={id:string;status:string;claim_active:boolean};
 type Job={job_id:string;status:string};
@@ -20,6 +21,44 @@ export function ClockWidget({timezone}:{timezone:string}){
   catch{time=now.toLocaleTimeString('zh-CN');date=now.toLocaleDateString('zh-CN')}
   return <section className="widget widget-clock" aria-label="时钟"><b>{time}</b><span>{date}</span></section>;
 }
+
+export function CalendarWidget({timezone}:{timezone:string}){
+  const [now,setNow]=useState(()=>new Date());
+  useEffect(()=>{const timer=setInterval(()=>setNow(new Date()),60_000);return()=>clearInterval(timer)},[]);
+  let year=now.getFullYear(),month=now.getMonth()+1,day=now.getDate();
+  try{
+    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone(timezone),year:'numeric',month:'numeric',day:'numeric'}).formatToParts(now);
+    year=Number(parts.find(part=>part.type==='year')?.value);
+    month=Number(parts.find(part=>part.type==='month')?.value);
+    day=Number(parts.find(part=>part.type==='day')?.value);
+  }catch{/* fall back to the browser's local calendar */}
+  const weekday=new Date(Date.UTC(year,month-1,1)).getUTCDay();
+  const days=new Date(Date.UTC(year,month,0)).getUTCDate();
+  const monthLabel=new Intl.DateTimeFormat('zh-CN',{timeZone:zone(timezone),year:'numeric',month:'long'}).format(now);
+  const headings=['日','一','二','三','四','五','六'];
+  return <section className="widget widget-calendar" aria-label={`${monthLabel}日历`}>
+    <header><strong>{monthLabel}</strong></header>
+    <div className="calendar-grid" role="grid" aria-label={`${monthLabel}日期`}>
+      {headings.map((label,index)=><span className="calendar-weekday" role="columnheader" key={`${label}-${index}`}>{label}</span>)}
+      {Array.from({length:42},(_,index)=>{
+        const value=index-weekday+1;
+        const inMonth=value>=1&&value<=days;
+        return <span role="gridcell" aria-current={inMonth&&value===day?'date':undefined} className={inMonth&&value===day?'calendar-today':inMonth?'':'calendar-outside'} key={index}>{inMonth?value:''}</span>;
+      })}
+    </div>
+  </section>;
+}
+
+export function AppShortcutsWidget({apps,selected,onOpen}:{apps:DesktopApp[];selected:string[];onOpen:(id:string)=>void}){
+  const choices=selected.length?apps.filter(app=>selected.includes(app.id)):apps.slice(0,4);
+  return <section className="widget widget-shortcuts" aria-label="应用快捷入口">
+    <header><strong>应用快捷入口</strong></header>
+    {choices.length?<div className="shortcut-grid">{choices.slice(0,12).map(app=><button type="button" key={app.id} onClick={()=>onOpen(app.id)} aria-label={`打开${app.title}`}>
+      <span aria-hidden="true">{app.icon}</span><small>{app.title}</small>
+    </button>)}</div>:<p className="muted">没有可用的授权应用</p>}
+  </section>;
+}
+
 export function StatusWidget({apiPage,onOpen}:{apiPage:APIPage;onOpen:()=>void}){
   const [work,setWork]=useState<WorkItem[]|null>(null),[workTruncated,setWorkTruncated]=useState(false),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null),[jobs,setJobs]=useState<Job[]|null>(null);
   const latest=useRef(apiPage);

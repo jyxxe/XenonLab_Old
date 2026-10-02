@@ -26,9 +26,11 @@ export type DockPreference = 'small' | 'medium' | 'large';
 export type UserPreferences = {
   theme: 'system' | 'light' | 'dark';
   accent: 'blue' | 'purple' | 'green' | 'orange';
-  wallpaper: 'aurora' | 'ocean' | 'sunset' | 'silver';
+  wallpaper: 'aurora' | 'ocean' | 'sunset' | 'silver' | 'custom';
   timezone: string;
-  widgets: Array<'clock' | 'status'>;
+  widgets: Array<'clock' | 'status' | 'calendar' | 'app-shortcuts'>;
+  shortcut_apps: string[];
+  custom_wallpaper_available?: boolean;
   dock_size: DockPreference;
   dock_autohide: boolean;
   restore_windows: boolean;

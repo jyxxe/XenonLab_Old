@@ -785,6 +785,64 @@
         }
       }
     },
+    "/api/v1/users/me/wallpaper": {
+      "get": {
+        "summary": "Get Wallpaper",
+        "operationId": "get_wallpaper_api_v1_users_me_wallpaper_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Upload Wallpaper",
+        "operationId": "upload_wallpaper_api_v1_users_me_wallpaper_put",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Wallpaper",
+        "operationId": "delete_wallpaper_api_v1_users_me_wallpaper_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/me/app-audit": {
       "get": {
         "summary": "Registry Audit",
@@ -1267,6 +1325,21 @@
               }
             ],
             "title": "Widgets"
+          },
+          "shortcut_apps": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 12
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortcut Apps"
           },
           "dock_size": {
             "anyOf": [

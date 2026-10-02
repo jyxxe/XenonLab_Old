@@ -1,6 +1,6 @@
 import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
-import type {DesktopApp, UserPreferences} from './shell/types';
+import type {APIRaw, DesktopApp, UserPreferences} from './shell/types';
 
 export type Preferences = UserPreferences;
 export const defaultPreferences: UserPreferences = {
@@ -9,6 +9,7 @@ export const defaultPreferences: UserPreferences = {
   wallpaper: 'aurora',
   timezone: 'system',
   widgets: ['clock', 'status'],
+  shortcut_apps: [],
   dock_size: 'medium',
   dock_autohide: false,
   restore_windows: true,
@@ -16,9 +17,11 @@ export const defaultPreferences: UserPreferences = {
   reduced_motion: false,
 };
 
-const widgetOptions: Array<['clock' | 'status', string]> = [
+const widgetOptions: Array<[UserPreferences['widgets'][number], string]> = [
   ['clock', '时钟与日期'],
   ['status', '系统状态'],
+  ['calendar', '日历'],
+  ['app-shortcuts', '应用快捷入口'],
 ];
 
 export function DesktopPreferences({
@@ -26,18 +29,22 @@ export function DesktopPreferences({
   apply,
   saveLayout,
   apps, dockIds, togglePin, movePinned,
+  apiRaw,
 }: {
   apps: DesktopApp[];
   dockIds: string[];
   togglePin: (id: string) => void;
   movePinned: (id: string, direction: number) => void;
   api: (path: string, init?: RequestInit) => Promise<any>;
+  apiRaw: APIRaw;
   preferences: UserPreferences;
   apply: (preferences: Partial<UserPreferences>) => Promise<void>;
   saveLayout: () => Promise<void>;
 }) {
   const changeVersion = useRef(0);
   const [message, setMessage] = useState('');
+  const [wallpaperBusy, setWallpaperBusy] = useState(false);
+  const [customWallpaperAvailable, setCustomWallpaperAvailable] = useState(Boolean(preferences.custom_wallpaper_available));
   const [timezone, setTimezone] = useState(preferences.timezone);
 
   // Appearance changes apply immediately and the shell persists them; macOS-style
@@ -47,6 +54,46 @@ export function DesktopPreferences({
     setMessage('保存中…');
     try {await apply(patch);if(version===changeVersion.current)setMessage('已应用并保存')}
     catch (error) {if(version===changeVersion.current)setMessage('保存失败：'+String(error))}
+  };
+
+  const uploadWallpaper = async (file?: File) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setMessage('壁纸文件超过 5 MiB，请选择较小的 JPEG、PNG 或 WebP 图片。');
+      return;
+    }
+    setWallpaperBusy(true);
+    setMessage('正在上传并验证壁纸…');
+    try {
+      await apiRaw('/users/me/wallpaper', {
+        method: 'PUT',
+        headers: {'Content-Type': file.type || 'application/octet-stream'},
+        body: file,
+      });
+      setCustomWallpaperAvailable(true);
+      await apply({wallpaper: 'custom'});
+      setMessage('自定义壁纸已保存到此账户');
+    } catch (error) {
+      setMessage(`壁纸上传失败：${String(error)}`);
+    } finally {
+      setWallpaperBusy(false);
+    }
+  };
+
+  const removeWallpaper = async () => {
+    setWallpaperBusy(true);
+    setMessage('正在移除自定义壁纸…');
+    try {
+      const response = await apiRaw('/users/me/wallpaper', {method: 'DELETE'});
+      const result = await response.json();
+      setCustomWallpaperAvailable(false);
+      await apply({wallpaper: result.data.wallpaper});
+      setMessage('自定义壁纸已移除');
+    } catch (error) {
+      setMessage(`移除壁纸失败：${String(error)}`);
+    } finally {
+      setWallpaperBusy(false);
+    }
   };
 
   return (
@@ -79,8 +126,24 @@ export function DesktopPreferences({
             <option value="ocean">深海</option>
             <option value="sunset">晚霞</option>
             <option value="silver">银色</option>
+            {customWallpaperAvailable && <option value="custom">我的图片</option>}
           </Select>
         </label>
+        <label>
+          上传壁纸（JPEG、PNG 或 WebP，最多 5 MiB）
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={wallpaperBusy}
+            aria-label="选择自定义壁纸"
+            onChange={event => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              void uploadWallpaper(file);
+            }}
+          />
+        </label>
+        {customWallpaperAvailable && <Button size="sm" disabled={wallpaperBusy} onClick={() => void removeWallpaper()}>移除我的壁纸</Button>}
       </Panel>
 
       <Panel title="桌面">
@@ -108,7 +171,7 @@ export function DesktopPreferences({
             <label key={id}>
               <input
                 type="checkbox"
-                checked={preferences.widgets.includes(id)}
+                  checked={(preferences.widgets || []).includes(id)}
                 onChange={event =>
                   update({
                     widgets: event.target.checked ? [...preferences.widgets, id] : preferences.widgets.filter(widget => widget !== id),
@@ -119,6 +182,25 @@ export function DesktopPreferences({
             </label>
           ))}
         </fieldset>
+        {(preferences.widgets || []).includes('app-shortcuts') && <fieldset className="widget-shortcut-options">
+          <legend>快捷入口应用</legend>
+          <p className="muted">只显示当前账户已授权且可打开的应用；未选择时显示前四个可用应用。</p>
+          {apps.map(app => <label key={app.id}>
+            <input
+              type="checkbox"
+              checked={(preferences.shortcut_apps || []).includes(app.id)}
+              onChange={event => {
+                const current = preferences.shortcut_apps || [];
+                const next = event.target.checked
+                  ? [...current, app.id].slice(-12)
+                  : current.filter(id => id !== app.id);
+                void update({shortcut_apps: next});
+              }}
+            />
+            {app.icon} {app.title}
+          </label>)}
+          {!apps.length && <p className="muted">当前没有可用的授权应用。</p>}
+        </fieldset>}
         <div className="preference-switch">
           <span>
             恢复上次窗口

@@ -30,6 +30,7 @@ const preferences = stored('preferences', {
   wallpaper: 'aurora',
   timezone: 'UTC',
   widgets: ['clock', 'status'],
+  shortcut_apps: [],
   dock_size: 'medium',
   dock_autohide: false,
   restore_windows: true,
@@ -101,6 +102,17 @@ const apiPage = async (path: string, init?: RequestInit) => {
   return {data, meta: {}};
 };
 const apiRaw = async (path: string, init?: RequestInit) => {
+  if (path === '/users/me/wallpaper' && (!init?.method || init.method === 'GET')) {
+    return new Response(new Blob(['synthetic-but-server-backed-fixture']), {status: 200, headers: {'Content-Type': 'image/webp'}});
+  }
+  if (path === '/users/me/wallpaper' && init?.method === 'PUT') {
+    calls.push({method: 'PUT', path, body: {contentType: new Headers(init.headers).get('Content-Type')}});
+    return new Response(JSON.stringify({data: {wallpaper: 'custom'}}), {status: 200, headers: {'Content-Type': 'application/json'}});
+  }
+  if (path === '/users/me/wallpaper' && init?.method === 'DELETE') {
+    calls.push({method: 'DELETE', path, body: null});
+    return new Response(JSON.stringify({data: {deleted: true, wallpaper: 'aurora'}}), {status: 200, headers: {'Content-Type': 'application/json'}});
+  }
   const data = await api(path, init);
   return new Response(JSON.stringify({data}), {status: 200, headers: {'Content-Type': 'application/json'}});
 };

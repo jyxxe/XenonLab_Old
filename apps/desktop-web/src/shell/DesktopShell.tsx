@@ -1,6 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ErrorState, Spinner, useToast} from '../design-system/primitives';
-import {ClockWidget, MenuClock, StatusWidget} from '../Widgets';
+import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, StatusWidget} from '../Widgets';
 import {mergeApps} from './apps';
 import {CommandPalette, type Command, type CommandProvider} from './CommandPalette';
 import {Dock, type DockSize} from './Dock';
@@ -31,6 +31,8 @@ const defaultPreferences: UserPreferences = {
   wallpaper: 'aurora',
   timezone: 'system',
   widgets: ['clock', 'status'],
+  shortcut_apps: [],
+  custom_wallpaper_available: false,
   dock_size: 'medium',
   dock_autohide: false,
   restore_windows: true,
@@ -65,6 +67,7 @@ export function DesktopShell({
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [dockIds, setDockIds] = useState<string[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
+  const [wallpaperError, setWallpaperError] = useState('');
   const [subject, setSubject] = useState('');
   const [userLabel, setUserLabel] = useState('');
   const [ready, setReady] = useState(false);
@@ -135,6 +138,28 @@ export function DesktopShell({
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [preferences]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.removeProperty('--custom-wallpaper-image');
+    setWallpaperError('');
+    if (preferences.wallpaper !== 'custom') return;
+    let active = true;
+    let objectUrl = '';
+    void apiRaw('/users/me/wallpaper').then(async response => {
+      const blob = await response.blob();
+      if (!active) return;
+      objectUrl = URL.createObjectURL(blob);
+      root.style.setProperty('--custom-wallpaper-image', `url(${JSON.stringify(objectUrl)})`);
+    }).catch(() => {
+      if (active) setWallpaperError('无法读取自定义壁纸，请在系统设置中重新上传。');
+    });
+    return () => {
+      active = false;
+      root.style.removeProperty('--custom-wallpaper-image');
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [apiRaw, preferences.wallpaper]);
 
   const saveLayout = useCallback(
     async (overrides?: {windows?: WindowState[]; dock?: string[]}) => {
@@ -597,8 +622,12 @@ export function DesktopShell({
         <div className="widgets">
           {(preferences.widgets || []).includes('clock') && <ClockWidget timezone={preferences.timezone} />}
           {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
+          {(preferences.widgets || []).includes('calendar') && <CalendarWidget timezone={preferences.timezone} />}
+          {(preferences.widgets || []).includes('app-shortcuts') && <AppShortcutsWidget apps={apps} selected={preferences.shortcut_apps || []} onOpen={openApp} />}
         </div>
       )}
+
+      {wallpaperError && <div className="wallpaper-load-error" role="alert">{wallpaperError}</div>}
 
       <Dock
         apps={apps}

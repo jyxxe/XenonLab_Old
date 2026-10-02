@@ -245,3 +245,9 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #71 Dashboard 知识表加载状态（2026-10-01，已部署）
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
+
+### Issue #116 桌面自定义能力（本地，未发布）
+
+本地分支新增单账户自定义壁纸：`desktop:read` scope 下由 API 使用认证主体隔离，服务端限制 5 MiB/1600 万像素/单帧，解码验证 JPEG、PNG、WebP 后重新编码为 WebP，客户端路径和 MIME 不作为信任依据；API 提供读取、上传和重置。新增按已授权 app registry 渲染的快捷入口与遵循账户时区的日历。验证覆盖账号隔离、重启持久化、无效/超限图片、偏好选择/删除、键盘按钮与 390 px 上传控件。
+
+本地全量后端 386 项、前端 45 项、浏览器合成验收、TypeScript/Vite build、目标 Ruff 与 OpenAPI 导出通过。未部署或做真实登录生产验收。生产备份当前记录仅验证 `desktop.sqlite` 快照；壁纸实际文件保存在 `DATA_DIR/wallpapers/`，现有备份/恢复流程尚未纳入该目录，因此上线前必须扩展并验证与数据库配套的文件备份/恢复，否则数据库外文件丢失会令壁纸不可用。
