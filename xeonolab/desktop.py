@@ -134,11 +134,18 @@ class Preferences(BaseModel):
     theme: Literal["system", "light", "dark"] = "system"
     accent: Literal["blue", "purple", "green", "orange"] = "blue"
     wallpaper: Literal["aurora", "ocean", "sunset", "silver", "custom"] = "aurora"
+    wallpaper_mode: Literal["solid", "gradient", "image"] = "solid"
+    wallpaper_color: str = Field(default="#101828", pattern=r"^#[0-9a-fA-F]{6}$")
+    wallpaper_gradient_from: str = Field(default="#0b1220", pattern=r"^#[0-9a-fA-F]{6}$")
+    wallpaper_gradient_to: str = Field(default="#1d4ed8", pattern=r"^#[0-9a-fA-F]{6}$")
+    wallpaper_gradient_angle: int = Field(default=160, ge=0, le=360)
+    wallpaper_dim: int = Field(default=0, ge=0, le=90)
     timezone: str = Field(default="system", min_length=1, max_length=80)
-    widgets: list[Literal["clock", "status", "calendar", "app-shortcuts"]] = Field(
+    widgets: list[Literal["clock", "status", "calendar", "app-shortcuts", "work", "notes", "search"]] = Field(
         default_factory=lambda: ["clock", "status"], max_length=8
     )
     shortcut_apps: list[str] = Field(default_factory=list, max_length=12)
+    notes: str = Field(default="", max_length=4000)
     dock_size: Literal["small", "medium", "large"] = "medium"
     dock_autohide: bool = False
     restore_windows: bool = True
@@ -161,14 +168,32 @@ class PreferencePatch(BaseModel):
     theme: str | None = None
     accent: str | None = None
     wallpaper: str | None = None
+    wallpaper_mode: str | None = None
+    wallpaper_color: str | None = None
+    wallpaper_gradient_from: str | None = None
+    wallpaper_gradient_to: str | None = None
+    wallpaper_gradient_angle: int | None = None
+    wallpaper_dim: int | None = None
     timezone: str | None = None
     widgets: list[str] | None = None
     shortcut_apps: list[str] | None = Field(default=None, max_length=12)
+    notes: str | None = Field(default=None, max_length=4000)
     dock_size: str | None = None
     dock_autohide: bool | None = None
     restore_windows: bool | None = None
     animations: bool | None = None
     reduced_motion: bool | None = None
+
+
+def preferences_from_definition(definition: str | None) -> Preferences:
+    """Load old account rows without changing the meaning of uploaded custom wallpapers."""
+    if definition is None:
+        return Preferences()
+    value = json.loads(definition)
+    if value.get("wallpaper") == "custom" and "wallpaper_mode" not in value:
+        # The previous schema used `custom` exclusively for the account image.
+        value["wallpaper_mode"] = "image"
+    return Preferences.model_validate(value)
 
 
 class Layout(BaseModel):
@@ -358,7 +383,7 @@ def create_app(settings=None):
             has_wallpaper = db.execute(
                 "SELECT 1 FROM desktop_wallpapers WHERE owner=?", (actor.sub,)
             ).fetchone() is not None
-        result = Preferences.model_validate_json(row[0]).model_dump() if row else Preferences().model_dump()
+        result = preferences_from_definition(row[0] if row else None).model_dump()
         result["custom_wallpaper_available"] = has_wallpaper
         return response(request, result)
 
@@ -366,12 +391,12 @@ def create_app(settings=None):
     def patch_preferences(body: PreferencePatch, request: Request, actor=Depends(scope("desktop:read"))):
         with transaction(path) as db:
             row = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
-            old = json.loads(row[0]) if row else Preferences().model_dump()
+            old = preferences_from_definition(row[0] if row else None).model_dump()
             try:
                 updated = Preferences.model_validate({**old, **body.model_dump(exclude_unset=True)})
             except ValueError:
                 raise APIError(422, "INVALID_PREFERENCES", "invalid preference or timezone") from None
-            if updated.wallpaper == "custom" and not db.execute(
+            if updated.wallpaper == "custom" and updated.wallpaper_mode == "image" and not db.execute(
                 "SELECT 1 FROM desktop_wallpapers WHERE owner=?", (actor.sub,)
             ).fetchone():
                 raise APIError(409, "WALLPAPER_NOT_FOUND", "upload a custom wallpaper before selecting it")
@@ -453,7 +478,8 @@ def create_app(settings=None):
                 db.execute("DELETE FROM desktop_wallpapers WHERE owner=?", (actor.sub,))
                 stored = db.execute("SELECT definition FROM preferences WHERE owner=?", (actor.sub,)).fetchone()
                 old = json.loads(stored[0]) if stored else Preferences().model_dump()
-                old["wallpaper"] = "aurora" if old.get("wallpaper") == "custom" else old.get("wallpaper", "aurora")
+                if old.get("wallpaper") == "custom" and old.get("wallpaper_mode", "image") == "image":
+                    old["wallpaper"] = "aurora"
                 db.execute("INSERT OR REPLACE INTO preferences VALUES(?,?)", (actor.sub, json.dumps(old)))
             if row:
                 wallpaper_file(row["asset_id"]).unlink(missing_ok=True)

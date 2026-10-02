@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {ErrorState, Spinner, useToast} from '../design-system/primitives';
-import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, StatusWidget} from '../Widgets';
+import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
+import {customWallpaperStyle} from '../wallpaper.js';
 import {mergeApps} from './apps';
 import {CommandPalette, type Command, type CommandProvider} from './CommandPalette';
 import {Dock, type DockSize} from './Dock';
@@ -29,9 +30,16 @@ const defaultPreferences: UserPreferences = {
   theme: 'system',
   accent: 'blue',
   wallpaper: 'aurora',
+  wallpaper_mode: 'solid',
+  wallpaper_color: '#101828',
+  wallpaper_gradient_from: '#0b1220',
+  wallpaper_gradient_to: '#1d4ed8',
+  wallpaper_gradient_angle: 160,
+  wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
   shortcut_apps: [],
+  notes: '',
   custom_wallpaper_available: false,
   dock_size: 'medium',
   dock_autohide: false,
@@ -68,8 +76,10 @@ export function DesktopShell({
   const [dockIds, setDockIds] = useState<string[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
   const [wallpaperError, setWallpaperError] = useState('');
+  const [wallpaperImageUrl, setWallpaperImageUrl] = useState('');
   const [subject, setSubject] = useState('');
   const [userLabel, setUserLabel] = useState('');
+  const [accountScopes, setAccountScopes] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState('');
   const loadedRef = useRef(false);
@@ -92,6 +102,9 @@ export function DesktopShell({
     const win = windows.find(item => item.id === activeId);
     return win ? apps.find(app => app.id === win.app_id) ?? null : null;
   }, [activeId, windows, apps]);
+  const customWallpaper = useMemo(() => customWallpaperStyle(preferences, wallpaperImageUrl), [preferences, wallpaperImageUrl]);
+  const knowledgeSearchAvailable = useMemo(() => apps.some(app => app.id === 'knowledge') && accountScopes.includes('xelibrary:query'), [apps, accountScopes]);
+  const workAvailable = useMemo(() => apps.some(app => app.id === 'issues'), [apps]);
 
   const connect = useCallback(async () => {
     setLoadError('');
@@ -104,6 +117,7 @@ export function DesktopShell({
       const storedDock = Array.isArray(layout.dock) ? layout.dock.filter((id: string) => known(id)) : [];
       const nextDock = layout.dock_initialized || storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
       setApps(available);
+      setAccountScopes(Array.isArray(me.scopes) ? me.scopes : []);
       setDockIds(nextDock);
       setPreferences(prefs);
       setSubject(me.subject || '');
@@ -140,26 +154,43 @@ export function DesktopShell({
   }, [preferences]);
 
   useEffect(() => {
-    const root = document.documentElement;
-    root.style.removeProperty('--custom-wallpaper-image');
+    setWallpaperImageUrl('');
     setWallpaperError('');
-    if (preferences.wallpaper !== 'custom') return;
+    if (preferences.wallpaper !== 'custom' || preferences.wallpaper_mode !== 'image' || !preferences.custom_wallpaper_available) return;
     let active = true;
     let objectUrl = '';
     void apiRaw('/users/me/wallpaper').then(async response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const blob = await response.blob();
       if (!active) return;
       objectUrl = URL.createObjectURL(blob);
-      root.style.setProperty('--custom-wallpaper-image', `url(${JSON.stringify(objectUrl)})`);
+      setWallpaperImageUrl(objectUrl);
     }).catch(() => {
       if (active) setWallpaperError('无法读取自定义壁纸，请在系统设置中重新上传。');
     });
     return () => {
       active = false;
-      root.style.removeProperty('--custom-wallpaper-image');
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [apiRaw, preferences.wallpaper]);
+  }, [apiRaw, preferences.wallpaper, preferences.wallpaper_mode, preferences.custom_wallpaper_available]);
+
+  const saveNotes = useCallback(async (notes: string, keepalive = false) => {
+    const pending = preferenceQueue.current.catch(() => undefined).then(async () => {
+      if (!keepalive) {
+        await api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify({notes})});
+        return;
+      }
+      const response = await apiRaw('/users/me/preferences', {
+        method: 'PATCH', body: JSON.stringify({notes}), keepalive: true,
+      });
+      let payload: any = null;
+      try { payload = await response.json(); } catch { /* handled as an invalid API response below */ }
+      if (!response.ok) throw new Error(payload?.error?.message || `保存失败（HTTP ${response.status}）`);
+    });
+    preferenceQueue.current = pending;
+    await pending;
+    setPreferences(current => ({...current, notes}));
+  }, [api, apiRaw]);
 
   const saveLayout = useCallback(
     async (overrides?: {windows?: WindowState[]; dock?: string[]}) => {
@@ -537,7 +568,13 @@ export function DesktopShell({
   }
 
   return (
-    <div className="desktop ds-compact">
+    <div className="desktop ds-compact" data-has-widgets={(preferences.widgets || []).length ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
+      backgroundColor: customWallpaper.backgroundColor,
+      backgroundImage: customWallpaper.backgroundImage,
+      backgroundSize: customWallpaper.backgroundSize,
+      backgroundPosition: customWallpaper.backgroundPosition,
+      backgroundRepeat: customWallpaper.backgroundRepeat,
+    } : undefined}>
       <MenuBar
         userLabel={userLabel}
         activeApp={activeApp}
@@ -624,6 +661,9 @@ export function DesktopShell({
           {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
           {(preferences.widgets || []).includes('calendar') && <CalendarWidget timezone={preferences.timezone} />}
           {(preferences.widgets || []).includes('app-shortcuts') && <AppShortcutsWidget apps={apps} selected={preferences.shortcut_apps || []} onOpen={openApp} />}
+          {(preferences.widgets || []).includes('work') && <WorkWidget apiPage={apiPage} allowed={workAvailable} onOpen={() => openApp('issues')} />}
+          {(preferences.widgets || []).includes('search') && <SearchWidget available={knowledgeSearchAvailable} onSearch={query => openApp('knowledge', {action: 'search', query})} />}
+          {(preferences.widgets || []).includes('notes') && <NotesWidget notes={preferences.notes || ''} onSave={saveNotes} />}
         </div>
       )}
 

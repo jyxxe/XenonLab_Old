@@ -1,15 +1,23 @@
 import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
-import type {APIRaw, DesktopApp, UserPreferences} from './shell/types';
+import type {APIRaw, DesktopApp, UserPreferences, WallpaperMode} from './shell/types';
+import {customWallpaperStyle} from './wallpaper.js';
 
 export type Preferences = UserPreferences;
 export const defaultPreferences: UserPreferences = {
   theme: 'system',
   accent: 'blue',
   wallpaper: 'aurora',
+  wallpaper_mode: 'solid',
+  wallpaper_color: '#101828',
+  wallpaper_gradient_from: '#0b1220',
+  wallpaper_gradient_to: '#1d4ed8',
+  wallpaper_gradient_angle: 160,
+  wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
   shortcut_apps: [],
+  notes: '',
   dock_size: 'medium',
   dock_autohide: false,
   restore_windows: true,
@@ -22,6 +30,9 @@ const widgetOptions: Array<[UserPreferences['widgets'][number], string]> = [
   ['status', '系统状态'],
   ['calendar', '日历'],
   ['app-shortcuts', '应用快捷入口'],
+  ['work', '任务队列'],
+  ['notes', '快速便签'],
+  ['search', '知识库搜索'],
 ];
 
 export function DesktopPreferences({
@@ -46,6 +57,8 @@ export function DesktopPreferences({
   const [wallpaperBusy, setWallpaperBusy] = useState(false);
   const [customWallpaperAvailable, setCustomWallpaperAvailable] = useState(Boolean(preferences.custom_wallpaper_available));
   const [timezone, setTimezone] = useState(preferences.timezone);
+  React.useEffect(() => setCustomWallpaperAvailable(Boolean(preferences.custom_wallpaper_available)), [preferences.custom_wallpaper_available]);
+  const wallpaperPreview = customWallpaperStyle(preferences);
 
   // Appearance changes apply immediately and the shell persists them; macOS-style
   // settings have no separate confirmation step for display options.
@@ -71,7 +84,7 @@ export function DesktopPreferences({
         body: file,
       });
       setCustomWallpaperAvailable(true);
-      await apply({wallpaper: 'custom'});
+      await apply({wallpaper: 'custom', wallpaper_mode: 'image'});
       setMessage('自定义壁纸已保存到此账户');
     } catch (error) {
       setMessage(`壁纸上传失败：${String(error)}`);
@@ -126,24 +139,33 @@ export function DesktopPreferences({
             <option value="ocean">深海</option>
             <option value="sunset">晚霞</option>
             <option value="silver">银色</option>
-            {customWallpaperAvailable && <option value="custom">我的图片</option>}
+            <option value="custom">自定义壁纸</option>
           </Select>
         </label>
+        {preferences.wallpaper === 'custom' && <div className="wallpaper-custom">
+          <label>类型
+            <Select value={preferences.wallpaper_mode || 'solid'} onChange={event => update({wallpaper_mode: event.target.value as WallpaperMode})}>
+              <option value="solid">纯色</option><option value="gradient">渐变</option>
+              {customWallpaperAvailable && <option value="image">账户图片</option>}
+            </Select>
+          </label>
+          {(preferences.wallpaper_mode || 'solid') === 'solid' && <label>纯色
+            <input className="color-input" type="color" aria-label="壁纸纯色" value={preferences.wallpaper_color || '#101828'} onChange={event => update({wallpaper_color: event.target.value})} />
+          </label>}
+          {preferences.wallpaper_mode === 'gradient' && <>
+            <label>渐变起始色<input className="color-input" type="color" aria-label="渐变起始色" value={preferences.wallpaper_gradient_from || '#0b1220'} onChange={event => update({wallpaper_gradient_from: event.target.value})} /></label>
+            <label>渐变结束色<input className="color-input" type="color" aria-label="渐变结束色" value={preferences.wallpaper_gradient_to || '#1d4ed8'} onChange={event => update({wallpaper_gradient_to: event.target.value})} /></label>
+            <label>渐变角度 {preferences.wallpaper_gradient_angle ?? 160}°<input type="range" min="0" max="360" aria-label="渐变角度" value={preferences.wallpaper_gradient_angle ?? 160} onChange={event => update({wallpaper_gradient_angle: Number(event.target.value)})} /></label>
+          </>}
+          <label>压暗 {preferences.wallpaper_dim ?? 0}%<input type="range" min="0" max="90" aria-label="壁纸压暗程度" value={preferences.wallpaper_dim ?? 0} onChange={event => update({wallpaper_dim: Number(event.target.value)})} /></label>
+          <div className="wallpaper-preview" aria-label="壁纸预览"><div className="wallpaper-preview-surface" style={wallpaperPreview ? {backgroundColor: wallpaperPreview.backgroundColor, backgroundImage: wallpaperPreview.backgroundImage, backgroundSize: wallpaperPreview.backgroundSize, backgroundPosition: wallpaperPreview.backgroundPosition} : undefined} /></div>
+          {preferences.wallpaper_mode === 'image' && <p className="muted">账户图片从已验证的图片接口加载；请在桌面背景确认实际效果。</p>}
+        </div>}
         <label>
-          上传壁纸（JPEG、PNG 或 WebP，最多 5 MiB）
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            disabled={wallpaperBusy}
-            aria-label="选择自定义壁纸"
-            onChange={event => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = '';
-              void uploadWallpaper(file);
-            }}
-          />
+          上传账户壁纸（JPEG、PNG 或 WebP，最多 5 MiB）
+          <input type="file" accept="image/jpeg,image/png,image/webp" disabled={wallpaperBusy} aria-label="选择自定义壁纸" onChange={event => {const file=event.currentTarget.files?.[0];event.currentTarget.value='';void uploadWallpaper(file);}} />
         </label>
-        {customWallpaperAvailable && <Button size="sm" disabled={wallpaperBusy} onClick={() => void removeWallpaper()}>移除我的壁纸</Button>}
+        {customWallpaperAvailable && <Button size="sm" disabled={wallpaperBusy} onClick={() => void removeWallpaper()}>移除账户图片</Button>}
       </Panel>
 
       <Panel title="桌面">
@@ -174,7 +196,7 @@ export function DesktopPreferences({
                   checked={(preferences.widgets || []).includes(id)}
                 onChange={event =>
                   update({
-                    widgets: event.target.checked ? [...preferences.widgets, id] : preferences.widgets.filter(widget => widget !== id),
+                    widgets: event.target.checked ? [...new Set([...preferences.widgets, id])] : preferences.widgets.filter(widget => widget !== id),
                   })
                 }
               />
@@ -201,6 +223,7 @@ export function DesktopPreferences({
           </label>)}
           {!apps.length && <p className="muted">当前没有可用的授权应用。</p>}
         </fieldset>}
+        {preferences.widgets.includes('notes') && <p className="muted">便签最多 4,000 字；编辑后自动同步，失去焦点或离开页面时会尝试提交。未显示“已保存”的修改尚未确认写入服务器。</p>}
         <div className="preference-switch">
           <span>
             恢复上次窗口
@@ -273,7 +296,7 @@ export function DesktopPreferences({
         </Button>
       </Panel>
 
-      <p role="status">{message}</p>
+      <p role="status" aria-live="polite">{message}</p>
     </section>
   );
 }

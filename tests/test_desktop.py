@@ -1,4 +1,6 @@
 import io
+import json
+import sqlite3
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -93,10 +95,11 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     changed = client.patch(
         url,
         headers=auth(),
-        json={"widgets": ["calendar", "app-shortcuts"], "shortcut_apps": ["knowledge", "settings"]},
+        json={"widgets": ["calendar", "app-shortcuts", "work", "notes", "search"], "shortcut_apps": ["knowledge", "settings"], "notes": "保存后跨设备同步"},
     ).json()["data"]
-    assert changed["widgets"] == ["calendar", "app-shortcuts"]
+    assert changed["widgets"] == ["calendar", "app-shortcuts", "work", "notes", "search"]
     assert changed["shortcut_apps"] == ["knowledge", "settings"]
+    assert changed["notes"] == "保存后跨设备同步"
     assert changed["dock_size"] == "medium" and changed["dock_autohide"] is False
     assert changed["restore_windows"] is True and changed["reduced_motion"] is False
     changed = client.patch(
@@ -104,6 +107,7 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     ).json()["data"]
     assert changed["dock_size"] == "large" and changed["dock_autohide"] is True and changed["reduced_motion"] is True
     assert client.get(url, headers=auth("bob")).json()["data"]["theme"] == "system"
+    assert client.get(url, headers=auth("bob")).json()["data"]["notes"] == ""
     for invalid in (
         {"timezone": "Unknown/Zone"},
         {"theme": None},
@@ -113,6 +117,11 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
         {"dock_size": "huge"},
         {"reduced_motion": "not-a-bool"},
         {"shortcut_apps": ["x"] * 13},
+        {"wallpaper_color": "not-a-color"},
+        {"wallpaper_gradient_angle": 361},
+        {"wallpaper_dim": 91},
+        {"notes": "x" * 4001},
+        {"wallpaper_image": "data:image/webp;base64,AAAA"},
     ):
         assert client.patch(url, headers=auth(), json=invalid).status_code == 422
     restarted = TestClient(create_app("desktop-web", settings))
@@ -136,7 +145,9 @@ def test_custom_wallpaper_is_validated_persistent_and_account_scoped(settings):
     client = TestClient(create_app("desktop-web", settings))
     preferences = "/api/v1/users/me/preferences"
     wallpaper = "/api/v1/users/me/wallpaper"
-    assert client.patch(preferences, headers=auth(), json={"wallpaper": "custom"}).status_code == 409
+    solid = client.patch(preferences, headers=auth(), json={"wallpaper": "custom", "wallpaper_mode": "solid"})
+    assert solid.status_code == 200
+    assert client.patch(preferences, headers=auth(), json={"wallpaper": "custom", "wallpaper_mode": "image"}).status_code == 409
 
     output = io.BytesIO()
     Image.new("RGB", (32, 18), (30, 90, 170)).save(output, format="PNG")
@@ -148,7 +159,7 @@ def test_custom_wallpaper_is_validated_persistent_and_account_scoped(settings):
     assert uploaded.status_code == 200, uploaded.text
     assert uploaded.json()["data"]["wallpaper"] == "custom"
     assert uploaded.json()["data"]["media_type"] == "image/webp"
-    assert client.patch(preferences, headers=auth(), json={"wallpaper": "custom"}).status_code == 200
+    assert client.patch(preferences, headers=auth(), json={"wallpaper": "custom", "wallpaper_mode": "image"}).status_code == 200
     image = client.get(wallpaper, headers=auth())
     assert image.status_code == 200 and image.headers["content-type"] == "image/webp"
     with Image.open(io.BytesIO(image.content)) as decoded:
@@ -162,6 +173,26 @@ def test_custom_wallpaper_is_validated_persistent_and_account_scoped(settings):
     assert removed.status_code == 200 and removed.json()["data"]["wallpaper"] == "aurora"
     assert restarted.get(wallpaper, headers=auth()).status_code == 404
     assert restarted.get(preferences, headers=auth()).json()["data"]["wallpaper"] == "aurora"
+
+
+def test_legacy_custom_wallpaper_preference_defaults_to_account_image_mode(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    wallpaper = "/api/v1/users/me/wallpaper"
+    output = io.BytesIO()
+    Image.new("RGB", (12, 9), (90, 30, 120)).save(output, format="PNG")
+    assert client.put(wallpaper, headers=auth(), content=output.getvalue()).status_code == 200
+    assert client.patch("/api/v1/users/me/preferences", headers=auth(), json={"wallpaper": "custom", "wallpaper_mode": "image"}).status_code == 200
+
+    database = settings.data_dir / "desktop.sqlite"
+    with sqlite3.connect(database) as db:
+        definition = json.loads(db.execute("SELECT definition FROM preferences WHERE owner='alice'").fetchone()[0])
+        definition.pop("wallpaper_mode")
+        db.execute("UPDATE preferences SET definition=? WHERE owner='alice'", (json.dumps(definition),))
+    loaded = client.get("/api/v1/users/me/preferences", headers=auth()).json()["data"]
+    assert loaded["wallpaper"] == "custom" and loaded["wallpaper_mode"] == "image"
+    patched = client.patch("/api/v1/users/me/preferences", headers=auth(), json={"accent": "purple"}).json()["data"]
+    assert patched["wallpaper_mode"] == "image" and patched["wallpaper"] == "custom"
 
 
 def test_custom_wallpaper_rejects_fake_content_and_oversize(settings):
