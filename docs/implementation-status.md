@@ -250,4 +250,4 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 
 本地分支新增单账户自定义壁纸：`desktop:read` scope 下由 API 使用认证主体隔离，服务端限制 5 MiB/1600 万像素/单帧，解码验证 JPEG、PNG、WebP 后重新编码为 WebP，客户端路径和 MIME 不作为信任依据；API 提供读取、上传和重置。新增按已授权 app registry 渲染的快捷入口与遵循账户时区的日历。验证覆盖账号隔离、重启持久化、无效/超限图片、偏好选择/删除、键盘按钮与 390 px 上传控件。
 
-本地全量后端 386 项、前端 45 项、浏览器合成验收、TypeScript/Vite build、目标 Ruff 与 OpenAPI 导出通过。未部署或做真实登录生产验收。生产备份当前记录仅验证 `desktop.sqlite` 快照；壁纸实际文件保存在 `DATA_DIR/wallpapers/`，现有备份/恢复流程尚未纳入该目录，因此上线前必须扩展并验证与数据库配套的文件备份/恢复，否则数据库外文件丢失会令壁纸不可用。
+本地全量后端 392 项、前端 45 项、浏览器合成验收、TypeScript/Vite build、目标 Ruff 与 OpenAPI 导出通过。后续加固在 `xeonolab/wallpaper_backup.py` 提供有界图片处理及本地桌面+壁纸备份/校验/隔离恢复：壁纸上传、替换、删除和快照使用同一个数据根文件锁，SQLite Backup API 快照后按快照中的不可变 UUID 复制文件，并校验元数据、哈希和实际 WebP 解码；每个服务进程两个图片处理中槽位，超容量返回 429（多进程部署的上限按进程数相乘）。`tests/test_wallpaper_backup.py` 覆盖 Alice/Bob 恢复、错 owner/缺文件拒绝、替换并发快照、事件循环响应、容量拒绝和编码失败清理。未部署或做真实登录生产验收。此 helper 仅涵盖 `desktop.sqlite` 与自定义壁纸，不代表账户/会话数据或平台管理秘密的全局备份；生产仍需独立存储、保留/监控和端到端恢复演练。旧版本不兼容 `wallpaper=custom`，回滚必须恢复匹配的旧桌面快照；操作步骤见 `docs/runbooks/desktop-wallpaper-backup-restore.md`。

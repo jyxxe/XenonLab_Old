@@ -24,7 +24,7 @@
 | 15 | 定理区数据模型 | 部分实现 / 已发布，生产读写验收待做 | XeLibrary 定理字段、confidence/provenance、formal/review 状态分离、修订历史、依赖与 evidence refs 已随 release `7779e286` 部署。正向授权读写尚未在线验收；Lean 验证器仍未实现，详见 `xeonolab/theorems.py`。 |
 | 16 | API 总体规范 | 部分实现 / 未做生产验收 | `common.py` 提供版本化 API、认证、request ID、错误格式、ETag；缺少完整兼容策略。 |
 | 17 | 通用运维 API | 部分实现 / 未做生产验收 | 四个运维端点由 `common.py` 提供；ready 目前只用可选 callable。 |
-| 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；Issue #41 有 34+ 项真实 Chrome UI 检查。2026-10-01 本地合成 API 浏览器回归覆盖知识库切表/分页、历史恢复、附件重试、ACL/settings、LaunchPad 与 Work/Issue links，未发现新缺陷，记录见 `docs/acceptance/browser-qa-2026-10-01.md`。Issue #116 本地新增按认证主体隔离的持久壁纸上传/读取/重置及日历/授权快捷入口组件；生产登录验收和壁纸文件纳入备份/恢复流程尚待完成。此记录不表示已发布。 |
+| 18 | Web-Server API | 部分实现 / 未做生产验收 | 桌面 API 有 app registry、布局、偏好、ACL/account settings；Issue #41 有 34+ 项真实 Chrome UI 检查。2026-10-01 本地合成 API 浏览器回归覆盖知识库切表/分页、历史恢复、附件重试、ACL/settings、LaunchPad 与 Work/Issue links，未发现新缺陷，记录见 `docs/acceptance/browser-qa-2026-10-01.md`。Issue #116 本地新增按认证主体隔离的持久壁纸上传/读取/重置及日历/授权快捷入口组件；独立桌面+壁纸本地备份/隔离恢复 helper 已实现，生产恢复演练与登录验收尚待完成。此记录不表示已发布。 |
 | 19 | OpenWebUI → XeLibrary Tool API | 部分实现 / 未做生产验收 | Tool Gateway 有 search/query/get 且转发用户 bearer；attachment/theorem/derive/proposal 工具缺少。 |
 | 20 | XeLibrary Catalog / Path API | 部分实现 / 未做生产验收 | 没有独立 path/catalog CRUD；路径是 table 的逻辑字段。 |
 | 21 | XeLibrary Table API | 部分实现 / 未做完整生产验收 | 建表、schema、move、list/get 已实现；管理员 + If-Match 保护的空表删除已随 `03adae4` 部署，并对行、附件、向量、索引任务和活动上传 fail closed。部署后已验证路由授权拦截与服务健康，但未用管理员身份实际删除隔离表。表统计等 API 仍缺。 |
