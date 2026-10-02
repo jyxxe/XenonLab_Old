@@ -113,7 +113,7 @@ test('classifySchemaChange separates safe additions from destructive edits', () 
 
 test('parseFieldFilters reads exact-match lines and reports malformed input', () => {
   const parsed = parseFieldFilters('type = theorem\nconfidence = 0.91\n\nbroken');
-  assert.deepEqual(parsed.filters, {type: 'theorem', confidence: '0.91'});
+  assert.deepEqual(parsed.filters, {type: 'theorem', confidence: 0.91});
   assert.equal(parsed.errors.length, 1);
   assert.deepEqual(parseFieldFilters('').filters, {});
 });
@@ -189,4 +189,23 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
   assert.equal(withQueryPagination('FROM "/**"', 100, 20), 'FROM "/**" LIMIT 100 OFFSET 20');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(-1), '—');
+});
+
+
+test('field filters retain JSON types and explicitly quoted numeric strings', () => {
+  const parsed = parseFieldFilters('n = 0.91\ns = "0.91"\nb = true\nnone = null\narr = [1,"2"]\nobj = {"n":3}\nempty = ""\nwords = theorem');
+  assert.deepEqual(parsed, {filters: {n: 0.91, s: '0.91', b: true, none: null, arr: [1, '2'], obj: {n: 3}, empty: '', words: 'theorem'}, errors: []});
+  assert.deepEqual(parseFieldFilters('n = -2.5e-3').filters, {n: -0.0025});
+  assert.deepEqual(parseFieldFilters('key = first\nkey = second').filters, {key: 'second'});
+  const named = parseFieldFilters('__proto__ = {"n":1}').filters;
+  assert.equal(Object.getPrototypeOf(named), Object.prototype);
+  assert.equal(JSON.stringify(named), '{"__proto__":{"n":1}}');
+});
+
+test('malformed and unrepresentable typed filters report errors rather than changing values', () => {
+  for (const value of ['01', '+1', '.91', '1e309', '9007199254740993', 'NaN', 'Infinity', '{bad}', '[1,]', '"unclosed', '{"n":1e309}']) {
+    const parsed = parseFieldFilters(`n = ${value}`);
+    assert.deepEqual(parsed.filters, {}, value);
+    assert.equal(parsed.errors.length, 1, value);
+  }
 });

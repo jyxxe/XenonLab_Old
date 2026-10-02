@@ -241,7 +241,7 @@ export function useSearch(apiPage: APIPage) {
   const generation = useRef(0);
 
   const run = useCallback(
-    async (overrides: {query?: string; path?: string; filters?: Record<string, string>; kind?: 'semantic' | 'keyword'} = {}) => {
+    async (overrides: {query?: string; path?: string; filters?: Record<string, unknown>; kind?: 'semantic' | 'keyword'} = {}) => {
       const text = (overrides.query ?? query).trim();
       const scope = (overrides.path ?? path).trim() || '/**';
       const request = ++generation.current;
@@ -257,6 +257,7 @@ export function useSearch(apiPage: APIPage) {
         const keywordOnly = mode === 'fast' && (overrides.kind ?? kind) === 'keyword';
         const endpoint = keywordOnly ? '/search/text' : '/search/semantic';
         const parsed = parseFieldFilters(filterText);
+        if (parsed.errors.length) throw new Error(`字段过滤无效：${parsed.errors.join('；')}`);
         const body: Record<string, unknown> = {
           query: text,
           path: scope,

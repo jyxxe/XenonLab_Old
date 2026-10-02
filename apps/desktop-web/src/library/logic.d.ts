@@ -36,7 +36,7 @@ export type SchemaChange = {
   summary: string[];
 };
 export function classifySchemaChange(current?: Column[], draft?: Column[]): SchemaChange;
-export function parseFieldFilters(text: string): {filters: Record<string, string>; errors: string[]};
+export function parseFieldFilters(text: string): {filters: Record<string, unknown>; errors: string[]};
 export function searchWarnings(meta?: Record<string, unknown>): string[];
 export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;
