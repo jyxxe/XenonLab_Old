@@ -1,6 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import {Badge, Button, IconButton, Input, Spinner} from '../design-system/primitives';
-import {ancestorPaths, buildPathTree, filterTree, flattenTree} from './logic.js';
+import {ancestorPaths, buildPathTree, filterTree, filteredTreeExpansion, flattenTree} from './logic.js';
 import type {RecentEntry, Table} from './types';
 
 export type LibraryViewKind = 'welcome' | 'library' | 'search' | 'query' | 'theorems';
@@ -36,7 +36,7 @@ export function LibrarySidebar({
   expanded: Set<string>;
   onToggleExpand: (path: string) => void;
   onSetView: (view: LibraryViewKind) => void;
-  onOpenTable: (table: Table) => void;
+  onOpenTable: (table: Table, expandPath?: boolean) => void;
   onLoadMore: () => void;
   onRetry: () => void;
   onCreateTable: () => void;
@@ -47,12 +47,23 @@ export function LibrarySidebar({
   theoremCount: number | null;
 }) {
   const [filter, setFilter] = useState('');
+  const [filterCollapsed, setFilterCollapsed] = useState<Set<string>>(new Set());
+  const filtering = Boolean(filter.trim());
   const [showRecent, setShowRecent] = useState(true);
   const tree = useMemo(() => buildPathTree(tables), [tables]);
-  const visible = useMemo(() => {
-    const filtered = filterTree(tree, filter);
-    return filtered ? flattenTree(filtered, expanded) : [];
-  }, [tree, filter, expanded]);
+  const filteredTree = useMemo(() => filterTree(tree, filter), [tree, filter]);
+  const effectiveExpanded = useMemo(() => filtering ? filteredTreeExpansion(filteredTree, filterCollapsed) : expanded, [filtering, filteredTree, filterCollapsed, expanded]);
+  const visible = useMemo(() => filteredTree ? flattenTree(filteredTree, effectiveExpanded) : [], [filteredTree, effectiveExpanded]);
+
+  function togglePath(path: string) {
+    if (!filtering) return onToggleExpand(path);
+    setFilterCollapsed(current => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
 
   return (
     <aside className="knowledge-sidebar" aria-label="知识库导航">
@@ -136,7 +147,7 @@ export function LibrarySidebar({
           aria-label="筛选知识表"
           placeholder="搜索路径或表名"
           value={filter}
-          onChange={event => setFilter(event.target.value)}
+          onChange={event => { setFilter(event.target.value); setFilterCollapsed(new Set()); }}
         />
         {loading && !tables.length ? (
           <p className="library-sidebar-empty" role="status">
@@ -155,7 +166,7 @@ export function LibrarySidebar({
           <ul className="library-tree" role="tree">
             {visible.map(item => {
               if (item.kind === 'node') {
-                const isOpen = expanded.has(item.path);
+                const isOpen = effectiveExpanded.has(item.path);
                 return (
                   <li key={`node:${item.path}`} role="treeitem" aria-expanded={isOpen}>
                     <button
@@ -163,7 +174,7 @@ export function LibrarySidebar({
                       disabled={loading}
                       className="library-tree-node"
                       style={{paddingLeft: 8 + item.depth * 14}}
-                      onClick={() => onToggleExpand(item.path)}
+                      onClick={() => togglePath(item.path)}
                     >
                       <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
                       <span>{item.path === '/' ? '全部' : item.name}</span>
@@ -180,7 +191,7 @@ export function LibrarySidebar({
                     type="button"
                     className={`library-tree-table${active ? ' active' : ''}`}
                     style={{paddingLeft: 8 + item.depth * 14}}
-                    onClick={() => onOpenTable(table)}
+                    onClick={() => onOpenTable(table, !filtering)}
                     onContextMenu={event => {
                       event.preventDefault();
                       onToggleFavorite({kind: 'table', id: table.id, title: table.name, at: Date.now()});

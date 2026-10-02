@@ -89,7 +89,7 @@ export function LibraryApp({
     return () => clearTimeout(timer);
   }, [notice]);
 
-  function openTable(next: Table) {
+  function openTable(next: Table, expandPath = true) {
     ++rowNavigation.current;
     setView('library');
     setSelection(new Set());
@@ -98,7 +98,7 @@ export function LibraryApp({
     setSort(null);
     setConflict(null);
     setInspectorOpen(true);
-    setExpanded(current => expandAncestors(current, next.path));
+    if (expandPath) setExpanded(current => expandAncestors(current, next.path));
     prefs.remember({kind: 'table', id: next.id, title: next.name, at: Date.now()});
     void session.open(next, session.includeDeleted);
   }

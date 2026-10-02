@@ -119,6 +119,18 @@ export function filterTree(node, needle) {
   return clone;
 }
 
+/** Default expansion for a filtered tree, with only this filter's explicit collapses. */
+export function filteredTreeExpansion(root, collapsed = new Set()) {
+  const expanded = new Set();
+  const visit = node => {
+    if (!node) return;
+    if (!collapsed.has(node.path)) expanded.add(node.path);
+    for (const child of node.children) visit(child);
+  };
+  visit(root);
+  return expanded;
+}
+
 /** Depth-first list of visible tree rows for rendering; tables render at their node. */
 export function flattenTree(root, expanded) {
   const out = [];
