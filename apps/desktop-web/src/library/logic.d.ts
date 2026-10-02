@@ -83,3 +83,6 @@ export function buildSelectionPrompt(
   columns?: Column[],
   question?: string,
 ): string;
+
+export function orderedColumns(columns: Column[], preference: unknown): Column[];
+export function moveColumn(columns: Column[], preference: unknown, name: string, direction: number): string[];

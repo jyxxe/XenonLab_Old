@@ -201,3 +201,10 @@
 .library-ask-question textarea{min-height:64px}
 .library-ask-draft{display:flex;flex-direction:column;gap:var(--spacing-1);font-size:var(--font-size-sm);color:var(--text-secondary)}
 .library-ask-editor{min-height:180px;font-family:var(--font-mono)}
+
+.library-column-order {padding: 8px 12px; border-bottom: 1px solid var(--border-subtle);}
+.library-column-order summary {cursor: pointer;}
+.library-column-order ol {padding-left: 24px; max-width: 560px;}
+.library-column-order li {padding: 4px 0; overflow-wrap: anywhere;}
+.library-column-order li > span {display: inline-block; width: min(45%, 260px); margin-right: 8px;}
+.library-column-order li .ds-button {margin-right: 4px;}

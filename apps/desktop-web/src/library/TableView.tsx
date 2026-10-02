@@ -1,6 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ContextMenu, EmptyState, ErrorState, Input, Skeleton, StatusDot, type MenuItem} from '../design-system/primitives';
-import {describeError, filterRows, formatNumber, relativeTime, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
+import {describeError, filterRows, formatNumber, relativeTime, orderedColumns, moveColumn, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
 import type {Column, Row, Table} from './types';
 
 const ROW_HEIGHT = 34;
@@ -69,9 +69,11 @@ export function TableView({
   const [viewportHeight, setViewportHeight] = useState(400);
   const [scrollTop, setScrollTop] = useState(0);
   const [widths, setWidths] = useState<Record<string, number>>({});
+  const [order, setOrder] = useState<{tableId: string; names: unknown}>({tableId: '', names: []});
+  const displayColumns = useMemo(() => orderedColumns(columns, order.tableId === table.id ? order.names : []), [columns, order, table.id]);
   const [columnMenu, setColumnMenu] = useState<{row: Row; x: number; y: number} | null>(null);
 
-  const gridColumns = useMemo(() => [...SYSTEM_COLUMNS.map(column => ({...column, schema: null as Column | null})), ...columns.map(column => ({name: column.name, label: column.name, schema: column}))], [columns]);
+  const gridColumns = useMemo(() => [...SYSTEM_COLUMNS.map(column => ({...column, schema: null as Column | null})), ...displayColumns.map(column => ({name: column.name, label: column.name, schema: column}))], [displayColumns]);
 
   const visibleRows = useMemo(() => {
     const filtered = filterRows(rows, filter);
@@ -121,6 +123,24 @@ export function TableView({
       setWidths({});
     }
   }, [table.id]);
+
+  // Persist only explicit edits for their table. Hydration never writes a previous table's order.
+  useEffect(() => {
+    let names: unknown = [];
+    try { names = JSON.parse(localStorage.getItem(`xeonolab.library.column-order.${table.id}`) || '[]'); } catch { /* default schema order */ }
+    setOrder({tableId: table.id, names});
+  }, [table.id]);
+
+  function changeOrder(name: string, direction: number) {
+    const names = moveColumn(columns, order.tableId === table.id ? order.names : [], name, direction);
+    setOrder({tableId: table.id, names});
+    try { localStorage.setItem(`xeonolab.library.column-order.${table.id}`, JSON.stringify(names)); } catch { /* view preference only */ }
+  }
+
+  function resetOrder() {
+    setOrder({tableId: table.id, names: []});
+    try { localStorage.removeItem(`xeonolab.library.column-order.${table.id}`); } catch { /* view preference only */ }
+  }
 
   const resizeColumn = useCallback(
     (name: string, startWidth: number, startX: number) => {
@@ -228,6 +248,21 @@ export function TableView({
           </>
         )}
       </div>
+
+      <details className="library-column-order" key={table.id}>
+        <summary>调整字段列顺序</summary>
+        <p className="muted">仅调整本机此表的显示顺序，Row ID、更新时间和状态保持固定。</p>
+        <ol>
+          {displayColumns.map((column, index) => (
+            <li key={column.name}>
+              <span>{column.name}</span>
+              <Button size="sm" disabled={index === 0} aria-label={`将 ${column.name} 前移`} onClick={() => changeOrder(column.name, -1)}>前移</Button>
+              <Button size="sm" disabled={index === displayColumns.length - 1} aria-label={`将 ${column.name} 后移`} onClick={() => changeOrder(column.name, 1)}>后移</Button>
+            </li>
+          ))}
+        </ol>
+        <Button size="sm" onClick={resetOrder}>恢复默认字段顺序</Button>
+      </details>
 
       {loading && !rows.length ? (
         <div className="library-table-skeleton" role="status" aria-label="正在加载记录">
