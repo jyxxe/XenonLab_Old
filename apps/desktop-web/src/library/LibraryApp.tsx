@@ -466,6 +466,7 @@ export function LibraryApp({
           <TheoremView
             items={theorems.items}
             searchResults={theorems.searchResults}
+            searchPartial={theorems.searchPartial}
             selected={theorems.selected}
             relations={theorems.relations}
             detailLoading={theorems.detailLoading}
@@ -476,7 +477,7 @@ export function LibraryApp({
             cursor={theorems.cursor}
             onLoad={() => void theorems.load()}
             onLoadMore={() => void theorems.loadMore()}
-            onSearch={value => void theorems.search(value)}
+            onSearch={(value, status) => void theorems.search(value, status)}
             onClearSearch={theorems.clearSearch}
             onOpen={id => {
               void theorems.open(id);

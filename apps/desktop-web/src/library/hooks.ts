@@ -484,6 +484,7 @@ export function useTheorems(apiPage: APIPage) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [searchResults, setSearchResults] = useState<Theorem[] | null>(null);
+  const [searchPartial, setSearchPartial] = useState(false);
   const [selected, setSelected] = useState<Theorem | null>(null);
   const [relations, setRelations] = useState<{dependencies: any[]; dependents: any[]; evidence: any[]} | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -500,6 +501,7 @@ export function useTheorems(apiPage: APIPage) {
       const page = await apiPage('/theorems?limit=50');
       if (request !== listGeneration.current) return;
       setSearchResults(null);
+      setSearchPartial(false);
       setItems(page.data as Theorem[]);
       setCursor((page.meta.next_cursor as string) || null);
     } catch (cause) {
@@ -526,15 +528,18 @@ export function useTheorems(apiPage: APIPage) {
   }, [apiPage, cursor]);
 
   const search = useCallback(
-    async (query: string) => {
+    async (query: string, reviewStatus = '') => {
+      if (!query.trim()) return;
       const request = ++listGeneration.current;
       setLoading(true);
       setLoadingMore(false);
       setError(null);
+      setSearchPartial(false);
       try {
-        const page = await apiPage('/theorems/search', {method: 'POST', body: JSON.stringify({query, limit: 50})});
+        const page = await apiPage('/theorems/search', {method: 'POST', body: JSON.stringify({query: query.trim(), limit: 50, ...(reviewStatus ? {review_status: reviewStatus} : {})})});
         if (request !== listGeneration.current) return;
         setSearchResults(page.data as Theorem[]);
+        setSearchPartial(page.meta.partial === true);
       } catch (cause) {
         if (request === listGeneration.current) setError(cause);
       } finally {
@@ -575,6 +580,7 @@ export function useTheorems(apiPage: APIPage) {
   const clearSearch = useCallback(() => {
     ++listGeneration.current;
     setSearchResults(null);
+    setSearchPartial(false);
     setError(null);
     setLoading(false);
     setLoadingMore(false);
@@ -591,6 +597,7 @@ export function useTheorems(apiPage: APIPage) {
   return {
     items,
     searchResults,
+    searchPartial,
     selected,
     relations,
     detailLoading,
