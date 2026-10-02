@@ -76,8 +76,9 @@ credential-file handling remain separate.
 
 This change has not been applied to production. An authorized operator should
 first take protected, restorable copies of the current Keycloak environment and
-realm files, Web 101 service configuration, and the relevant service
-configuration files. Do not print secret-bearing files into a terminal log.
+realm files, Web 101 service configuration, and all seven affected service env
+files, explicitly including `/etc/xeonolab/deploy-gateway.env`. Do not print
+secret-bearing files into a terminal log.
 
 1. **Protected release boundary:** the normal DevAgent protected-release path
    uses the fixed `infra/devagent/stage_receiver.py` to stage an immutable
@@ -100,8 +101,19 @@ configuration files. Do not print secret-bearing files into a terminal log.
    but the seven files and multiple nodes are not one transaction. Save
    protected restorable copies first. If any step fails, do not activate; rerun
    staging to completion or restore all saved snapshots. Staging does not
-   restart services. Verify every affected health check and confirm JWTs from
-   the existing IP issuer still pass while an unconfigured issuer is rejected.
+   restart services, so a successful stage alone does not mean running
+   processes have loaded the role map. The normal protected activation restarts
+   its configured application services (desktop-web, xelibrary, tool-gateway,
+   llm-gateway, embedding and dev-agent), but deliberately excludes
+   deploy-gateway. After the protected deployment reaches `completed`, the
+   fixed deployment runner invokes `devagent-stage gateway <approved-sha>
+   <deployment-id>` while the same deployment lease remains active. Its
+   `restart_gateway` guard requires the matching terminal deployment and
+   approved release, restarts deploy-gateway, then checks
+   `http://192.168.0.106:8103/health/ready`. Count the role map as loaded only
+   after that guarded restart and readiness check succeed, along with the
+   configured application service health checks. Confirm JWTs from the
+   existing IP issuer still pass while an unconfigured issuer is rejected.
 2. On the separate Auth 109 deployment, apply the dynamic-host Keycloak
    configuration and exact realm callback URIs through the authorized operator
    process, then restart Keycloak. This VM is outside the generic application
@@ -114,10 +126,12 @@ configuration files. Do not print secret-bearing files into a terminal log.
    browser origin, TLS, and API authorization at each entry point. A static
    discovery fetch alone does not constitute login acceptance.
 4. Roll back by restoring the saved Keycloak environment and realm configuration
-   first, restarting Auth 109, then restoring the saved six service env files
-   and previous application release through the authorized release process.
-   Restore env files with their original root ownership and permissions, then
-   restart the affected services. Existing IP-issued sessions remain usable.
+   first, restarting Auth 109, then restoring all seven saved service env files,
+   including `deploy-gateway.env`, and the previous application release through
+   the separately authorized recovery process. Restore the original file owner,
+   group and mode. Have the operator's guarded recovery flow restart every
+   affected service and verify readiness; restoring files alone does not reload
+   a running process. Existing IP-issued sessions remain usable.
    Sessions created under a public or LAN alias may require users to sign in
    again after rollback; do not loosen issuer checks to preserve them.
 
