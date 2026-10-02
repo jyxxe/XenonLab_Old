@@ -12,10 +12,13 @@ process. No repository script contains credentials or edits a production host.
 
 [`infra/network/oidc-backchannel.caddy`](../../infra/network/oidc-backchannel.caddy)
 defines `https://xenon.jyxxe.com` on 443 with `tls internal`.
-The fragment has a top-level `respond @outside ... 403` guard before the
-`handle_path` route, so non-loopback requests cannot reach Keycloak even for
-`/auth/*`. Loopback requests under `/auth/*` are stripped by `handle_path` and
-sent to `192.168.0.109:8180`, with fixed `Host`, `X-Forwarded-Host`,
+The fragment uses an explicit `route` block to preserve execution order: first
+`respond @outside ... 403`, then `handle_path /auth/*`, then a fallback
+`handle` returning 404. This is required because Caddyfile adaptation sorts
+top-level directives; textual placement of a top-level `respond` before a
+`handle` does not guarantee it runs first. Loopback requests under `/auth/*`
+are stripped by `handle_path` and sent to `192.168.0.109:8180`, with fixed
+`Host`, `X-Forwarded-Host`,
 `X-Forwarded-Proto: https`, and `X-Forwarded-Prefix: /auth`. Other loopback
 paths return 404. It contains no desktop, `/dev`, or generic reverse-proxy
 handler. TLS verification in the desktop API remains enabled; VM101's existing
@@ -84,9 +87,16 @@ secret-bearing files or environment values into logs.
    `https://xenon.jyxxe.com/auth/realms/xeonolab`, and authorization, token,
    and JWKS URLs remain HTTPS on `xenon.jyxxe.com` under `/auth/realms/xeonolab`.
    Confirm a loopback request to another path returns 404. From a separate
-   LAN host, confirm the vhost is inaccessible (403 if the request reaches
-   Caddy; network policy may reject it earlier). Do not proceed unless TLS,
-   discovery, path, and remote-denial checks pass.
+   LAN host, force the hostname to VM101's LAN address and confirm the vhost
+   itself returns HTTP 403. For example, use curl with
+   `--resolve xenon.jyxxe.com:443:<VM101-LAN-IP>` and the same trusted LAN CA,
+   requesting `/auth/realms/xeonolab/.well-known/openid-configuration`. The
+   response must be 403, not Keycloak discovery JSON. A timeout, connection
+   refusal, firewall rejection, or other network-level denial is not evidence
+   that Caddy's route guard works; do not proceed until a separate LAN client
+   reaches Caddy and observes 403. Repeat after reload and before any desktop
+   namespace change. Do not proceed unless TLS, issuer, path, loopback 404,
+   and actual remote 403 checks pass.
 6. Build `/etc/xeonolab/oidc-backchannel.hosts` by preserving the current
    `/etc/hosts` contents and adding exactly `127.0.0.1 xenon.jyxxe.com`. Confirm
    no conflicting mapping, then install root:root mode `0644`. Install a
@@ -146,3 +156,17 @@ The resolver override is limited to the desktop-web service mount namespace.
 It does not change VM101 host resolution, other services/VMs, Cloudflare,
 Keycloak issuer policy, browser frame policy, or DNS. If these boundaries
 cannot be confirmed, do not apply this procedure.
+
+## Failed remote-denial check and rollback record — 2026-10-02
+
+The first candidate passed Caddy validation, loopback TLS/discovery, and the
+loopback 404 check. A separate LAN client then received HTTP 200 with public-name
+Keycloak discovery instead of 403. This exposed that the top-level `respond`
+guard was sorted after `handle` routes by Caddyfile adaptation; the earlier
+local checks had not proven remote isolation. The candidate was rolled back
+before installing the desktop-web hosts file or systemd mount drop-in. The
+operator record is `/var/backups/xeonolab/oidc-backchannel-20261002/operation.json`
+on the host; its final state is `rolled_back`. The revised fragment uses an
+explicit ordered `route` block. It is not eligible for re-application until a
+fresh Caddy 2.11.6 listener test and a separate-LAN request demonstrate an
+actual 403, alongside loopback TLS/discovery and 404 checks.
