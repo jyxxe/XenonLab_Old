@@ -224,6 +224,42 @@ def test_checkpoint_push_repository_timestamp_does_not_wake_prs():
     assert before == after
 
 
+def test_project_events_treats_missing_status_rows_as_empty_and_continues():
+    prs = [
+        {"number": number, "head": {"sha": str(number) * 40}, "base": {"ref": "main"},
+         "title": f"PR {number}", "state": "open", "merged": False}
+        for number in range(1, 5)
+    ]
+    combined = {
+        "1" * 40: {"state": "pending", "statuses": None},
+        "2" * 40: {"state": "pending"},
+        "3" * 40: {"state": "pending", "statuses": []},
+        "4" * 40: {"state": "success", "statuses": [
+            {"context": "ci/test", "status": "success", "description": "passed",
+             "target_url": "https://ci.invalid/run/4", "ignored": "not exposed"}
+        ]},
+    }
+
+    class Fake:
+        def api(self, method, path):
+            if path.startswith("/pulls?"):
+                return prs
+            return combined[path.split("/")[2]]
+
+        def pages(self, path):
+            return []
+
+    events = list(controller.project_events(Fake(), {"identity": "devagent-maintainer"}))
+    assert [resource for resource, _ in events] == ["pr:1", "pr:2", "pr:3", "pr:4"]
+    assert [payload["ci"]["statuses"] for _, payload in events[:3]] == [[], [], []]
+    assert events[0][1]["ci"]["state"] == "pending"
+    assert events[3][1]["ci"] == {
+        "state": "success",
+        "statuses": [{"context": "ci/test", "status": "success", "description": "passed",
+                      "target_url": "https://ci.invalid/run/4"}],
+    }
+
+
 def test_closed_pr_live_branch_references_do_not_wake_history():
     class Fake:
         head = "a" * 40
@@ -348,6 +384,36 @@ def test_invalid_pr_never_reaches_merge_endpoint(tmp_path, monkeypatch, case):
     monkeypatch.setattr(controller, 'Forgejo', Fake)
     with pytest.raises(RuntimeError):
         controller.devctl({'state_dir': str(tmp_path), 'identity': 'devagent-maintainer'}, ['merge', '1', sha])
+    assert state.db.execute('SELECT count(*) FROM publications').fetchone()[0] == 0
+
+
+def test_merge_rejects_success_state_without_status_rows(tmp_path, monkeypatch):
+    sha = 'a' * 40
+    state = controller.State(tmp_path)
+    state.db.execute('INSERT INTO reviews VALUES(1,?,0)', (sha,))
+    state.db.commit()
+
+    class Fake:
+        def __init__(self, config):
+            pass
+
+        def api(self, method, path, body=None):
+            assert method == 'GET', 'missing CI rows must never reach the merge endpoint'
+            if path == '/pulls/1':
+                return {'head': {'sha': sha}, 'base': {'ref': controller.RELEASE_BRANCH},
+                        'state': 'open', 'mergeable': True, 'merged': False}
+            if path.startswith('/branches/'):
+                return {'protected': True, 'required_approvals': 1, 'enable_status_check': True,
+                        'status_check_contexts': controller.REQUIRED_CHECKS}
+            return {'state': 'success', 'statuses': None}
+
+        def pages(self, path):
+            return [{'user': {'login': 'devagent-maintainer'}, 'commit_id': sha, 'state': 'APPROVED'}]
+
+    monkeypatch.setattr(controller, 'Forgejo', Fake)
+    with pytest.raises(RuntimeError, match='all required current-head checks'):
+        controller.devctl({'state_dir': str(tmp_path), 'identity': 'devagent-maintainer'},
+                          ['merge', '1', sha])
     assert state.db.execute('SELECT count(*) FROM publications').fetchone()[0] == 0
 
 

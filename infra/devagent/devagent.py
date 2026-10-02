@@ -225,7 +225,7 @@ def project_events(forgejo, config, reconcile=False):
                     # for every PR. It is not a CI event and must never enter the fingerprint.
                     "statuses": [
                         {k: s.get(k) for k in ("context", "status", "description", "target_url")}
-                        for s in statuses.get("statuses", [])
+                        for s in (statuses.get("statuses") or [])
                     ],
                 },
             },
@@ -628,12 +628,15 @@ def devctl(config, argv):
             status = forgejo.api("GET", f"/commits/{sha}/status")
             if status["state"] != "success":
                 raise RuntimeError("successful current-head CI required")
-            checks = {s.get("context"): s.get("status", s.get("state")) for s in status.get("statuses", [])}
+            checks = {
+                s.get("context"): s.get("status", s.get("state"))
+                for s in (status.get("statuses") or [])
+            }
             if any(checks.get(context) != "success" for context in REQUIRED_CHECKS):
                 raise RuntimeError("all required current-head checks must succeed")
             protected = [
                 s
-                for s in status.get("statuses", [])
+                for s in (status.get("statuses") or [])
                 if s.get("context") == "devagent/preflight"
                 and (s.get("creator") or {}).get("login") == "devagent-validator"
             ]
