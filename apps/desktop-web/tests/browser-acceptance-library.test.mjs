@@ -228,6 +228,58 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await cdp.evaluate("[...document.querySelectorAll('.inspector-conflict button')].find(button=>button.innerText.includes('重新加载')).click()");
     await waitFor(() => cdp.evaluate("!document.querySelector('.inspector-conflict')"), 'conflict cleared after reload');
 
+    // Ask-AI selection extension point: composed draft, bounded and editable,
+    // delivered through the shell intent channel only on explicit confirm.
+    await cdp.evaluate("document.querySelector('.table-scroll tbody tr').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.record-editor'))"), 'row active before ask-ai');
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-actions button')].find(button=>button.innerText.includes('Ask AI')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-ask-editor'))"), 'ask-ai dialog');
+    await cdp.evaluate(`(${setValue})('.library-ask-question textarea', '这些记录的共同点是什么？')`);
+    await cdp.evaluate("document.querySelector('.library-ask-question textarea').dispatchEvent(new Event('blur'))");
+    await sleep(120);
+    const askDraft = await cdp.evaluate("document.querySelector('.library-ask-editor')?.value || ''");
+    assert.match(askDraft, /知识表：\/数学\/分析\/uniform-convergence/, 'draft names the source table');
+    assert.match(askDraft, /问题：这些记录的共同点是什么？/, 'question is embedded in the draft');
+    assert.ok(askDraft.includes('title='), 'draft embeds field values');
+    await capture('xelibrary-ask-ai-dark-1440x900');
+
+    // Switching actions regenerates the draft; nothing is sent yet.
+    await cdp.evaluate("[...document.querySelectorAll('.library-ask-actions button')].find(button=>button.innerText.includes('Summarize selection')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-ask-editor')?.value.includes('总结')"), 'summarize template');
+    const intentsBefore = await cdp.evaluate('window.libraryFixture.appIntents.length');
+    assert.equal(intentsBefore, 0, 'no intent is emitted before confirmation');
+
+    // Context menu entry on an unselected row targets exactly that row.
+    await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.trim()==='取消').click()");
+    await waitFor(() => cdp.evaluate("!document.querySelector('.library-ask-editor')"), 'dialog closed');
+    await cdp.evaluate("const row=document.querySelectorAll('.table-scroll tbody tr')[2]; row.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:300,clientY:300}))");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'row context menu');
+    await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('Ask AI about this row')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-ask-editor'))"), 'row-scoped ask-ai dialog');
+    const rowDraft = await cdp.evaluate("document.querySelector('.library-ask-editor')?.value || ''");
+    assert.match(rowDraft, /选中记录：1 行/, 'context menu on an unselected row drafts just that row');
+
+    // Confirm routes through openApp with the current draft.
+    await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.includes('发送到 AI 对话')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.appIntents.length===1"), 'ask-ai intent delivered');
+    const askIntent = await cdp.evaluate("window.libraryFixture.appIntents[0]");
+    assert.equal(askIntent.id, 'chat', 'delivery targets the registered chat app');
+    assert.equal(askIntent.action, 'askAI');
+    assert.ok(String(askIntent.prompt).includes('选中记录：1 行'), 'the delivered prompt is the row-scoped draft');
+    assert.equal(await cdp.evaluate("window.libraryFixture.state.openedApp"), 'chat');
+    assert.ok((await cdp.evaluate("window.libraryFixture.state.notices")).some(text => text.includes('AI 草稿已投递')), 'a visible notice explains what happened');
+
+    // Without a registered chat app the dialog stays honest: copyable, not sendable.
+    await cdp.evaluate("window.libraryFixture.state.chatKind='native'; window.libraryFixture.appIntents.length=0");
+    await sleep(700);
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-actions button')].find(button=>button.innerText.includes('Ask AI')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-ask-editor'))"), 'ask-ai dialog without chat');
+    const unavailableButton = await cdp.evaluate("(([...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.includes('AI 对话不可用')))||{disabled:null}).disabled");
+    assert.equal(unavailableButton, true, 'the unavailable chat action is disabled instead of a send button');
+    assert.ok((await cdp.evaluate("document.querySelector('.library-ask-meta')?.innerText || ''")).includes('将与 AI 共享'), 'the shared-context summary is shown');
+    await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.trim()==='取消').click()");
+    await cdp.evaluate("window.libraryFixture.state.chatKind='iframe'");
+
     // Unified search: Fast semantic results, completeness warnings, exact-row navigation.
     await cdp.evaluate("[...document.querySelectorAll('.library-nav button')].find(button=>button.innerText.includes('搜索')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-search'))"), 'search view');

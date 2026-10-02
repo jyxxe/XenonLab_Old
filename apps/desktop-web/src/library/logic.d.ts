@@ -63,3 +63,22 @@ export type ErrorInfo = {
 export function describeError(error: unknown, context?: string): ErrorInfo;
 
 export type {Theorem};
+export type SelectionAIActionId = 'ask' | 'summarize' | 'related';
+export const SELECTION_AI_ACTIONS: Array<{id: SelectionAIActionId; label: string; hint: string}>;
+export type SelectionContextSummary = {
+  tablePath: string;
+  tableId: string;
+  rowCount: number;
+  sharedRows: number;
+  truncated: boolean;
+  fields: string[];
+  rowIds: string[];
+};
+export function selectionContextSummary(table: Table | null, rows: any[], columns?: Column[]): SelectionContextSummary;
+export function buildSelectionPrompt(
+  action: SelectionAIActionId,
+  table: Table | null,
+  rows: any[],
+  columns?: Column[],
+  question?: string,
+): string;

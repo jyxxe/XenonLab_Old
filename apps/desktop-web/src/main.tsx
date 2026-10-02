@@ -377,7 +377,18 @@ function App() {
     catch {/* the local session is cleared even when the provider is unreachable */}
   }
 
-  if (libraryView) return <Knowledge api={api} apiPage={apiPage} apiRaw={apiRaw} />;
+  // The standalone library page has no shell around it, so no chat app can be
+  // registered: Ask AI still composes/copy-exports drafts but cannot deliver.
+  if (libraryView) return (
+    <Knowledge
+      api={api}
+      apiPage={apiPage}
+      apiRaw={apiRaw}
+      apps={[]}
+      openApp={() => undefined}
+      notify={() => undefined}
+    />
+  );
 
   const sessionBanner =
     connected && (sessionStatus.phase === 'retrying' || sessionStatus.phase === 'reauthorize') ? (

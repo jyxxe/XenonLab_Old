@@ -102,3 +102,7 @@ export type QueryExplain = {
 };
 
 export type RecentEntry = {kind: 'table' | 'row' | 'path' | 'theorem'; id: string; title: string; at: number};
+
+/** Selection AI extension point (Issue #71 §17): the action ids are part of the
+ * library ⇄ chat contract; future native chat apps consume the same draft. */
+export type SelectionAIAction = 'ask' | 'summarize' | 'related';

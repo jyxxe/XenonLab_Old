@@ -559,7 +559,13 @@ export function DesktopShell({
               onClose={() => closeWindow(win.id)}
             >
               {app.kind === 'iframe' ? (
-                <IFrameApp app={app} windowId={win.id} theme={preferences.theme} active={isActive} />
+                <IFrameApp
+                  app={app}
+                  windowId={win.id}
+                  theme={preferences.theme}
+                  active={isActive}
+                  intent={appIntents[app.id]}
+                />
               ) : app.component ? (
                 <app.component
                   api={api}
