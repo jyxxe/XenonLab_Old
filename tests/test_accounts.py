@@ -160,6 +160,59 @@ def test_tree_inheritance_sibling_boundary_and_live_shrink(accounts):
     assert len(first["data"]) + len(second["data"]) == 4
 
 
+def test_shrunk_parent_scope_does_not_block_name_or_enabled_patch(accounts):
+    client, _, _ = accounts
+    uid = child(
+        client,
+        grants=["desktop:read", "accounts:manage", "xelibrary:read", "xelibrary:write"],
+    )
+    tree = client.get("/api/v1/auth/accounts", headers=auth("admin")).json()["data"]
+    root = next(row for row in tree if row["id"] == "admin")
+    assert "xelibrary:write" in root["grants"]
+
+    revoked = sorted(set(root["grants"]) - {"xelibrary:write"})
+    response = client.patch(
+        "/api/v1/auth/accounts/admin", headers=auth("admin"), json={"grants": revoked}
+    )
+    assert response.status_code == 200, response.text
+
+    child_before = next(
+        row for row in client.get("/api/v1/auth/accounts", headers=auth("admin")).json()["data"]
+        if row["id"] == uid
+    )
+    assert "xelibrary:write" in child_before["grants"]
+    assert "xelibrary:write" not in child_before["effective_scopes"]
+
+    renamed = client.patch(
+        f"/api/v1/auth/accounts/{uid}", headers=auth("admin"), json={"name": "Renamed child"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    disabled = client.patch(
+        f"/api/v1/auth/accounts/{uid}", headers=auth("admin"), json={"enabled": False}
+    )
+    assert disabled.status_code == 200, disabled.text
+    enabled = client.patch(
+        f"/api/v1/auth/accounts/{uid}", headers=auth("admin"), json={"enabled": True}
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    explicit_old_grant = client.patch(
+        f"/api/v1/auth/accounts/{uid}",
+        headers=auth("admin"),
+        json={"grants": ["desktop:read", "xelibrary:read", "xelibrary:write"]},
+    )
+    assert explicit_old_grant.status_code == 403
+    assert explicit_old_grant.json()["error"]["code"] == "PERMISSION_ESCALATION"
+
+    removed = client.patch(
+        f"/api/v1/auth/accounts/{uid}",
+        headers=auth("admin"),
+        json={"grants": ["desktop:read", "xelibrary:read"]},
+    )
+    assert removed.status_code == 200, removed.text
+    assert "xelibrary:write" not in removed.json()["data"]["grants"]
+
+
 def test_api_key_attenuation_revocation_and_password_fencing(accounts):
     client, settings, app = accounts
     uid = child(client)
