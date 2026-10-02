@@ -40,6 +40,11 @@ export function workArea(viewport) {
   return {x: WINDOW_MARGIN, y: MENUBAR_HEIGHT + WINDOW_MARGIN, width, height};
 }
 
+/** Maximize fills the viewport below the menu bar; the Dock hides temporarily. */
+export function maximizedRect(viewport) {
+  return {x: 0, y: MENUBAR_HEIGHT, width: Math.max(0, viewport.width), height: Math.max(0, viewport.height - MENUBAR_HEIGHT)};
+}
+
 export function clamp(value, min, max) {
   return Math.min(Math.max(value, min), Math.max(min, max));
 }
@@ -107,7 +112,7 @@ export function moveRect(rect, x, y, viewport) {
 }
 
 export function toggleMaximize(win, viewport) {
-  const area = workArea(viewport);
+  const area = maximizedRect(viewport);
   if (win.maximized) {
     const restore = clampRect(win.restore ?? {...win}, viewport, minSizeOf({}));
     return {...win, ...restore, maximized: false, restore: undefined};
@@ -170,7 +175,7 @@ export function restoreWindows(raw, knownApp, viewport) {
         viewport,
         min,
       ),
-      ...(item.maximized ? workArea(viewport) : {}),
+      ...(item.maximized ? maximizedRect(viewport) : {}),
     });
   }
   return windows;

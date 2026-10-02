@@ -11,6 +11,7 @@ export const LEGACY_XELIBRARY_APP_ID: string;
 export function isRetiredRegistryAppId(id: string): boolean;
 export function migrateLegacyAppReferences<T extends Record<string, any>>(layout: T): T;
 
+export function maximizedRect(viewport: {width: number; height: number}): Rect;
 export function workArea(viewport: {width: number; height: number}): Rect;
 export function clamp(value: number, min: number, max: number): number;
 export function minSizeOf(app: {minSize?: [number, number]; min_size?: [number, number]} | null | undefined): {width: number; height: number};

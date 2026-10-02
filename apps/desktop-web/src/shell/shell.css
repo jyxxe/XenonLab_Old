@@ -198,3 +198,9 @@
 
 .menubar-mobile-switcher{display:none}
 @media(max-width:767px){.menubar-mobile-switcher{display:block}.menubar .menubar-mobile-switcher .ds-menu-button{display:inline-flex !important}.menubar-brand{padding:0}.menubar-user-menu .ds-menubar-item{max-width:66px;overflow:hidden;text-overflow:ellipsis}.menubar-mobile-switcher .ds-menubar-item{padding:0 var(--spacing-2)}.menubar-clock{font-size:var(--font-size-xs)}.menubar-clock .clock-date{display:none}.bar .traffic button{width:18px;height:18px}.iframe-toolbar{flex-wrap:wrap}.iframe-toolbar span{flex-basis:100%}}
+
+/* Maximized windows keep the same edge-to-edge geometry on compact screens. */
+@media (max-width:1023px){
+  .desktop.ds-compact .window.ds-window-maximized{left:0 !important;top:var(--menubar-height) !important;width:100vw !important;height:calc(100dvh - var(--menubar-height)) !important;border-radius:0}
+  .desktop[data-maximized-active] .widgets{visibility:hidden;pointer-events:none}
+}
