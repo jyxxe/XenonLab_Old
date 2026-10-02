@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {ErrorState, Spinner, useToast} from '../design-system/primitives';
 import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
 import {customWallpaperStyle} from '../wallpaper.js';
@@ -24,7 +24,7 @@ import {
   toggleMaximize,
   maximizedRect,
 } from './window-manager.js';
-import type {API, APIPage, APIRaw, AppIntent, DesktopApp, RegistryApp, UserPreferences, WindowState} from './types';
+import type {API, APIPage, APIRaw, AppIntent, DesktopApp, PreferenceApplyOptions, RegistryApp, UserPreferences, WindowState} from './types';
 
 const RECENT_KEY = 'xeonolab.recent-apps';
 
@@ -93,6 +93,12 @@ export function DesktopShell({
   const layoutQueue = useRef<Promise<unknown>>(Promise.resolve());
   const preferenceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const preferenceVersion = useRef(0);
+  const preferenceOwner = useRef('');
+  const preferenceLifetime = useRef(true);
+  const currentAPI = useRef(api);
+  if (currentAPI.current !== api) {preferenceOwner.current = ''; ++preferenceVersion.current;}
+  currentAPI.current = api;
+  useLayoutEffect(() => {preferenceLifetime.current = true; return () => {preferenceLifetime.current = false;};}, []);
   const viewport = useRef({width: innerWidth, height: innerHeight});
 
   const [appIntents, setAppIntents] = useState<Record<string, AppIntent>>({});
@@ -113,6 +119,7 @@ export function DesktopShell({
     try {
       const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
       const [layout, stored] = await Promise.all([api('/users/me/layout'), api('/users/me/preferences')]);
+      if (currentAPI.current !== api || !preferenceLifetime.current) return;
       const available = mergeApps(registry as RegistryApp[], me.scopes || []);
       const migratedLayout = migrateLegacyAppReferences(layout);
       const migratedRecent = [...new Set(loadRecent().map(id => id === LEGACY_XELIBRARY_APP_ID ? 'knowledge' : id))].slice(0, 6);
@@ -130,6 +137,7 @@ export function DesktopShell({
       setAccountScopes(Array.isArray(me.scopes) ? me.scopes : []);
       setDockIds(nextDock);
       setPreferences(prefs);
+      preferenceOwner.current = me.subject || '';
       setSubject(me.subject || '');
       setUserLabel(me.subject ? String(me.subject).slice(0, 8) : '本地账户');
       if (!loadedRef.current) {
@@ -310,16 +318,29 @@ export function DesktopShell({
   const focus = useCallback((id: string) => editWindows(current => focusWindow(current, id)), [editWindows]);
 
   const applyPreferences = useCallback(
-    async (patch: Partial<UserPreferences>) => {
+    async (patch: Partial<UserPreferences>, options?: PreferenceApplyOptions) => {
+      if (!preferenceLifetime.current || currentAPI.current !== api || !preferenceOwner.current) throw new Error('账户上下文已变化，未保存旧偏好');
+      const owner = preferenceOwner.current;
       const version = ++preferenceVersion.current;
       setPreferences(current => ({...current, ...patch}));
-      const pending = preferenceQueue.current.catch(() => undefined).then(() => api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch)}));
+      if (options?.previewOnly) return;
+      const pending = preferenceQueue.current.catch(() => undefined).then(async () => {
+        if (!preferenceLifetime.current || currentAPI.current !== api || preferenceOwner.current !== owner) throw new Error('账户上下文已变化，未保存旧偏好');
+        return api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch), ...(options?.keepalive ? {keepalive: true} : {})});
+      });
       preferenceQueue.current = pending;
       try {
         const saved = await pending;
-        if (version === preferenceVersion.current) setPreferences(current => ({...current, ...saved}));
+        // A full response also contains ranges whose preview/save may still be
+        // pending or failed. Other PATCHes must not confirm those fields.
+        if (preferenceLifetime.current && preferenceOwner.current === owner && currentAPI.current === api && version === preferenceVersion.current) {
+          const confirmed = {...saved};
+          if (!Object.hasOwn(patch, 'wallpaper_gradient_angle')) delete confirmed.wallpaper_gradient_angle;
+          if (!Object.hasOwn(patch, 'wallpaper_dim')) delete confirmed.wallpaper_dim;
+          setPreferences(current => ({...current, ...confirmed}));
+        }
       } catch (error) {
-        push({tone: 'danger', title: '偏好保存失败', description: String(error)});
+        if (preferenceLifetime.current && preferenceOwner.current === owner && currentAPI.current === api) push({tone: 'danger', title: '偏好保存失败', description: String(error)});
         throw error;
       }
     },
