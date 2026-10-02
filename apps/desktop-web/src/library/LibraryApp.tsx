@@ -54,6 +54,7 @@ export function LibraryApp({
   const [notice, setNotice] = useState<{tone: 'info' | 'danger' | 'success'; message: string; code?: string; requestId?: string} | null>(null);
   const [dialog, setDialog] = useState<null | 'new' | 'move' | 'schema' | 'delete'>(null);
   const [askAI, setAskAI] = useState<SelectionAIAction | null>(null);
+  const [pendingAIHandoff, setPendingAIHandoff] = useState<string | null>(null);
   const [schemaDraft, setSchemaDraft] = useState<Column[]>([]);
   const [destructiveConfirmed, setDestructiveConfirmed] = useState(false);
   const [movePath, setMovePath] = useState('');
@@ -360,11 +361,19 @@ export function LibraryApp({
     [selection, activeRowId, session.rows],
   );
 
+  // Modal passive cleanup restores its source focus before passive effects run.
+  // Deliver only after that cleanup so source restoration cannot raise Library
+  // over the destination window. Cancellation keeps ordinary modal behavior.
+  useEffect(() => {
+    if (pendingAIHandoff === null) return;
+    setPendingAIHandoff(null);
+    if (openApp) openApp('chat', {action: 'askAI', prompt: pendingAIHandoff});
+    if (notify) notify({title: 'AI 草稿已投递到对话窗口，请核对后发送。', tone: 'info'});
+  }, [pendingAIHandoff, openApp, notify]);
+
   function confirmAskAI(prompt: string) {
     setAskAI(null);
-    if (!chatApp) return;
-    if (openApp) openApp('chat', {action: 'askAI', prompt});
-    if (notify) notify({title: 'AI 草稿已投递到对话窗口，请核对后发送。', tone: 'info'});
+    if (chatApp) setPendingAIHandoff(prompt);
   }
 
   const catalogueError = catalogue.error ? describeError(catalogue.error, '读取目录') : null;
