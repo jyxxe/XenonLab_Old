@@ -91,6 +91,59 @@ that public overlay with `--build-arg RUNTIME_IMAGE=EXACT_LOCAL_IMAGE_ID`,
 `--pull=never` and `--network=none`; record both base and resulting IDs. A cold
 full build still needs the signed Debian repositories for browser libraries.
 
+### Public npm lockfile cache overlay
+
+The committed desktop lockfile can be prepared independently of the runner's
+default npm cache. `infra/forgejo/prepare-npm-cache.sh OUTPUT_DIR
+[BOOTSTRAP_PROXY_URL]` first rejects lock entries that do not use HTTPS
+`registry.npmjs.org` or carry SRI integrity. It downloads in a clean temporary
+project with a dedicated empty cache, empty npm config files, and no inherited
+environment; optional proxy use is passed only as explicit npm CLI transport
+options and URLs containing credentials, query, or fragment are rejected. TLS
+verification stays enabled. The online fill skips lifecycle scripts, while
+standard `npm ci --offline` then runs normally twice: once against the working
+cache and once against a copy containing only `_cacache`. Only that
+content-addressed `_cacache` directory and a manifest are emitted, never logs,
+npm config, environment, or proxy settings. Downloads remain subject to each
+lockfile entry's SRI value. Rebuild whenever the lockfile changes; only the
+preparation platform is exercised. Do not stage the workstation's `~/.npm`.
+
+For example, an approved local bootstrap proxy may be supplied while preparing
+the public cache:
+
+```sh
+infra/forgejo/prepare-npm-cache.sh /tmp/xeonolab-npm-cache-context \
+  http://127.0.0.1:7897
+```
+
+That proxy is a preparation-only transport and is not included in the artifact
+or used by CI. The overlay sets npm's cache to `/opt/ci/npm-cache` and offline
+mode to true, so the existing unmodified `npm ci` workflow uses the baked cache
+and fails immediately for missing lockfile content. Lifecycle scripts and all
+existing unit, browser, and build gates continue to run normally. Offline npm
+audit output may use cached metadata; it is not a current vulnerability scan.
+This cache preparation and its offline install do not perform an online audit.
+
+Build the overlay as the rootless runner user from the emitted directory, using
+the exact already-verified runtime image ID:
+
+```sh
+podman build --pull=never --network=none \
+  --build-arg RUNTIME_IMAGE=EXACT_LOCAL_IMAGE_ID \
+  -f "$PWD/infra/forgejo/Containerfile.npm-cache" \
+  -t xeonolab-ci-npm-lock:LOCK_SHA256 \
+  /tmp/xeonolab-npm-cache-context
+```
+
+Inspect and record the base and resulting image IDs, then prove `npm ci --offline`
+against the image and exact checkout in an isolated container before selecting
+it as the runner image. Keep the workflow's unit, pinned-browser check, smoke,
+browser regressions, failure-artifact upload, and production build steps intact.
+The overlay is only a way to satisfy the lockfile install from public cached
+tarballs; it does not prove independent registry egress, does not remove other
+workflow download requirements, and does not complete Issue #87. Actual Forgejo
+workflow execution on the resulting image remains required before CI acceptance.
+
 ## Operational acceptance
 
 Verify runner scope/labels/status through the repository Actions API. Run actual
