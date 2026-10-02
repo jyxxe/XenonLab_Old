@@ -529,9 +529,9 @@ export function LibraryApp({
             onLoadMore={() => void theorems.loadMore()}
             onSearch={(value, status) => void theorems.search(value, status)}
             onClearSearch={theorems.clearSearch}
-            onOpen={id => {
-              void theorems.open(id);
-              prefs.remember({kind: 'theorem', id, title: '定理', at: Date.now()});
+            onOpen={theorem => {
+              void theorems.open(theorem.theorem_id);
+              prefs.remember({kind: 'theorem', id: theorem.theorem_id, title: theorem.title?.trim() || '定理', at: Date.now()});
             }}
             onClose={theorems.close}
           />

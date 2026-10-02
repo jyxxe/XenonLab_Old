@@ -15,6 +15,7 @@ import {
   isKeywordResult,
   libraryPrefsStorageKey,
   mergeRecent,
+  recentEntryPresentation,
   parseFieldFilters,
   rowHasAttachment,
   searchWarnings,
@@ -31,6 +32,30 @@ const tables = [
   {id: 'c', name: 'notes', path: '/计算机'},
   {id: 'd', name: 'root', path: '/'},
 ];
+
+test('theorem recent labels preserve real titles and distinguish generic or duplicate names', () => {
+  const theorem = (id, title) => ({kind: 'theorem', id, title});
+  const distinct = [theorem('thm-1', '一致收敛定理'), theorem('thm-2', '极限唯一性定理')];
+  assert.deepEqual(recentEntryPresentation(distinct[0], distinct), {title: '一致收敛定理', identifier: '', label: '一致收敛定理'});
+  const duplicates = [theorem('uuid-00000001', ' 同名定理 '), theorem('uuid-00000002', '同名定理')];
+  assert.equal(recentEntryPresentation(duplicates[0], duplicates).label, '同名定理 · 00000001');
+  assert.equal(recentEntryPresentation(duplicates[1], duplicates).identifier, '00000002');
+  assert.equal(recentEntryPresentation(theorem('thm-1', '定理')).label, '定理 · thm-1');
+  assert.equal(recentEntryPresentation(theorem('thm-2', '  ')).label, '定理 · thm-2');
+  assert.equal(recentEntryPresentation(theorem('thm-3', undefined)).label, '定理 · thm-3');
+  const table = {kind: 'table', id: 'table-1', title: '同名定理'};
+  assert.equal(recentEntryPresentation(duplicates[1], [duplicates[1], table]).identifier, '', 'other entry kinds do not create theorem title collisions');
+  assert.deepEqual(recentEntryPresentation(table, duplicates), {title: table.title, identifier: '', label: table.title});
+});
+
+test('colliding short theorem IDs fall back to complete stable IDs without altering entries', () => {
+  const entries = ['prefix-a-12345678', 'prefix-b-12345678'].map(id => ({kind: 'theorem', id, title: '定理'}));
+  const before = JSON.stringify(entries);
+  assert.equal(recentEntryPresentation(entries[0], entries).identifier, entries[0].id);
+  assert.equal(recentEntryPresentation(entries[1], entries).identifier, entries[1].id);
+  assert.equal(JSON.stringify(entries), before);
+  assert.equal(recentEntryPresentation(entries[0], [entries[0], {...entries[0]}]).identifier, '12345678', 'same ID is not a different object');
+});
 
 test('buildPathTree groups tables by logical path and counts descendants', () => {
   const tree = buildPathTree(tables);

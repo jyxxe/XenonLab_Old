@@ -284,6 +284,23 @@ export function mergeRecent(list, entry, limit = 8) {
   return [entry, ...filtered].slice(0, limit);
 }
 
+/** Display legacy/generic and duplicate theorem titles without changing stored IDs. */
+export function recentEntryPresentation(entry, list = []) {
+  if (entry.kind !== 'theorem') return {title: entry.title, identifier: '', label: entry.title};
+  const title = theoremRecentTitle(entry);
+  const sameTitle = list.some(item => item.kind === 'theorem' && item.id !== entry.id && theoremRecentTitle(item) === title);
+  if (title !== '定理' && !sameTitle) return {title, identifier: '', label: title};
+  const id = String(entry.id);
+  const suffix = id.slice(-8);
+  const collision = list.some(item => item.kind === 'theorem' && item.id !== entry.id && String(item.id).slice(-8) === suffix);
+  const identifier = collision ? id : suffix;
+  return {title, identifier, label: `${title} · ${identifier}`};
+}
+
+function theoremRecentTitle(entry) {
+  return typeof entry.title === 'string' && entry.title.trim() ? entry.title.trim() : '定理';
+}
+
 export function toggleFavorite(list, entry) {
   const exists = list.some(item => item.kind === entry.kind && item.id === entry.id);
   if (exists) return list.filter(item => !(item.kind === entry.kind && item.id === entry.id));

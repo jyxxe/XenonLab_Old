@@ -48,7 +48,7 @@ export function TheoremView({
   onLoadMore: () => void;
   onSearch: (query: string, reviewStatus?: string) => void;
   onClearSearch: () => void;
-  onOpen: (id: string) => void;
+  onOpen: (theorem: Theorem) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -100,7 +100,7 @@ export function TheoremView({
               const average = confidenceAverage(theorem);
               return (
                 <li key={theorem.theorem_id}>
-                  <button type="button" className={selected?.theorem_id === theorem.theorem_id ? 'active' : ''} onClick={() => onOpen(theorem.theorem_id)}>
+                  <button type="button" className={selected?.theorem_id === theorem.theorem_id ? 'active' : ''} onClick={() => onOpen(theorem)}>
                     <strong>{theorem.title}</strong>
                     <span className="library-theorem-meta">
                       <code>{theorem.path}</code>
@@ -145,7 +145,7 @@ export function TheoremView({
           {selected.formal_statement && <section><h4>Formal Statement</h4><pre>{selected.formal_statement}</pre></section>}
           {selected.lean_source && <section><h4>Lean Proof</h4><pre>{selected.lean_source}</pre></section>}
           {detailErrorInfo ? (
-            <ErrorState title={detailErrorInfo.title} message={detailErrorInfo.message} requestId={detailErrorInfo.requestId} errorCode={detailErrorInfo.code} onRetry={() => onOpen(selected.theorem_id)} />
+            <ErrorState title={detailErrorInfo.title} message={detailErrorInfo.message} requestId={detailErrorInfo.requestId} errorCode={detailErrorInfo.code} onRetry={() => onOpen(selected)} />
           ) : detailLoading ? (
             <p className="muted" role="status">正在读取 evidence 与定理关系…</p>
           ) : (

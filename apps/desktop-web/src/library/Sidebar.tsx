@@ -1,6 +1,6 @@
 import React, {useMemo, useState} from 'react';
 import {Badge, Button, IconButton, Input, Spinner} from '../design-system/primitives';
-import {ancestorPaths, buildPathTree, filterTree, filteredTreeExpansion, flattenTree} from './logic.js';
+import {ancestorPaths, buildPathTree, filterTree, filteredTreeExpansion, flattenTree, recentEntryPresentation} from './logic.js';
 import type {RecentEntry, Table} from './types';
 
 export type LibraryViewKind = 'welcome' | 'library' | 'search' | 'query' | 'theorems';
@@ -124,13 +124,17 @@ export function LibrarySidebar({
         {showRecent &&
           (recent.length ? (
             <ul className="library-mini-list">
-              {recent.slice(0, 6).map(entry => (
-                <li key={`${entry.kind}:${entry.id}`}>
-                  <button type="button" onClick={() => onOpenEntry(entry)} title={entry.title}>
-                    {entry.kind === 'table' ? '▤' : entry.kind === 'row' ? '≡' : entry.kind === 'theorem' ? '⊢' : '⌂'} {entry.title}
-                  </button>
-                </li>
-              ))}
+              {recent.slice(0, 6).map(entry => {
+                const {title, identifier, label} = recentEntryPresentation(entry, recent);
+                return (
+                  <li key={`${entry.kind}:${entry.id}`}>
+                    <button type="button" className={entry.kind === 'theorem' ? 'library-recent-theorem' : undefined} onClick={() => onOpenEntry(entry)} title={label}>
+                      <span>{entry.kind === 'table' ? '▤' : entry.kind === 'row' ? '≡' : entry.kind === 'theorem' ? '⊢' : '⌂'} {title}</span>
+                      {identifier && <span className="library-recent-identifier"> · {identifier}</span>}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <p className="library-sidebar-empty">还没有打开过任何对象。</p>
