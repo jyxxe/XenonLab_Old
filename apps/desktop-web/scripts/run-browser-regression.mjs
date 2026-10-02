@@ -16,6 +16,7 @@ const tests = [
   'tests/browser-acceptance-session.test.mjs',
   'tests/browser-acceptance-work.test.mjs',
   'tests/browser-acceptance-shell.test.mjs',
+  'tests/browser-acceptance-issues-narrow.test.mjs',
 ];
 const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...tests], {
   cwd: appRoot,
