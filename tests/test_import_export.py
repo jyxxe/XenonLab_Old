@@ -1,4 +1,5 @@
 import json
+import time
 
 from fastapi.testclient import TestClient
 
@@ -6,6 +7,20 @@ from xeonolab.bulk_jobs import BulkJobStore
 from xeonolab.services import create_app
 
 from .conftest import auth, put_acl
+
+
+def wait_terminal(client, path, headers=None, tries=80):
+    """Poll a bulk job until it reaches a terminal state (background workers race)."""
+    for _ in range(tries):
+        response = client.get(path, headers=headers or auth())
+        if response.status_code == 429:
+            time.sleep(0.5)
+            continue
+        state = response.json()["data"]
+        if state["status"] in ("completed", "failed", "cancelled"):
+            return state
+        time.sleep(0.1)
+    return state
 
 
 def make_client(settings):
@@ -36,8 +51,8 @@ def test_export_import_jsonl_round_trip(settings):
     export = client.post("/api/v1/exports", headers=auth(), json={"table_id": source, "format": "jsonl"})
     assert export.status_code == 202, export.text
     job_id = export.json()["data"]["job_id"]
-    status = client.get(f"/api/v1/exports/{job_id}", headers=auth()).json()["data"]
-    assert status["status"] == "completed" and status["downloadable"] is True
+    status = wait_terminal(client, f"/api/v1/exports/{job_id}")
+    assert status["status"] == "completed" and status["downloadable"] is True, json.dumps(status, ensure_ascii=False)
     download = client.get(f"/api/v1/exports/{job_id}/download", headers=auth())
     assert download.status_code == 200
     lines = [json.loads(line) for line in download.text.splitlines()]
@@ -53,7 +68,7 @@ def test_export_import_jsonl_round_trip(settings):
     )
     assert imported.status_code == 202, imported.text
     import_job = imported.json()["data"]["job_id"]
-    state = client.get(f"/api/v1/imports/{import_job}", headers=auth()).json()["data"]
+    state = wait_terminal(client, f"/api/v1/imports/{import_job}")
     assert state["status"] == "completed" and state["failed"] == 0
     round_trip = client.get(f"/api/v1/tables/{target}/rows?limit=100", headers=auth()).json()["data"]
     assert {row["values"]["body"] for row in round_trip} == {"row-0", "row-1", "row-2"}
@@ -72,6 +87,7 @@ def test_export_excludes_rows_without_read_acl(settings):
     export = client.post("/api/v1/exports", headers=auth("bob"), json={"table_id": table_id, "format": "jsonl"})
     assert export.status_code == 202
     job_id = export.json()["data"]["job_id"]
+    wait_terminal(client, f"/api/v1/exports/{job_id}", headers=auth("bob"))
     download = client.get(f"/api/v1/exports/{job_id}/download", headers=auth("bob"))
     bodies = [json.loads(line)["values"]["body"] for line in download.text.splitlines()]
     assert bodies == ["public"], "rows without read ACL must never appear in an export"
@@ -113,7 +129,7 @@ def test_import_rejects_oversized_empty_and_unsupported(settings, monkeypatch):
                                json={"table_id": table_id, "format": "parquet", "content": "{}"})
     assert wrong_format.status_code == 422
     bad_export = client.post("/api/v1/exports", headers=auth(),
-                             json={"table_id": table_id, "format": "csv"})
+                             json={"table_id": table_id, "format": "parquet"})
     assert bad_export.status_code == 422
     assert client.post("/api/v1/imports", json={"table_id": table_id, "format": "jsonl", "content": "{}"}).status_code == 401
 
@@ -131,7 +147,7 @@ def test_import_records_per_line_failures_without_losing_valid_rows(settings):
     imported = client.post("/api/v1/imports", headers=auth(),
                            json={"table_id": table_id, "format": "jsonl", "content": content})
     assert imported.status_code == 202
-    state = client.get(f"/api/v1/imports/{imported.json()['data']['job_id']}", headers=auth()).json()["data"]
+    state = wait_terminal(client, f"/api/v1/imports/{imported.json()['data']['job_id']}")
     assert state["done"] == 5 and state["failed"] == 3
     codes = {result["error"]["code"] for result in state["results"] if result["status"] == "failed"}
     assert codes == {"UNKNOWN_COLUMN", "NULL_NOT_ALLOWED", "INTERNAL_ERROR"}
@@ -183,3 +199,81 @@ def test_cancel_after_completion_returns_conflict(settings):
     )
     assert duplicate.status_code == 200
     assert duplicate.json()["data"]["duplicate"] is True
+
+
+def test_csv_export_import_round_trip_preserves_types(settings):
+    client = make_client(settings)
+    created = client.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/导入导出/测试",
+            "name": "类型表",
+            "columns": [
+                {"name": "body", "type": "string", "nullable": False},
+                {"name": "score", "type": "float64", "nullable": True},
+                {"name": "count", "type": "int64", "nullable": True},
+                {"name": "flag", "type": "boolean", "nullable": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    table_id = created.json()["data"]["table_id"]
+    client.post(
+        f"/api/v1/tables/{table_id}/rows",
+        headers=auth(),
+        json={"values": {"body": "带类型行", "score": 0.91, "count": 3, "flag": True}},
+    )
+    export = client.post("/api/v1/exports", headers=auth(), json={"table_id": table_id, "format": "csv"})
+    assert export.status_code == 202
+    job_id = export.json()["data"]["job_id"]
+    wait_terminal(client, f"/api/v1/exports/{job_id}")
+    download = client.get(f"/api/v1/exports/{job_id}/download", headers=auth())
+    assert download.status_code == 200
+    csv_content = download.text
+    assert csv_content.splitlines()[0] == "body,score,count,flag"
+
+    target_created = client.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/导入导出/测试",
+            "name": "类型导入目标",
+            "columns": [
+                {"name": "body", "type": "string", "nullable": False},
+                {"name": "score", "type": "float64", "nullable": True},
+                {"name": "count", "type": "int64", "nullable": True},
+                {"name": "flag", "type": "boolean", "nullable": True},
+            ],
+        },
+    )
+    assert target_created.status_code == 201
+    target = target_created.json()["data"]["table_id"]
+    imported = client.post(
+        "/api/v1/imports",
+        headers=auth(),
+        json={"table_id": target, "format": "csv", "content": csv_content},
+    )
+    assert imported.status_code == 202, imported.text
+    state = wait_terminal(client, f"/api/v1/imports/{imported.json()['data']['job_id']}")
+    assert state["status"] == "completed" and state["failed"] == 0, json.dumps({k: state.get(k) for k in ('status', 'error', 'results', 'done')}, ensure_ascii=False)
+    row = client.get(f"/api/v1/tables/{target}/rows?limit=100", headers=auth()).json()["data"][0]
+    assert row["values"]["body"] == "带类型行"
+    assert row["values"]["score"] == 0.91 and type(row["values"]["score"]) is float
+    assert row["values"]["count"] == 3 and type(row["values"]["count"]) is int
+    assert row["values"]["flag"] is True
+
+
+def test_csv_import_rejects_unknown_header(settings):
+    client = make_client(settings)
+    table_id = create_table(client, "表头校验")
+    imported = client.post(
+        "/api/v1/imports",
+        headers=auth(),
+        json={"table_id": table_id, "format": "csv", "content": "body,nope\nx,y"},
+    )
+    assert imported.status_code == 202
+    state = wait_terminal(client, f"/api/v1/imports/{imported.json()['data']['job_id']}")
+    assert state["status"] == "failed"
+    assert "UNKNOWN_COLUMN" in (state["error"] or "")
+    assert client.get(f"/api/v1/tables/{table_id}/rows", headers=auth()).json()["data"] == []

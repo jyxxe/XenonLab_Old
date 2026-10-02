@@ -58,7 +58,7 @@ class BulkJobStore:
                     self._write(db, row["id"], output=None)
             self._prune(db)
 
-    def create(self, table_id, kind, payload, owner, batch_id=None):
+    def create(self, table_id, kind, payload, owner, batch_id=None, total=None):
         job_id = str(uuid4())
         stamp = time.time()
         with transaction(self.database) as db:
@@ -66,7 +66,7 @@ class BulkJobStore:
                 "INSERT INTO bulk_jobs(id,table_id,kind,batch_id,owner,payload,status,total,"
                 "done,failed,results,error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,0,0,'[]',NULL,?,?)",
                 (job_id, table_id, kind, batch_id, owner, json.dumps(payload), "queued",
-                 len(payload), stamp, stamp),
+                 len(payload) if total is None else total, stamp, stamp),
             )
             self._prune(db)
         return job_id

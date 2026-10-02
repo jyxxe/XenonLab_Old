@@ -3325,7 +3325,10 @@
           },
           "format": {
             "type": "string",
-            "const": "jsonl",
+            "enum": [
+              "jsonl",
+              "csv"
+            ],
             "title": "Format",
             "default": "jsonl"
           },
@@ -3381,7 +3384,10 @@
           },
           "format": {
             "type": "string",
-            "const": "jsonl",
+            "enum": [
+              "jsonl",
+              "csv"
+            ],
             "title": "Format",
             "default": "jsonl"
           },

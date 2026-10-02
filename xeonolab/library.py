@@ -1,3 +1,4 @@
+import csv
 import fcntl
 import hashlib
 import json
@@ -148,7 +149,7 @@ class BulkDelete(BaseModel):
 
 class ExportRequest(BaseModel):
     table_id: str
-    format: Literal["jsonl"] = "jsonl"
+    format: Literal["jsonl", "csv"] = "jsonl"
     include_deleted: bool = False
     batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
@@ -156,7 +157,7 @@ class ExportRequest(BaseModel):
 class ImportRequest(BaseModel):
     table_id: str
     content: str = Field(min_length=1)
-    format: Literal["jsonl"] = "jsonl"
+    format: Literal["jsonl", "csv"] = "jsonl"
     batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
@@ -182,6 +183,29 @@ class AttachmentBind(BaseModel):
 
 class ACLWrite(BaseModel):
     grants: dict[str, list[str]]
+
+
+def csv_value_coercion(column, raw):
+    """Convert a CSV cell to the schema-typed value for import (issue #84)."""
+    kind = column["type"]
+    if raw is None or raw == "":
+        return None
+    if kind in ("string", "text", "date", "datetime", "enum", "reference", "theorem_ref"):
+        return raw
+    if kind == "int64":
+        return int(raw)
+    if kind == "float64":
+        return float(raw)
+    if kind == "boolean":
+        lowered = raw.strip().lower()
+        if lowered in ("true", "1", "yes"):
+            return True
+        if lowered in ("false", "0", "no"):
+            return False
+        raise ValueError(f"invalid boolean {raw!r}")
+    if kind in ("json", "attachment_list"):
+        return json.loads(raw)
+    return raw
 
 
 def clean_path(path):
@@ -1041,16 +1065,21 @@ def create_app(settings=None):
         if job["owner"] != actor.sub and "xelibrary:admin" not in actor.scopes:
             raise APIError(403, "FORBIDDEN", "job belongs to another caller")
 
-    def _export_run(job_id, tid, actor, include_deleted):
-        """Write an ACL-filtered JSONL snapshot; only rows the owner can read are included."""
-        output = root / "exports" / f"{job_id}.jsonl"
+    def _export_run(job_id, tid, fmt, actor, include_deleted):
+        """Write an ACL-filtered snapshot (JSONL or CSV); only readable rows are included."""
+        suffix = "jsonl" if fmt == "jsonl" else "csv"
+        output = root / "exports" / f"{job_id}.{suffix}"
         output.parent.mkdir(parents=True, exist_ok=True)
         bulk_jobs.set_output(job_id, str(output))
         max_rows = int(os.getenv("XELIBRARY_EXPORT_MAX_ROWS", "100000"))
         done = 0
         try:
             table = authorize(actor, tid, "read")
-            with table_connect(tid) as db, output.open("w", encoding="utf-8") as handle:
+            with table_connect(tid) as db, output.open("w", encoding="utf-8", newline="") as handle:
+                columns_now = columns(db)
+                writer = csv.writer(handle) if fmt == "csv" else None
+                if fmt == "csv":
+                    writer.writerow([c["name"] for c in columns_now])
                 for raw in db.execute("SELECT * FROM data"):
                     if bulk_jobs.cancel_requested(job_id):
                         bulk_jobs.finish_cancelled(job_id)
@@ -1063,7 +1092,13 @@ def create_app(settings=None):
                     done += 1
                     if done > max_rows:
                         raise APIError(413, "EXPORT_TOO_LARGE", f"export exceeds {max_rows} rows")
-                    handle.write(json.dumps(decode(raw)) + "\n")
+                    if fmt == "jsonl":
+                        handle.write(json.dumps(decode(raw)) + "\n")
+                    else:
+                        writer.writerow(
+                            ["" if row["values"].get(c["name"]) is None else row["values"].get(c["name"])
+                             for c in columns_now]
+                        )
                     bulk_jobs.set_done(job_id, done)
             bulk_jobs.complete(job_id)
         except APIError as error:
@@ -1074,21 +1109,39 @@ def create_app(settings=None):
             output.unlink(missing_ok=True)
             bulk_jobs.fail(job_id, "export worker crashed")
 
-    def _import_run(job_id, tid, actor, lines):
+    def _import_run(job_id, tid, fmt, actor, lines):
         done = 0
         try:
-            for index, line in enumerate(lines):
+            if fmt == "csv":
+                csv_rows = list(csv.reader(lines))
+                header = csv_rows[0] if csv_rows else None
+                entries = csv_rows[1:]
+                with table_connect(tid) as schema_db:
+                    schema = columns(schema_db)
+                names = [c["name"] for c in schema]
+                if header and set(header) - set(names):
+                    bulk_jobs.fail(job_id, "UNKNOWN_COLUMN: unknown CSV header column")
+                    return
+            else:
+                entries = lines
+            for index, entry in enumerate(entries):
                 if bulk_jobs.cancel_requested(job_id):
                     bulk_jobs.finish_cancelled(job_id)
                     return
                 failed = False
                 try:
-                    values = json.loads(line)
-                    if not isinstance(values, dict):
-                        raise APIError(422, "INVALID_ROW", "line is not a JSON object")
-                    # exported rows carry the full snapshot; plain value objects also import
-                    if isinstance(values.get("values"), dict):
-                        values = values["values"]
+                    if fmt == "csv":
+                        values = {}
+                        for column, raw in zip(schema, entry):
+                            if column["name"] in header:
+                                values[column["name"]] = csv_value_coercion(column, raw)
+                    else:
+                        values = json.loads(entry)
+                        if not isinstance(values, dict):
+                            raise APIError(422, "INVALID_ROW", "line is not a JSON object")
+                        # exported rows carry the full snapshot; plain value objects also import
+                        if isinstance(values.get("values"), dict):
+                            values = values["values"]
                     authorize(actor, tid, "write")
                     with table_transaction(tid) as db:
                         validated = validate_values(columns(db), values)
@@ -1127,7 +1180,7 @@ def create_app(settings=None):
         job_id = bulk_jobs.create(body.table_id, "export",
                                   {"format": body.format, "include_deleted": body.include_deleted},
                                   actor.sub, body.batch_id)
-        background.add_task(_export_run, job_id, body.table_id, actor, body.include_deleted)
+        background.add_task(_export_run, job_id, body.table_id, body.format, actor, body.include_deleted)
         return JSONResponse(response(request, {"job_id": job_id, "status": "queued"}), status_code=202)
 
     @app.get("/api/v1/exports/{job_id}")
@@ -1163,9 +1216,13 @@ def create_app(settings=None):
         lines = [line for line in body.content.splitlines() if line.strip()]
         if not lines:
             raise APIError(422, "IMPORT_EMPTY", "no rows to import")
+        # CSV: the first line is the header, so total counts data rows only.
+        total = len(lines) - 1 if body.format == "csv" else len(lines)
+        if total <= 0:
+            raise APIError(422, "IMPORT_EMPTY", "no rows to import")
         job_id = bulk_jobs.create(body.table_id, "import", {"format": body.format, "lines": lines},
-                                  actor.sub, body.batch_id)
-        background.add_task(_import_run, job_id, body.table_id, actor, lines)
+                                  actor.sub, body.batch_id, total=total)
+        background.add_task(_import_run, job_id, body.table_id, body.format, actor, lines)
         return JSONResponse(response(request, {"job_id": job_id, "status": "queued", "total": len(lines)}), status_code=202)
 
     @app.get("/api/v1/imports/{job_id}")

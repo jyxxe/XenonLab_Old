@@ -382,6 +382,10 @@ def route_group(request, actor):
         return "embedding-quality"
     if "/embedding/" in path or "/embed/" in path or "/embeddings/" in path or path.endswith("/embeddings"):
         return "embedding-fast"
+    # Issue #84: polling an import/export job status is a light read; the bulk
+    # quota (10/min) is reserved for the heavy submission endpoints themselves.
+    if request.method == "GET" and ("/exports/" in path or "/imports/" in path):
+        return "interactive"
     if any(segment in path for segment in ("/bulk", "/import", "/export", "/index")):
         return "bulk"
     if any(
