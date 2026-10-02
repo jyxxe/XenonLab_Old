@@ -15,6 +15,8 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  LEGACY_XELIBRARY_APP_ID,
+  migrateLegacyAppReferences,
   minSizeOf,
   nextWindowId,
   restoreWindows,
@@ -61,13 +63,11 @@ export function DesktopShell({
   api,
   apiPage,
   apiRaw,
-  token,
   onLogout,
 }: {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
-  token: string;
   onLogout: () => Promise<void>;
 }) {
   const {push} = useToast();
@@ -112,10 +112,18 @@ export function DesktopShell({
       const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
       const [layout, stored] = await Promise.all([api('/users/me/layout'), api('/users/me/preferences')]);
       const available = mergeApps(registry as RegistryApp[], me.scopes || []);
+      const migratedLayout = migrateLegacyAppReferences(layout);
+      const migratedRecent = [...new Set(loadRecent().map(id => id === LEGACY_XELIBRARY_APP_ID ? 'knowledge' : id))].slice(0, 6);
+      setRecent(migratedRecent);
+      try {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(migratedRecent));
+      } catch {
+        /* Recent apps are cosmetic; private modes may disable storage. */
+      }
       const prefs: UserPreferences = {...defaultPreferences, ...stored};
       const known = (id: string) => available.find(app => app.id === id);
-      const storedDock = Array.isArray(layout.dock) ? layout.dock.filter((id: string) => known(id)) : [];
-      const nextDock = layout.dock_initialized || storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
+      const storedDock = Array.isArray(migratedLayout.dock) ? migratedLayout.dock.filter((id: string) => known(id)) : [];
+      const nextDock = migratedLayout.dock_initialized || storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
       setApps(available);
       setAccountScopes(Array.isArray(me.scopes) ? me.scopes : []);
       setDockIds(nextDock);
@@ -123,8 +131,8 @@ export function DesktopShell({
       setSubject(me.subject || '');
       setUserLabel(me.subject ? String(me.subject).slice(0, 8) : '本地账户');
       if (!loadedRef.current) {
-        setWindows(prefs.restore_windows === false ? [] : restoreWindows(layout.windows, known, viewport.current));
-        storedWindows.current = Array.isArray(layout.windows) ? layout.windows : [];
+        setWindows(prefs.restore_windows === false ? [] : restoreWindows(migratedLayout.windows, known, viewport.current));
+        storedWindows.current = Array.isArray(migratedLayout.windows) ? migratedLayout.windows : [];
         windowsEdited.current = false;
         loadedRef.current = true;
       }
@@ -424,17 +432,6 @@ export function DesktopShell({
     addEventListener('message', handler);
     return () => removeEventListener('message', handler);
   }, [windows, apps, preferences, push, openApp]);
-
-  // Relay the session token to the legacy XeLibrary origin that expects it.
-  useEffect(() => {
-    windows.forEach(win => {
-      const app = apps.find(item => item.id === win.app_id);
-      const frame = document.getElementById(`frame-${win.id}`) as HTMLIFrameElement | null;
-      if (app?.kind === 'iframe' && app.id === 'xelibrary' && app.origin === 'https://library.xenon.lan' && frame) {
-        frame.contentWindow?.postMessage({type: 'auth.session_changed', access_token: token}, app.origin);
-      }
-    });
-  }, [token, windows, apps]);
 
   const providers: CommandProvider[] = useMemo(
     () => [
