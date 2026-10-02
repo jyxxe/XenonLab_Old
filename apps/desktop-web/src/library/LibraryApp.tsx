@@ -298,7 +298,8 @@ export function LibraryApp({api, apiPage, apiRaw, intent}: {api: API; apiPage: A
     try {
       await apiPage('/index/reindex', {method: 'POST', body: JSON.stringify({table_id: table.id})});
       setNotice({tone: 'success', message: '索引任务已排队，等待 Embedding worker。'});
-      await reloadJobs();
+      // Refresh both sources so the Index tab reflects queued/running immediately.
+      await Promise.all([reloadJobs(), reloadIndexStatus()]);
     } catch (cause) {
       const info = describeError(cause, '重建索引');
       setNotice({tone: 'danger', message: info.message, code: info.code, requestId: info.requestId});

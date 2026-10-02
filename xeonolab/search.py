@@ -313,8 +313,17 @@ def install(
                     "SELECT COUNT(DISTINCT row_id) FROM __xl_changes WHERE revision > indexed_revision"
                 ).fetchone()[0]
         latest = jobs.list(table_id=tid, limit=1)
-        last_job = latest[0] if latest else None
-        job_status = (last_job or {}).get("status")
+        raw_last = latest[0] if latest else None
+        job_status = (raw_last or {}).get("status")
+        if raw_last is None:
+            last_job = None
+        elif raw_last.get("owner") == actor.sub:
+            # The caller's own job carries full metadata, including errors.
+            last_job = raw_last
+        else:
+            # Shared-table readers only get a minimal summary: no job id, owner
+            # subject, error payload or other caller-identifying metadata.
+            last_job = {key: raw_last[key] for key in ("status", "created_at") if key in raw_last}
         if job_status == "queued":
             state = "queued"
         elif job_status == "running":

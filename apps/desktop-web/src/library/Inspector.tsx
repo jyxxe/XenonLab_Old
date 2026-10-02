@@ -401,7 +401,14 @@ export function Inspector({
 
         {tab === 'index' && (
           <div className="inspector-index">
-            {serverStatus ? (
+            {indexStatusError ? (
+              <ErrorState
+                title="每表索引状态读取失败"
+                requestId={describeError(indexStatusError).requestId} errorCode={describeError(indexStatusError).code}
+                message={describeError(indexStatusError).message}
+                onRetry={onReloadIndexStatus}
+              />
+            ) : serverStatus ? (
               <>
                 <dl className="inspector-meta">
                   <div><dt>状态</dt><dd><Badge tone={serverStatus.tone}>{serverStatus.label}</Badge></dd></div>

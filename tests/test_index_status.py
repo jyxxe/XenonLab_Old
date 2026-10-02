@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from xeonolab.services import create_app
 
-from .conftest import auth
+from .conftest import auth, put_acl
 from .test_search import FakeEmbeddingClient, tiny_tokenizer
 
 
@@ -74,7 +74,37 @@ def test_index_status_reports_failed_job(settings, tmp_path, monkeypatch):
     assert reindex.status_code == 202
     job = client.get(f"/api/v1/jobs/{reindex.json()['data']['job_id']}", headers=auth("admin"))
     assert job.json()["data"]["status"] == "failed"
-    failed = client.get(f"/api/v1/tables/{table_id}/index-status", headers=auth()).json()["data"]
+    # The job owner (admin) sees the full job object including the error payload.
+    failed = client.get(f"/api/v1/tables/{table_id}/index-status", headers=auth("admin")).json()["data"]
     assert failed["state"] == "failed"
     assert failed["last_job"]["status"] == "failed"
     assert failed["last_job"]["error"]
+
+
+def test_index_status_last_job_is_owner_scoped(settings, tmp_path, monkeypatch):
+    """PR review: shared-table readers must not receive another caller's job
+    object (owner subject, job id, error metadata) through index-status."""
+    client = make_client(settings, tmp_path, monkeypatch)
+    table_id = create_table(client)
+    grant = put_acl(client, "table", table_id, {"bob": ["read"]})
+    assert grant.status_code == 200, grant.text
+    client.post(f"/api/v1/tables/{table_id}/rows", headers=auth(), json={"values": {"body": "alpha beta"}})
+    reindex = client.post("/api/v1/index/reindex", headers=auth("admin"), json={"table_id": table_id})
+    assert reindex.status_code == 202
+    job_id = reindex.json()["data"]["job_id"]
+
+    owner_view = client.get(f"/api/v1/tables/{table_id}/index-status", headers=auth("admin")).json()["data"]
+    assert owner_view["last_job"]["job_id"] == job_id
+    assert owner_view["last_job"]["owner"] == "admin"
+
+    reader_view = client.get(f"/api/v1/tables/{table_id}/index-status", headers=auth("bob")).json()["data"]
+    # Same table-level state derivation, but the job summary is minimal.
+    assert reader_view["state"] == owner_view["state"]
+    assert reader_view["last_job"]["status"] in {"queued", "running", "completed", "failed"}
+    assert "job_id" not in reader_view["last_job"]
+    assert "owner" not in reader_view["last_job"]
+    assert "error" not in reader_view["last_job"]
+    # When no job exists at all the summary stays absent for everyone.
+    fresh_table = create_table(client, name="无任务表")
+    put_acl(client, "table", fresh_table, {"bob": ["read"]})
+    assert client.get(f"/api/v1/tables/{fresh_table}/index-status", headers=auth("bob")).json()["data"]["last_job"] is None
