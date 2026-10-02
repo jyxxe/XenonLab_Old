@@ -9,14 +9,16 @@ type Attachment={attachment_id:string;row_id:string;filename:string;media_type:s
 export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChanged}:{tableId:string;rowId:string;api:API;apiPage?:APIPage;apiRaw:APIRaw;canAttach:boolean;onChanged:()=>Promise<void>}){
  const [items,setItems]=useState<Attachment[]>([]),[message,setMessage]=useState(''),[sourceId,setSourceId]=useState(''),[busy,setBusy]=useState(false),[progress,setProgress]=useState<number|null>(null);
  const [resume,setResume]=useState<{file:File;uploadId:string;nextPart:number;partCount:number;partSize:number}|null>(null);
+ const [listStatus,setListStatus]=useState<'loading'|'loaded'|'error'>('loading'),[listError,setListError]=useState('');
  const request=useRef(0),active=useRef('');
  const key=`${tableId}:${rowId}`;
  async function load(){
   const current=++request.current;
+  if(active.current===key){setListStatus('loading');setListError('')}
   try{
    const result=apiPage?await apiPage(`/tables/${tableId}/rows/${rowId}/attachments`):{data:await api(`/tables/${tableId}/rows/${rowId}/attachments`)};
-   if(active.current===key&&request.current===current){setItems(result.data);setMessage('')}
-  }catch(e){if(active.current===key&&request.current===current)setMessage(String(e))}
+   if(active.current===key&&request.current===current){setItems(result.data);setMessage('');setListStatus('loaded')}
+  }catch(e){if(active.current===key&&request.current===current){setListStatus('error');setListError(String(e))}}
  }
  useEffect(()=>{active.current=key;void load();return()=>{active.current='';++request.current}},[tableId,rowId]);
  async function transferLarge(file:File, session?:UploadSession){
@@ -89,7 +91,9 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChange
   {canAttach&&<><label>上传附件（大于 16 MiB 时分片，最大 2 GiB）<input type="file" disabled={busy||Boolean(resume)} onChange={event=>{const file=event.currentTarget.files?.[0];if(file){setResume(null);void upload(file)}event.currentTarget.value=''}}/></label>
    {resume&&<><p role="status">当前分片会话未完成。请继续重试或取消后再选择其他文件。</p><button disabled={busy} onClick={()=>void upload(resume.file,resume)}>继续重试分片上传</button><button disabled={busy} onClick={()=>void cancelUpload()}>取消分片上传</button></>}
    <form onSubmit={event=>{event.preventDefault();void bind()}}><label>关联此表中已有附件 ID<input value={sourceId} onChange={event=>setSourceId(event.target.value)} placeholder="附件 ID"/></label><button disabled={busy||!sourceId.trim()}>关联附件</button></form></>}
-  {!items.length&&<p>当前记录没有附件。</p>}
+  {listStatus==='loading'&&<p role="status">正在读取附件列表…</p>}
+  {listStatus==='error'&&<div><p role="alert">读取附件列表失败：{listError}</p><button disabled={busy} onClick={()=>void load()}>重试读取附件</button></div>}
+  {listStatus==='loaded'&&!items.length&&<p>当前记录没有附件。</p>}
   <ul>{items.map(item=><li key={item.attachment_id}><div><strong>{item.filename}</strong><small>{item.media_type} · {item.size.toLocaleString()} 字节 · {new Date(item.created_at).toLocaleString()}</small><small>{item.attachment_id}</small></div><button disabled={busy} onClick={()=>void download(item)}>鉴权下载</button>{canAttach&&<button disabled={busy} onClick={()=>void unbind(item)}>解除关联</button>}</li>)}</ul>
  </section>
 }
