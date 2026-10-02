@@ -9,8 +9,15 @@ const sections = [
   ['hfcache', 'HF Cache'], ['agents', 'Agents'], ['deployments', '部署'], ['network', '网络'], ['audit', '审计'],
 ];
 const statusLabels: Record<string,string> = {queued:'排队',running:'运行中',claimed:'已领取',expired:'领取已过期 · 可重领',completed:'已完成',failed:'失败',blocked:'阻塞'};
+const watermarkLabels: Record<string,string> = {normal:'正常',evict_low_priority:'建议淘汰低优先级',stop_prefetch:'停止预取',retain_protected:'仅保留受保护项'};
+const watermarkTone = (level?:string) => level==='normal' ? 'success' : level==='retain_protected' ? 'danger' : 'warning';
+function formatBytes(bytes:number){
+  if(!Number.isFinite(bytes)||bytes<0)return '—';
+  const units=['B','KiB','MiB','GiB','TiB'];let value=bytes,index=0;
+  while(value>=1024&&index<units.length-1){value/=1024;index++}
+  return `${index>0&&value<100?value.toFixed(2):Math.round(value)} ${units[index]}`;
+}
 const unavailable: Record<string,[string,string]> = {
-  storage:['容量信息尚未接入','知识库表数量不能代表磁盘容量。当前桌面没有磁盘或池水位 API。'],
   hfcache:['HF Cache 尚未接入桌面','HF Cache 服务使用独立 API；当前桌面没有受控的状态读取入口。'],
   deployments:['部署状态尚未接入桌面','当前桌面没有发布历史 API。部署完成状态由发布协调器确认。'],
 };
@@ -26,6 +33,8 @@ export function System(props: AppViewProps) {
   const [cursor,setCursor] = useState<string|null>(null);
   const [loadingMore,setLoadingMore] = useState(false);
   const [ready,setReady] = useState<{service:string;ready:boolean}|null>(null);
+  const [storage,setStorage] = useState<any|null>(null);
+  const [storageUnavailable,setStorageUnavailable] = useState(false);
   const generation=useRef(0);
   const [online,setOnline] = useState(navigator.onLine);
 
@@ -38,9 +47,9 @@ export function System(props: AppViewProps) {
   useEffect(() => {
     let active = true;
     generation.current += 1;
-    setError('');setRows([]);setCursor(null);setReady(null);setLoadingMore(false);
+    setError('');setRows([]);setCursor(null);setReady(null);setLoadingMore(false);setStorage(null);setStorageUnavailable(false);
     const path = tab === 'embedding' ? '/jobs?limit=50' : tab === 'agents' ? '/work?limit=100' : tab === 'audit' ? '/audit?limit=100' : '';
-    if (!path && tab !== 'services') {setLoading(false);return () => {generation.current += 1}}
+    if (!path && tab !== 'services' && tab !== 'storage') {setLoading(false);return () => {generation.current += 1}}
     setLoading(true);
     (async () => {
       try {
@@ -48,6 +57,20 @@ export function System(props: AppViewProps) {
           const response = await fetch('/health/ready');
           const body = await response.json();
           if (active) setReady({service:body.service || 'desktop-web',ready:response.ok});
+        } else if (tab === 'storage') {
+          const me = await api('/users/me');
+          if (!me.scopes?.includes('hf-cache:read')) throw new Error('当前身份需要 hf-cache:read 权限才能查看缓存池水位。');
+          try {
+            const status = await api('/cache/storage');
+            if (active) setStorage(status);
+          } catch (cause) {
+            const code = (cause as {code?:string} | null)?.code;
+            if (code === 'STORAGE_TELEMETRY_UNAVAILABLE' || /telemetry unavailable/i.test(String(cause))) {
+              if (active) setStorageUnavailable(true);
+              return;
+            }
+            throw cause;
+          }
         } else {
           const me = await api('/users/me');
           const required = tab === 'agents' ? 'dev:read' : 'xelibrary:admin';
@@ -94,7 +117,16 @@ export function System(props: AppViewProps) {
             } catch(cause) {if(generation.current===currentGeneration)setError(String(cause))}
             finally {if(generation.current===currentGeneration)setLoadingMore(false)}
           }}>{loadingMore ? '读取中…' : '加载更多'}</Button>}
-        </> : null}
+        </> : tab==='storage' ? storage ? <>
+          <dl className="dev-meta">
+            <div><dt>共享物理池</dt><dd><Badge tone={watermarkTone(storage.watermark)}>{watermarkLabels[storage.watermark]||storage.watermark||'未知'}</Badge> {storage.pool||'未知池'} · 池用量 {storage.used_percent}%</dd></div>
+            <div><dt>物理池用量</dt><dd>{formatBytes(storage.pool_used_bytes)} / {formatBytes(storage.pool_total_bytes)}</dd></div>
+            <div><dt>HF-cache guest 文件系统</dt><dd>{formatBytes(storage.guest_used_bytes)} / {formatBytes(storage.guest_total_bytes)}</dd></div>
+            <div><dt>HF-cache 缓存占用</dt><dd>{formatBytes(storage.cached_bytes)}</dd></div>
+            <div><dt>采样时间</dt><dd>{storage.sampled_at ? new Date(storage.sampled_at).toLocaleString() : '—'}</dd></div>
+          </dl>
+          <p className="muted">物理池与 guest 文件系统是同一共享池的两个视图，不能相加；空余空间取两者较小值。上游遥测缺失或过期时此处保持不可用，不展示缓存数字。</p>
+        </> : <EmptyState title="缓存池水位暂不可用" description="受信遥测缺失、过期或上游不可达；为避免误导，此处不展示任何缓存数字。可点击刷新重试。"/> : null}
       </>}
     </section>
   </div>;
