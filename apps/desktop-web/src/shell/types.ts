@@ -25,6 +25,8 @@ export type DockPreference = 'small' | 'medium' | 'large';
 export type WallpaperMode = 'solid' | 'gradient' | 'image';
 export type WidgetId = 'clock' | 'status' | 'calendar' | 'app-shortcuts' | 'work' | 'notes' | 'search';
 
+export type PreferenceApplyOptions = {previewOnly?: boolean; keepalive?: boolean};
+
 export type UserPreferences = {
   theme: 'system' | 'light' | 'dark';
   accent: 'blue' | 'purple' | 'green' | 'orange';

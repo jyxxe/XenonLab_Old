@@ -4,7 +4,7 @@ import {Permissions} from './Permissions';
 import {AppRegistry} from './AppRegistry';
 import {DesktopPreferences} from './DesktopPreferences';
 import {ACLManager} from './ACLManager';
-import type {DesktopApp, UserPreferences} from './shell/types';
+import type {DesktopApp, PreferenceApplyOptions, UserPreferences} from './shell/types';
 import type {APIRaw} from './shell/types';
 
 type API = (path: string, init?: RequestInit) => Promise<any>;
@@ -26,7 +26,7 @@ export function Settings({
   movePinned: (id: string, direction: number) => void;
   saveLayout: () => Promise<void>;
   preferences: UserPreferences;
-  applyPreferences: (preferences: Partial<UserPreferences>) => Promise<void>;
+  applyPreferences: (preferences: Partial<UserPreferences>, options?: PreferenceApplyOptions) => Promise<void>;
   refreshApps: () => Promise<void>;
 }) {
   const [tab, setTab] = useState('appearance');
