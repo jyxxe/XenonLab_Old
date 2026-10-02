@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, ErrorState, IconButton, Input, Select, Skeleton, Spinner, StatusDot, Tabs, Textarea} from '../design-system/primitives';
 import {Attachments} from '../Attachments';
 import {changedFields, describeError, indexStatusFromJobs, relativeTime} from './logic.js';
@@ -73,12 +73,24 @@ export function Inspector({
   const [acl, setAcl] = useState<{table: any; path: any; row: any} | null>(null);
   const [aclError, setAclError] = useState<unknown>(null);
 
+  // A record switch invalidates every pending mutation, even when returning to A.
+  const context = JSON.stringify([table.id, row?._row_id ?? null]);
+  const mutation = useRef({context, generation: 0});
+  if (mutation.current.context !== context) {
+    mutation.current = {context, generation: mutation.current.generation + 1};
+  }
+  useEffect(() => {
+    setBusy(false);
+    setError(null);
+    setMessage('');
+  }, [context]);
+  useEffect(() => () => { mutation.current.generation += 1; }, []);
+
   const canWrite = scopes.includes('xelibrary:write');
   const canAttach = scopes.includes('xelibrary:attach');
 
   useEffect(() => {
     setError(null);
-    setMessage('');
     setCompare(null);
     if (row) setDraft({...row.values});
     else setDraft(Object.fromEntries(columns.map(column => [column.name, column.default_value])));
@@ -134,45 +146,48 @@ export function Inspector({
   }
 
   async function submit() {
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     setMessage('');
     try {
       if (row) await onSave(draft, row._revision);
       else await onCreate(draft);
-      setMessage(row ? '已保存' : '记录已创建');
+      if (generation === mutation.current.generation) setMessage(row ? '已保存' : '记录已创建');
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
   async function remove() {
     if (!row) return;
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     try {
       await onDelete(row._revision);
-      setMessage('记录已软删除，历史仍然保留');
+      if (generation === mutation.current.generation) setMessage('记录已软删除，历史仍然保留');
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
   async function restore(revision: number) {
     if (!row) return;
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     try {
       await onRestore(revision, row._revision);
-      setMessage(`已从 r${revision} 恢复；这会创建一个新的 revision，不会覆盖历史`);
+      if (generation === mutation.current.generation) setMessage(`已从 r${revision} 恢复；这会创建一个新的 revision，不会覆盖历史`);
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
