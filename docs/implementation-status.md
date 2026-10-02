@@ -245,3 +245,7 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #71 Dashboard 知识表加载状态（2026-10-01，已部署）
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
+
+### Issue #72 子项：收藏/最近跨设备持久化（zcode 本地交付）
+
+分支 `zcode/issue-72-prefs-sync`（基于 `e3c1b30`）：桌面偏好新增规范化 `library_recents`/`library_favorites`（条目仅保留 kind/id/title/at、标题截断 200、列表上限 50、无效条目丢弃，PATCH/GET/重启持久化、账号隔离）；前端 `useLibraryPrefs` 挂载时把服务端副本与本地缓存按 `kind:id` 合并（保留较新时间戳，recent 按时间排序），remember/toggle 变更经 PATCH 推回服务器，localStorage 继续作离线缓存。新增 1 项桌面测试（往返/清洗/隔离/重启）与 1 项 logic 合并测试（前端 46 项、后端 384 项通过）。
