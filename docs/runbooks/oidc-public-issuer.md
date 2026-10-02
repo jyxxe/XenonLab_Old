@@ -62,6 +62,12 @@ firewall state:
   `OIDC_ISSUER` during migration so old session rows and the rollback path retain
   their known issuer.
 
+`OIDC_ROLE_SCOPES_JSON` is generated from the single checked-in policy in
+`xeonolab.role_scopes.OIDC_ROLE_SCOPES`. The staging helper exports that exact
+mapping and rejects payloads that differ from the shared policy; it updates
+only the two issuer maps and this role-map variable in each service env, while
+preserving all other entries and file metadata.
+
 Never put client secrets, signing private keys, or tokens in these maps or in
 source control. The existing `OIDC_PUBLIC_KEY`, audience, CA, and private
 credential-file handling remain separate.
@@ -73,19 +79,29 @@ first take protected, restorable copies of the current Keycloak environment and
 realm files, Web 101 service configuration, and the relevant service
 configuration files. Do not print secret-bearing files into a terminal log.
 
-1. Save protected, restorable copies of the six current service env files before
-   staging. Run the normal `scripts/stage_release.py` path. It extracts only
-   `OIDC_ISSUERS_BY_ORIGIN_JSON` and `OIDC_TOKEN_URLS_JSON` from the generated
-   desktop-web env file, sends that map-only payload to the fixed service nodes,
-   and atomically updates those two variables in `desktop-web`, `xelibrary`,
-   `tool-gateway`, `llm-gateway`, `embedding`, and `dev-agent`. All other env
-   entries and file ownership/mode are preserved. Each file replacement is
-   atomic, but the six files and multiple nodes are not one transaction. If any
-   staging step fails, do not activate: rerun staging to completion or restore
-   the saved configuration snapshots first. Staging does not restart services;
-   activation restarts them on the new release. Verify each health check and
-   confirm that JWTs from the existing IP issuer still pass while an
-   unconfigured issuer is rejected.
+1. **Protected release boundary:** the normal DevAgent protected-release path
+   uses the fixed `infra/devagent/stage_receiver.py` to stage an immutable
+   application archive and dependencies. It does not install or update
+   `/etc/xeonolab/*.env`; activation restarts services but leaves those external
+   environment files unchanged. A role-map change therefore requires a
+   separately reviewed and guarded root configuration rollout with protected
+   backups, exact shared-policy validation, atomic per-file replacement,
+   service health checks, and a tested restore path. Do not assume this helper
+   or an application release updates production role grants, and do not extend
+   the fixed staging receiver to perform root config writes.
+
+   The separate `scripts/stage_release.py` operator helper can stage the
+   generated issuer maps and shared role map into service env files when it is
+   explicitly selected by that approved configuration procedure. It updates
+   only `OIDC_ISSUERS_BY_ORIGIN_JSON`, `OIDC_TOKEN_URLS_JSON`, and
+   `OIDC_ROLE_SCOPES_JSON` in `desktop-web`, `xelibrary`, `deploy-gateway`,
+   `tool-gateway`, `llm-gateway`, `embedding`, and `dev-agent`; all other env
+   entries and file ownership/mode are preserved. Each replacement is atomic,
+   but the seven files and multiple nodes are not one transaction. Save
+   protected restorable copies first. If any step fails, do not activate; rerun
+   staging to completion or restore all saved snapshots. Staging does not
+   restart services. Verify every affected health check and confirm JWTs from
+   the existing IP issuer still pass while an unconfigured issuer is rejected.
 2. On the separate Auth 109 deployment, apply the dynamic-host Keycloak
    configuration and exact realm callback URIs through the authorized operator
    process, then restart Keycloak. This VM is outside the generic application
