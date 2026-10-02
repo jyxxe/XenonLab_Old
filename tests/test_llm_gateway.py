@@ -152,6 +152,8 @@ def test_sse_frame_validation_accepts_chat_chunks_tool_calls_and_heartbeats():
     ) == "data"
     assert _sse_frame_kind(b"data: not-json\n\n") == "malformed"
     assert _sse_frame_kind(b'data: {"choices":[]}\n\n') == "data"
+    deeply_nested = b"data: " + b"[" * 1200 + b"0" + b"]" * 1200 + b"\n\n"
+    assert _sse_frame_kind(deeply_nested) == "malformed"
 
 
 def test_streaming_rejects_unknown_model_and_missing_llm_scope(settings, monkeypatch):
@@ -735,3 +737,17 @@ def test_stream_sanitizes_provider_sse_errors_and_enforces_byte_limit(settings, 
     assert b'"code":"PROVIDER_ERROR"' in response.content
     assert b"[DONE]" not in response.content
     assert oversized.closed is True
+
+    monkeypatch.setenv("LLM_STREAM_MAX_RESPONSE_BYTES", "4096")
+    deeply_nested = ProviderStream([b"data: " + b"[" * 1200 + b"0" + b"]" * 1200 + b"\n\n"])
+    response_stream = deeply_nested
+    app = create_app("llm-gateway", settings)
+    response = TestClient(app).post(
+        "/v1/chat/completions", headers=auth(), json={"model": "deepseek-flash", "stream": True}
+    )
+    assert response.status_code == 200
+    assert b'"code":"PROVIDER_ERROR"' in response.content
+    assert b"[DONE]" not in response.content
+    assert deeply_nested.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8

@@ -46,7 +46,7 @@ def _sse_frame_kind(frame):
         return "done"
     try:
         payload = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return "malformed"
     if isinstance(payload, dict) and "error" in payload:
         return "error"
