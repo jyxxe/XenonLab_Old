@@ -372,7 +372,17 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     const wallpaperInput = await cdp.call('DOM.querySelector', {nodeId: documentNode.root.nodeId, selector: 'input[aria-label="选择自定义壁纸"]'});
     await cdp.call('DOM.setFileInputFiles', {files: [wallpaperPath], nodeId: wallpaperInput.nodeId});
     await waitFor(() => cdp.evaluate("window.shellFixture.preferences.wallpaper==='custom'"), 'custom wallpaper choice persisted through API');
-    await waitFor(() => cdp.evaluate("Boolean(document.documentElement.style.getPropertyValue('--custom-wallpaper-image'))"), 'saved wallpaper loaded for shell background');
+    await waitFor(() => cdp.evaluate("document.querySelector('.desktop[data-wallpaper-custom=\"image\"]')?.style.backgroundImage.includes('blob:')"), 'saved wallpaper loaded for shell background');
+    const renderedWallpaper = await cdp.evaluate(`(async () => {
+      const background = getComputedStyle(document.querySelector('.desktop')).backgroundImage;
+      const url = background.match(/url\\(["']?(blob:[^"')]+)["']?\\)/)?.[1];
+      if (!url) return false;
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return image.naturalWidth > 0 && image.naturalHeight > 0;
+    })()`);
+    assert.equal(renderedWallpaper, true, 'the rendered account wallpaper decodes in the browser');
     assert.ok(await cdp.evaluate("window.shellFixture.calls.some(call=>call.method==='PUT'&&call.path==='/users/me/wallpaper')"), 'wallpaper upload uses authenticated server API');
     await cdp.call('Emulation.setDeviceMetricsOverride', {width: 390, height: 844, deviceScaleFactor: 1, mobile: true});
     const mobileWallpaperControl = await cdp.evaluate("(() => {const input=document.querySelector('input[aria-label=\"选择自定义壁纸\"]');input.scrollIntoView({block:'center'});const rect=input.getBoundingClientRect();return {left:rect.left,right:rect.right,width:innerWidth}})()");

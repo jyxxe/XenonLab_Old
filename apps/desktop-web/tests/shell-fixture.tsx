@@ -28,6 +28,7 @@ const preferences = stored('preferences', {
   theme: 'dark',
   accent: 'blue',
   wallpaper: 'aurora',
+  custom_wallpaper_available: false,
   timezone: 'UTC',
   widgets: ['clock', 'status'],
   shortcut_apps: [],
@@ -103,14 +104,21 @@ const apiPage = async (path: string, init?: RequestInit) => {
 };
 const apiRaw = async (path: string, init?: RequestInit) => {
   if (path === '/users/me/wallpaper' && (!init?.method || init.method === 'GET')) {
-    return new Response(new Blob(['synthetic-but-server-backed-fixture']), {status: 200, headers: {'Content-Type': 'image/webp'}});
+    if (!preferences.custom_wallpaper_available) return new Response(null, {status: 404});
+    const image = Uint8Array.from(atob('UklGRjQAAABXRUJQVlA4ICgAAACQAQCdASoCAAIAAMASJQBOl0AAcwAA/v5b3/87bUdT4y/1te28MKAA'), char => char.charCodeAt(0));
+    return new Response(image, {status: 200, headers: {'Content-Type': 'image/webp'}});
   }
   if (path === '/users/me/wallpaper' && init?.method === 'PUT') {
     calls.push({method: 'PUT', path, body: {contentType: new Headers(init.headers).get('Content-Type')}});
+    preferences.custom_wallpaper_available = true;
+    sessionStorage.setItem('shell-fixture:preferences', JSON.stringify(preferences));
     return new Response(JSON.stringify({data: {wallpaper: 'custom'}}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   if (path === '/users/me/wallpaper' && init?.method === 'DELETE') {
     calls.push({method: 'DELETE', path, body: null});
+    preferences.custom_wallpaper_available = false;
+    if (preferences.wallpaper === 'custom' && preferences.wallpaper_mode === 'image') preferences.wallpaper = 'aurora';
+    sessionStorage.setItem('shell-fixture:preferences', JSON.stringify(preferences));
     return new Response(JSON.stringify({data: {deleted: true, wallpaper: 'aurora'}}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   const data = await api(path, init);
