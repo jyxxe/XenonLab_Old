@@ -38,6 +38,7 @@ const ROWS = Array.from({length: 100}, (_, index) => ({
 }));
 
 const state = {
+  subject: new URLSearchParams(location.search).get('subject') === '__none__' ? '' : (new URLSearchParams(location.search).get('subject') || 'fixture-user'),
   conflict: false,
   slow: false,
   denied: false,
@@ -64,7 +65,7 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   const clean = url.pathname;
 
   if (clean === '/users/me') {
-    return {data: {subject: 'fixture-user', scopes: ['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'dev:read']}, meta: {}};
+    return {data: {subject: state.subject || null, scopes: ['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'dev:read']}, meta: {}};
   }
   if (clean === '/tables' && method === 'GET') {
     return {data: [

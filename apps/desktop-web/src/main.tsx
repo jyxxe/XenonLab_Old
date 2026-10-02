@@ -28,6 +28,7 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
   const [sessionStatus, setSessionStatus] = useState(initialSessionState);
+  const [authEpoch, setAuthEpoch] = useState(0);
   const sessionStatusRef = useRef(initialSessionState);
   const accessRef = useRef(emptyAccess());
   const refreshRef = useRef<Promise<{token: string}> | null>(null);
@@ -60,7 +61,18 @@ function App() {
     const handler = (event: MessageEvent) => {
       const trusted = ['https://xenon.lan', 'https://192.168.0.101:9443', 'https://xenon.jyxxe.com'];
       if (event.source !== parent || !trusted.includes(event.origin) || event.data?.type !== 'auth.session_changed' || typeof event.data.access_token !== 'string') return;
+      sessionGenerationRef.current+=1;
+      refreshRef.current=null;
+      retryNotBeforeRef.current=0;
+      setRetryNotBefore(0);
+      for(const pending of pendingRequestsRef.current)pending.reject(new APIRequestError('会话已更改',0,'SESSION_CHANGED'));
+      pendingRequestsRef.current=[];
+      persistentRef.current=false;
+      accessRef.current=emptyAccess();
+      tokenRef.current=event.data.access_token;
+      setPersistent(false);
       setToken(event.data.access_token);
+      setAuthEpoch(value=>value+1);
     };
     addEventListener('message', handler);
     return () => removeEventListener('message', handler);
@@ -81,6 +93,7 @@ function App() {
           tokenRef.current = next.token;
           setPersistent(true);
           setToken(next.token);
+          setAuthEpoch(value=>value+1);
           transition({type: 'restored'});
         } else transition({type: 'no-session'});
       } catch (e) {
@@ -372,6 +385,7 @@ function App() {
     setPersistent(false);
     setToken('');
     setConnected(false);
+    setAuthEpoch(value=>value+1);
     transition({type: 'user-logout'});
     try {if(wasPersistent)await logout()}
     catch {/* the local session is cleared even when the provider is unreachable */}
@@ -384,6 +398,7 @@ function App() {
       api={api}
       apiPage={apiPage}
       apiRaw={apiRaw}
+      authEpoch={authEpoch}
       apps={[]}
       openApp={() => undefined}
       notify={() => undefined}

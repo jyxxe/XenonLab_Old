@@ -169,7 +169,7 @@ test('recent/favorites helpers stay bounded and deduplicate', () => {
   assert.equal(favorites.length, 1);
   assert.deepEqual(toggleFavorite(favorites, {kind: 'table', id: 'a', title: 'A', at: 1}), []);
   assert.notEqual(libraryPrefsStorageKey('subject:one', 'recent'), libraryPrefsStorageKey('subject:two', 'recent'));
-  assert.equal(libraryPrefsStorageKey(null, 'favorites'), 'xeonolab.library.anonymous.favorites');
+  assert.equal(libraryPrefsStorageKey(null, 'favorites'), null);
 });
 
 test('changedFields, rowHasAttachment, withOffset, and formatters behave', () => {

@@ -23,6 +23,7 @@ export function LibraryApp({
   apps,
   openApp,
   notify,
+  authEpoch = 0,
 }: {
   api: API;
   apiPage: APIPage;
@@ -31,12 +32,13 @@ export function LibraryApp({
   apps?: DesktopApp[];
   openApp?: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
   notify?: (toast: {title: string; tone?: 'info' | 'success' | 'danger'}) => void;
+  authEpoch?: number;
 }) {
-  const {scopes, subject} = useScopes(api);
+  const {scopes, subject, loaded: identityLoaded} = useScopes(api, authEpoch);
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
   const search = useSearch(apiPage);
-  const query = useQueryConsole(apiPage);
+  const query = useQueryConsole(apiPage, subject, identityLoaded && Boolean(subject), authEpoch);
   const theorems = useTheorems(apiPage);
   const prefs = useLibraryPrefs(subject);
 
@@ -445,7 +447,15 @@ export function LibraryApp({
             running={query.running}
             validating={query.validating}
             duration={query.duration}
-            onRun={text => void query.run(text)}
+            recent={query.recent}
+            draftStatus={query.draftStatus}
+            draftMessage={query.draftMessage}
+            queryEnabled={identityLoaded && Boolean(subject)}
+            onLoadRecent={query.loadRecent}
+            onDeleteRecent={query.deleteRecent}
+            onClearRecent={query.clearRecent}
+            onRetryStorage={query.retryStorage}
+            onRun={(text, remember) => void query.run(text, remember)}
             onValidate={text => void query.validate(text)}
             onOpenRow={(tableId, rowId) => void openRow(tableId, rowId)}
             tableName={tableName}
