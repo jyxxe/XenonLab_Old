@@ -174,6 +174,7 @@ DEFAULT_RATE_LIMITS = {
     "agent": {"requests": 60, "window_seconds": 60},
     "embedding-fast": {"requests": 60, "window_seconds": 60},
     "embedding-quality": {"requests": 6, "window_seconds": 60},
+    "lean-verify": {"requests": 10, "window_seconds": 60},
 }
 
 
@@ -382,6 +383,8 @@ def route_group(request, actor):
         return "embedding-quality"
     if "/embedding/" in path or "/embed/" in path or "/embeddings/" in path or path.endswith("/embeddings"):
         return "embedding-fast"
+    if path.startswith("/api/v1/lean/"):
+        return "lean-verify"
     if any(segment in path for segment in ("/bulk", "/import", "/export", "/index")):
         return "bulk"
     if any(
