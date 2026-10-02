@@ -851,3 +851,69 @@ def test_admin_complete_closes_queue_hygiene_gaps(settings):
         events = [dict(r)["event"] for r in db.execute(
             "SELECT event FROM work_audit WHERE work_id=?", (expired["id"],))]
     assert "work.admin_completed" in events
+
+
+def test_admin_complete_rejects_blocked_and_persists_closeout(settings):
+    """Issue #91 review: blocked items must be reconciled first, and an admin
+    close-out survives newer open-webhook events for its issue."""
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+
+    conflicted = create(411, "Source conflict item")
+    closeout = create(412, "Admin closed-out item")
+    reopenable = create(413, "Reopen after close")
+
+    # blocked (source conflict) items are refused until reconciled
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET status='blocked',holder=NULL,expires=0 WHERE id=?", (conflicted["id"],))
+        db.commit()
+    refusal = client.post(f"/api/v1/work/{conflicted['id']}/admin-complete", headers=auth())
+    assert refusal.status_code == 409
+    assert refusal.json()["error"]["code"] == "SYNC_CONFLICT"
+
+    # a close-out with a reason persists across newer open-webhook events
+    done = client.post(
+        f"/api/v1/work/{closeout['id']}/admin-complete", headers=auth(), json={"reason": "已由 PR #99 交付"}
+    )
+    assert done.status_code == 200 and done.json()["data"]["status"] == "completed"
+    ingest_webhook = client.app.state.ingest_forgejo
+
+    def issue_payload(number, title, state, stamp):
+        return {
+            "repository": {"full_name": "xenon-admin/XeonoLab"},
+            "issue": {"number": number, "title": title, "state": state, "updated_at": stamp},
+        }
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "open", "2026-10-02T12:00:00Z"))
+    still = client.get("/api/v1/work", headers=auth()).json()["data"]
+    row = next(item for item in still if item["id"] == closeout["id"])
+    assert row["status"] == "completed" and row["admin_completed"] == 1
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        events = [dict(r)["event"] for r in db.execute(
+            "SELECT event FROM work_audit WHERE work_id=?", (closeout["id"],))]
+    assert any(event.startswith("work.admin_completed") and "PR #99" in event for event in events)
+    assert "issue.sync_ignored_admin_completed" in events
+
+    # without the admin flag, a newer open event re-queues a completed item
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET status='completed',holder=NULL,expires=0,admin_completed=0 WHERE id=?", (reopenable["id"],))
+        db.commit()
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(413, "Reopen after close", "open", "2026-10-02T12:05:00Z"))
+    row = next(item for item in client.get("/api/v1/work", headers=auth()).json()["data"] if item["id"] == reopenable["id"])
+    assert row["status"] == "queued"
+
+    # a Forgejo close clears the admin flag so a later reopen re-queues normally
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "closed", "2026-10-02T12:10:00Z"))
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "open", "2026-10-02T12:15:00Z"))
+    row = next(item for item in client.get("/api/v1/work", headers=auth()).json()["data"] if item["id"] == closeout["id"])
+    assert row["status"] == "queued" and row["admin_completed"] == 0
