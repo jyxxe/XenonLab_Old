@@ -3,6 +3,10 @@
   encode zstd gzip
   header X-Content-Type-Options nosniff
   header Referrer-Policy no-referrer
+  @embedding_api path /api/v1/embed/*
+  handle @embedding_api {
+    reverse_proxy 192.168.0.107:8104
+  }
   @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/*
   handle @desktop_api {
     reverse_proxy 127.0.0.1:8101

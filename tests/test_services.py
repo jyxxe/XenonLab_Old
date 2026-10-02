@@ -24,6 +24,20 @@ def test_embedding_fails_without_real_weights(settings):
         assert client.post("/v1/embeddings", headers=auth(), json={"input": "test"}).status_code == 403
 
 
+def test_embedding_app_model_alias_uses_embedding_scopes_without_faking_readiness(settings):
+    settings.dev_tokens["reader"] = {"sub": "reader", "scope": "embedding:read", "agent_kind": "human"}
+    settings.dev_tokens["writer"] = {"sub": "writer", "scope": "embedding:write", "agent_kind": "human"}
+    with TestClient(create_app("embedding", settings)) as client:
+        denied = client.get("/api/v1/embed/models", headers=auth("alice"))
+        assert denied.status_code == 403
+        response = client.get("/api/v1/embed/models", headers=auth("reader"))
+        assert response.status_code == 200
+        assert response.json()["data"][0]["status"] == "not_configured"
+        assert response.json()["data"][1]["status"] == "not_configured"
+        assert client.post("/api/v1/embed/text", headers=auth("reader"), json={"input": "hello"}).status_code == 403
+        assert client.post("/api/v1/embed/text", headers=auth("writer"), json={"input": "hello"}).status_code == 503
+
+
 def test_signed_webhook_retries(settings, monkeypatch):
     monkeypatch.setenv("FORGEJO_WEBHOOK_SECRET", "test-secret")
     client = TestClient(create_app("dev-agent", settings))
