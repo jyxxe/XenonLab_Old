@@ -349,6 +349,44 @@
         }
       }
     },
+    "/api/v1/work/{work_id}/admin-complete": {
+      "post": {
+        "summary": "Admin Complete",
+        "description": "Queue hygiene close-out for items nobody holds (issue #91).\n\nReconcile only completes a work item when its Forgejo issue closes, and\nrelease is holder-scoped, so implemented-but-abandoned items could never\nleave the queued view. This endpoint is the escape hatch: it refuses to\ntouch an actively held claim and fences any stale holder via epoch+1.",
+        "operationId": "admin_complete_api_v1_work__work_id__admin_complete_post",
+        "parameters": [
+          {
+            "name": "work_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Work Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/issues/{issue_id}/links": {
       "post": {
         "summary": "Link",

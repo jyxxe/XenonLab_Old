@@ -504,6 +504,28 @@ def install(app):
             audit(db, actor, "work.completed" if body.completed else "work.released", work_id, body.epoch)
             return response(request, load(db, work_id))
 
+    @app.post("/api/v1/work/{work_id}/admin-complete")
+    def admin_complete(work_id: str, request: Request, actor=Depends(scope("dev:write"))):
+        """Queue hygiene close-out for items nobody holds (issue #91).
+
+        Reconcile only completes a work item when its Forgejo issue closes, and
+        release is holder-scoped, so implemented-but-abandoned items could never
+        leave the queued view. This endpoint is the escape hatch: it refuses to
+        touch an actively held claim and fences any stale holder via epoch+1.
+        """
+        with transaction(database) as db:
+            current = load(db, work_id)
+            if current["status"] == "completed":
+                raise APIError(409, "WORK_COMPLETED", "task is already completed")
+            if current["holder"] is not None and current["expires"] > time.time():
+                raise APIError(409, "WORK_CLAIMED", "task has an active claim; the holder must release it")
+            db.execute(
+                "UPDATE work SET status='completed',holder=NULL,expires=0,epoch=epoch+1 WHERE id=?",
+                (work_id,),
+            )
+            audit(db, actor, "work.admin_completed", work_id, current["epoch"])
+            return response(request, load(db, work_id))
+
     @app.post("/api/v1/issues/{issue_id}/links", status_code=201)
     def link(issue_id: int, body: IssueLink, request: Request, actor=Depends(scope("dev:write"))):
         repository_allowed(app.state.settings, body.repository)

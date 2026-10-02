@@ -1,3 +1,5 @@
+import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -797,3 +799,55 @@ def test_renew_extends_active_claim_and_fences_stale_or_expired_holders(settings
     third = client.post(path + "/claim", headers=auth("bob"), json={}).json()["data"]
     assert third["epoch"] == second["epoch"] + 1
     assert client.post(path + "/release", headers=auth(), json={"epoch": second["epoch"]}).status_code == 409
+
+
+def test_admin_complete_closes_queue_hygiene_gaps(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+
+    stale = create(401, "Abandoned item")
+    live = create(402, "Actively held item")
+    done = create(403, "Already completed")
+    client.post(f"/api/v1/work/{live['id']}/claim", headers=auth(), json={"ttl_seconds": 3600})
+    client.post(f"/api/v1/work/{done['id']}/claim", headers=auth(), json={"ttl_seconds": 60})
+    client.post(f"/api/v1/work/{done['id']}/release", headers=auth(), json={"epoch": 1, "completed": True})
+
+    # unheld queued item: admin complete succeeds and fences via epoch+1
+    result = client.post(f"/api/v1/work/{stale['id']}/admin-complete", headers=auth())
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["status"] == "completed"
+    assert result.json()["data"]["holder"] is None
+    assert result.json()["data"]["epoch"] == stale["epoch"] + 1
+    # idempotency guard
+    assert client.post(f"/api/v1/work/{stale['id']}/admin-complete", headers=auth()).status_code == 409
+
+    # actively held claim must not be completed by an administrator
+    conflict = client.post(f"/api/v1/work/{live['id']}/admin-complete", headers=auth())
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "WORK_CLAIMED"
+    # already completed
+    assert client.post(f"/api/v1/work/{done['id']}/admin-complete", headers=auth()).status_code == 409
+    # missing item
+    assert client.post("/api/v1/work/missing/admin-complete", headers=auth()).status_code == 404
+    # unauthenticated
+    assert client.post(f"/api/v1/work/{stale['id']}/admin-complete").status_code == 401
+    # expired claim CAN be completed (queue hygiene goal): claim then age it out
+    expired = create(404, "Expired claim item")
+    client.post(f"/api/v1/work/{expired['id']}/claim", headers=auth(), json={"ttl_seconds": 3600})
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET expires=? WHERE id=?", (time.time() - 5, expired["id"]))
+        db.commit()
+    result = client.post(f"/api/v1/work/{expired['id']}/admin-complete", headers=auth())
+    assert result.status_code == 200
+    assert result.json()["data"]["status"] == "completed"
+    # audit trail records the administrative close-out
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        events = [dict(r)["event"] for r in db.execute(
+            "SELECT event FROM work_audit WHERE work_id=?", (expired["id"],))]
+    assert "work.admin_completed" in events
