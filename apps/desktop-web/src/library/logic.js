@@ -407,3 +407,74 @@ export function withQueryPagination(expression, limit, offset) {
   base = base.replace(/;\s*$/, '').trim();
   return `${base} LIMIT ${safeLimit} OFFSET ${safeOffset}`;
 }
+
+/**
+ * Ask-AI extension point for record selections (Issue #71 §17). These helpers
+ * only compose a transparent draft; they never call a model or an API by
+ * themselves — the user reviews and edits the prompt before anything leaves
+ * the library window.
+ */
+
+export const SELECTION_AI_ACTIONS = [
+  {id: 'ask', label: 'Ask AI about selection', hint: '就所选记录提出你的问题'},
+  {id: 'summarize', label: 'Summarize selection', hint: '让 AI 总结所选记录的要点'},
+  {id: 'related', label: 'Find related knowledge', hint: '让 AI 按所选记录查找相关知识'},
+];
+
+const SELECTION_AI_ROW_LIMIT = 20;
+const SELECTION_AI_VALUE_LIMIT = 200;
+
+function selectionValueText(value) {
+  if (value === null || value === undefined) return '';
+  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return text.length > SELECTION_AI_VALUE_LIMIT ? `${text.slice(0, SELECTION_AI_VALUE_LIMIT)}…` : text;
+}
+
+/** Describe what the prompt will share, so the dialog can show it up front. */
+export function selectionContextSummary(table, rows, columns) {
+  const list = Array.isArray(rows) ? rows : [];
+  const names = (Array.isArray(columns) ? columns : []).map(column => column?.name).filter(Boolean);
+  const sharedRows = Math.min(list.length, SELECTION_AI_ROW_LIMIT);
+  return {
+    tablePath: table ? `${table.path}/${table.name}` : '',
+    tableId: table?.id || '',
+    rowCount: list.length,
+    sharedRows,
+    truncated: list.length > SELECTION_AI_ROW_LIMIT,
+    fields: names,
+    rowIds: list.slice(0, SELECTION_AI_ROW_LIMIT).map(row => row?._row_id || ''),
+  };
+}
+
+/**
+ * Compose the editable draft for a selection AI action. Bounded: at most
+ * SELECTION_AI_ROW_LIMIT rows and SELECTION_AI_VALUE_LIMIT characters per
+ * value, with an explicit note when the selection is truncated.
+ */
+export function buildSelectionPrompt(action, table, rows, columns, question = '') {
+  const list = Array.isArray(rows) ? rows : [];
+  const meta = SELECTION_AI_ACTIONS.find(entry => entry.id === action) || SELECTION_AI_ACTIONS[0];
+  const summary = selectionContextSummary(table, list, columns);
+  const lines = [];
+  if (action === 'summarize') lines.push('请总结以下 XeLibrary 选中的记录：归纳共同主题、重要字段值与任何异常。');
+  else if (action === 'related') lines.push('请根据以下 XeLibrary 选中的记录，查找可能相关的知识点，并逐条说明关联理由。');
+  else lines.push('请根据以下 XeLibrary 选中的记录回答问题。');
+  lines.push('');
+  lines.push(`知识表：${summary.tablePath}`);
+  if (summary.fields.length) lines.push(`字段：${summary.fields.join(', ')}`);
+  lines.push(`选中记录：${list.length} 行`);
+  lines.push('');
+  for (const row of list.slice(0, SELECTION_AI_ROW_LIMIT)) {
+    const pairs = (Array.isArray(columns) ? columns : [])
+      .map(column => column?.name)
+      .filter(Boolean)
+      .map(name => `${name}=${selectionValueText(row?.values?.[name])}`);
+    lines.push(`- ${row?._row_id || '(unknown row)'} r${row?._revision ?? '?'}: ${pairs.join('; ')}`);
+  }
+  if (summary.truncated) lines.push(`（选中 ${list.length} 行，仅包含前 ${SELECTION_AI_ROW_LIMIT} 行）`);
+  if (action === 'ask') {
+    lines.push('');
+    lines.push(`问题：${String(question || '').trim() || '（请在发送前补充你的问题）'}`);
+  }
+  return lines.join('\n');
+}

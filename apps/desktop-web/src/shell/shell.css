@@ -194,6 +194,13 @@
 
 .iframe-toolbar{order:-1;display:flex;align-items:center;gap:var(--spacing-2);padding:var(--spacing-2);border-bottom:1px solid var(--border);font-size:var(--font-size-xs)}.iframe-toolbar span{flex:1;min-width:0}.iframe-toolbar .ds-button{flex-shrink:0}
 
+/* Ask-AI handoff card: a draft delivered from a native app (XeLibrary §17)
+   waits for the user here because the sandboxed frame cannot be scripted. */
+.iframe-handoff{order:-2;display:flex;flex-direction:column;gap:var(--spacing-2);padding:var(--spacing-3);border-bottom:1px solid var(--border);background:var(--accent-soft)}
+.iframe-handoff p{margin:0;font-size:var(--font-size-xs);color:var(--text-secondary)}
+.iframe-handoff-text{min-height:88px;max-height:200px;overflow:auto;font-family:var(--font-mono);font-size:var(--font-size-xs);resize:vertical}
+.iframe-handoff .ds-button-row{justify-content:flex-end}
+
 .system-app{display:grid;grid-template-columns:160px minmax(0,1fr);height:100%;min-height:0}.system-sidebar{display:flex;flex-direction:column;gap:var(--spacing-1);padding:var(--spacing-3);background:var(--surface-sunken);border-right:1px solid var(--border);overflow:auto}.system-sidebar h2{font-size:var(--font-size-md)}.system-sidebar button{margin:0;text-align:left;border:0;background:transparent}.system-sidebar button[aria-current]{background:var(--accent-soft);color:var(--accent)}.system-content{padding:var(--spacing-4);overflow:auto;min-width:0}.system-content .dashboard{padding:0}.system-table-scroll{overflow:auto}.system-table-scroll td{max-width:32ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.system-table-scroll th{position:sticky;top:0;background:var(--surface-elevated)}@media(max-width:767px){.system-app{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}.system-sidebar{flex-direction:row;white-space:nowrap;border-right:0;border-bottom:1px solid var(--border);padding:var(--spacing-2)}.system-sidebar h2{display:none}.system-sidebar button{flex-shrink:0}.system-content{padding:var(--spacing-3)}}
 
 .menubar-mobile-switcher{display:none}

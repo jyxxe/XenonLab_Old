@@ -39,6 +39,7 @@ export function TableView({
   onRetry,
   onRefresh,
   onContextMenu,
+  onAskAI,
   canWrite,
 }: {
   table: Table;
@@ -61,6 +62,7 @@ export function TableView({
   onRetry: () => void;
   onRefresh: () => void;
   onContextMenu: (row: Row, x: number, y: number) => void;
+  onAskAI: (rows: Row[]) => void;
   canWrite: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -167,6 +169,14 @@ export function TableView({
 
   const allSelected = visibleRows.length > 0 && visibleRows.every(row => selection.has(row._row_id));
 
+  // The AI action targets the current selection; a context menu on an
+  // unselected row upgrades it to that row first so the draft always matches
+  // what the user is looking at.
+  function rowsForAI(row: Row): Row[] {
+    if (selection.has(row._row_id)) return rows.filter(item => selection.has(item._row_id));
+    return [row];
+  }
+
   function menuItems(row: Row): MenuItem[] {
     return [
       {id: 'open', label: '在 Inspector 中打开', onSelect: () => onActivateRow(row._row_id)},
@@ -179,9 +189,8 @@ export function TableView({
       {separator: true},
       {
         id: 'ask-ai',
-        label: 'Ask AI about this row',
-        disabled: true,
-        onSelect: undefined,
+        label: rowsForAI(row).length > 1 ? `Ask AI about selection (${rowsForAI(row).length} 行)` : 'Ask AI about this row',
+        onSelect: () => onAskAI(rowsForAI(row)),
       },
       {
         id: 'selection',
@@ -214,6 +223,7 @@ export function TableView({
         {selection.size > 0 && (
           <>
             <Badge tone="accent">已选 {selection.size} 行</Badge>
+            <Button size="sm" variant="ghost" onClick={() => onAskAI(rows.filter(item => selection.has(item._row_id)))}>Ask AI about selection</Button>
             <Button size="sm" variant="ghost" onClick={() => onSelectionChange(new Set())}>清除选择</Button>
           </>
         )}

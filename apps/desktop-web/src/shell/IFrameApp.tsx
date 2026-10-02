@@ -1,7 +1,7 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {Button, Spinner} from '../design-system/primitives';
 import {appEntryUrl, sandboxValue} from './apps';
-import type {DesktopApp} from './types';
+import type {AppIntent, DesktopApp} from './types';
 
 type FramePhase = 'loading' | 'loaded' | 'ready' | 'timeout' | 'auth-error' | 'network-error';
 
@@ -15,17 +15,21 @@ export function IFrameApp({
   windowId,
   theme,
   active,
+  intent,
   timeoutMs = (globalThis as {__XEONOLAB_IFRAME_TIMEOUT__?: number}).__XEONOLAB_IFRAME_TIMEOUT__ ?? 20000,
 }: {
   app: DesktopApp;
   windowId: string;
   theme: string;
   active: boolean;
+  intent?: AppIntent;
   timeoutMs?: number;
 }) {
   const [phase, setPhase] = useState<FramePhase>('loading');
   const [attempt, setAttempt] = useState(0);
   const timer = useRef<number | null>(null);
+  const [handoff, setHandoff] = useState<{prompt: string; sent: boolean} | null>(null);
+  const deliveredDraft = useRef<string | null>(null);
 
   useEffect(() => {
     setPhase('loading');
@@ -53,11 +57,40 @@ export function IFrameApp({
     return () => {removeEventListener('message',handle);removeEventListener('xeonolab.app.reload',reload)};
   },[windowId,app.origin,active]);
 
+  // An askAI intent carries an editable XeLibrary draft. It is offered as a
+  // reviewable handoff card; the user pastes it into the frame or copies it,
+  // because the sandboxed cross-origin frame cannot be scripted by us.
+  useEffect(() => {
+    if (!intent || intent.action !== 'askAI' || !intent.prompt) return;
+    if (deliveredDraft.current === intent.id) return;
+    deliveredDraft.current = intent.id;
+    setHandoff({prompt: intent.prompt, sent: false});
+  }, [intent]);
+
   const url = appEntryUrl(app);
   const frameUrl = new URL(url);
   if (attempt) frameUrl.searchParams.set('reload',String(attempt));
   return (
     <div className={`iframe-app${phase === 'ready' || phase === 'loaded' ? ' ds-loaded' : ''}`}>
+      {handoff && (
+        <div className="iframe-handoff" role="region" aria-label="待发送的 AI 草稿">
+          <strong>来自知识库的 AI 草稿</strong>
+          <p>下面的草稿来自 XeLibrary 的记录选择，尚未发送到 {app.title}。跨域应用无法自动输入，请复制后粘贴到对话输入框。</p>
+          <textarea
+            className="iframe-handoff-text"
+            aria-label="AI 草稿内容"
+            spellCheck={false}
+            readOnly
+            value={handoff.prompt}
+          />
+          <div className="ds-button-row">
+            <Button size="sm" variant="primary" onClick={async () => {
+              try { await navigator.clipboard?.writeText(handoff.prompt); setHandoff({...handoff, sent: true}); } catch { /* clipboard unavailable */ }
+            }}>{handoff.sent ? '已复制草稿' : '复制草稿'}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setHandoff(null)}>收起</Button>
+          </div>
+        </div>
+      )}
       {phase === 'loading' && <div className="iframe-loading-bar" aria-hidden="true" />}
       <iframe
         key={attempt}
