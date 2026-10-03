@@ -1,0 +1,40 @@
+<!doctype html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<link rel="stylesheet" href="/src/design-system/tokens.css"/><link rel="stylesheet" href="/src/design-system/primitives.css"/>
+<link rel="stylesheet" href="/src/shell/shell.css"/><title>LaunchPad origin acceptance fixture</title></head>
+<body><div id="root"></div><script type="module">
+import React, {useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {mergeApps} from '/src/shell/apps.tsx';
+import {LaunchPad} from '/src/shell/LaunchPad.tsx';
+import {CommandPalette} from '/src/shell/CommandPalette.tsx';
+const long = new URLSearchParams(location.search).get('mode') === 'long';
+const prefix = 'shared-workspace-very-long-team-identifier.';
+const prod = long ? `https://${prefix}production.environment.example.test:9443` : 'https://prod.insights.example.test:9443';
+const staging = long ? `https://${prefix}staging.environment.example.test` : 'https://staging.insights.example.test';
+const title = long ? 'Insights very long synthetic workspace application title for narrow cards' : 'Insights';
+const entry = '/workspace/synthetic?fixture=private-view';
+const registry = [
+  {id: 'insights-prod', title, origin: prod, entry, icon: '◇', permissions: []},
+  {id: 'insights-staging', title, origin: staging, entry, icon: '◇', permissions: []},
+  {id: 'reports', title: 'Reports', origin: 'https://reports.example.test', entry: '/', icon: '◇', permissions: []},
+  {id: 'insights-locked', title: 'Insights', origin: 'https://restricted.example.test', permissions: ['fixture:hidden']},
+];
+const apps = mergeApps(registry, []);
+window.__launchpadFixture = {apps, calls: [], registry};
+const launch = id => window.__launchpadFixture.calls.push(id);
+const providers = [{id: 'applications', group: '应用程序', provide: query => {
+  const needle = query.trim().toLowerCase();
+  return apps.filter(app => !needle || `${app.title} ${app.id} ${app.description || ''}`.toLowerCase().includes(needle))
+    .map(app => ({id: `app-${app.id}`, title: app.title, subtitle: app.description,
+      group: '应用程序', icon: app.icon, run: () => launch(app.id)}));
+}}];
+function Fixture() {
+  const [view, setView] = useState('launchpad');
+  window.__showPalette = () => setView('palette');
+  window.__showLaunchPad = () => setView('launchpad');
+  return view === 'launchpad' ? React.createElement(LaunchPad, {apps, recentIds: ['insights-prod'], onLaunch: launch, onClose: () => setView('none')}) :
+    React.createElement(CommandPalette, {open: view === 'palette', providers, onClose: () => setView('none')});
+}
+createRoot(document.getElementById('root')).render(React.createElement(Fixture));
+</script></body></html>
