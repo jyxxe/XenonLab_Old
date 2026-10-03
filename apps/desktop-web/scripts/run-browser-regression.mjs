@@ -18,6 +18,7 @@ const tests = [
   'tests/browser-acceptance-work-widget-links.test.mjs',
   'tests/browser-acceptance-forgejo-origins.test.mjs',
   'tests/browser-acceptance-shell.test.mjs',
+  'tests/browser-acceptance-window-arrangement.test.mjs',
   'tests/browser-acceptance-issues-narrow.test.mjs',
   'tests/browser-acceptance-query-drafts.test.mjs',
   'tests/browser-acceptance-account-patch.test.mjs',
