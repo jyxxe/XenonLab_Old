@@ -7,7 +7,7 @@ import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
 import {TableView, type SortState} from './TableView';
 import {createUploadStore} from '../upload-state.js';
-import {Inspector, type ConflictInfo, type InspectorTab} from './Inspector';
+import {Inspector, type ConflictInfo, type InspectorDraftState, type InspectorTab} from './Inspector';
 import {SearchView} from './SearchView';
 import {QueryConsole} from './QueryConsole';
 import {TheoremView} from './TheoremView';
@@ -16,6 +16,16 @@ import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {ancestorPaths, changedFields, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
+
+type FieldFocus = {element: HTMLElement; start: number | null; end: number | null; direction: 'forward' | 'backward' | 'none' | null};
+type PendingRowSwitch = {tableId: string; sourceId: string; rowId: string; authEpoch: number; navigation: number; focus: FieldFocus | null};
+
+function currentFieldFocus(): FieldFocus | null {
+  const element = document.activeElement;
+  if (!(element instanceof HTMLElement)) return null;
+  const text = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+  return {element, start: text ? element.selectionStart : null, end: text ? element.selectionEnd : null, direction: text ? element.selectionDirection : null};
+}
 
 export function LibraryApp({
   api,
@@ -64,11 +74,27 @@ export function LibraryApp({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const rowNavigation = useRef(0);
+  const inspectorDraft = useRef<InspectorDraftState | null>(null);
+  const rowClickFocus = useRef<FieldFocus | null>(null);
+  const [pendingRowSwitch, setPendingRowSwitch] = useState<PendingRowSwitch | null>(null);
   const [tableTarget, setTableTarget] = useState<{id: string; loading: boolean; error: unknown} | null>(null);
 
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
   const table = session.table;
+  const rowSwitchContext = useRef({tableId: table?.id, activeRowId, authEpoch, view, inspectorOpen});
+  rowSwitchContext.current = {tableId: table?.id, activeRowId, authEpoch, view, inspectorOpen};
+
+  function sameRowSwitchContext(request: PendingRowSwitch) {
+    const current = rowSwitchContext.current;
+    return current.tableId === request.tableId && current.activeRowId === request.sourceId &&
+      current.authEpoch === request.authEpoch && current.view === 'library' && current.inspectorOpen &&
+      rowNavigation.current === request.navigation;
+  }
+
+  useEffect(() => {
+    if (pendingRowSwitch && (!sameRowSwitchContext(pendingRowSwitch) || !session.rows.some(row => row._row_id === pendingRowSwitch.rowId))) setPendingRowSwitch(null);
+  }, [pendingRowSwitch, table?.id, activeRowId, authEpoch, view, inspectorOpen, session.rows]);
   const {jobs, error: jobsError, reload: reloadJobs} = useJobs(apiPage, table?.id ?? '', canAdmin && view === 'library' && Boolean(table));
 
   const movePaths = useMemo(() => [...new Set(['/', ...catalogue.tables.flatMap(item => ancestorPaths(item.path))])].sort((left, right) => left.localeCompare(right, 'zh')), [catalogue.tables]);
@@ -198,6 +224,18 @@ export function LibraryApp({
   }
 
   function onSelectRow(rowId: string, event: React.MouseEvent) {
+    const draft = inspectorDraft.current;
+    const focus = event.detail ? rowClickFocus.current : currentFieldFocus();
+    rowClickFocus.current = null;
+    if (!event.shiftKey && !event.metaKey && !event.ctrlKey && rowId !== activeRowId &&
+        draft?.dirty && draft.tableId === table?.id && draft.rowId === activeRowId && activeRowId) {
+      setPendingRowSwitch({tableId: draft.tableId, sourceId: activeRowId, rowId, authEpoch, navigation: rowNavigation.current, focus});
+      return;
+    }
+    applyRowSelection(rowId, event);
+  }
+
+  function applyRowSelection(rowId: string, event: {shiftKey: boolean; metaKey: boolean; ctrlKey: boolean}) {
     ++rowNavigation.current;
     setActiveRowId(rowId);
     setInspectorOpen(true);
@@ -220,6 +258,25 @@ export function LibraryApp({
       return new Set([rowId]);
     });
     rememberLoadedRow(rowId);
+  }
+
+  function continueEditing() {
+    const request = pendingRowSwitch;
+    setPendingRowSwitch(null);
+    // Run after Modal's focus-trap cleanup, which otherwise restores the click's
+    // blurred initiator instead of the original editor field.
+    requestAnimationFrame(() => {
+      if (!request || !sameRowSwitchContext(request) || !request.focus?.element.isConnected) return;
+      const {element, start, end, direction} = request.focus;
+      element.focus({preventScroll: true});
+      if (start !== null && end !== null && (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) element.setSelectionRange(start, end, direction ?? undefined);
+    });
+  }
+
+  function discardRowDraft() {
+    const request = pendingRowSwitch;
+    setPendingRowSwitch(null);
+    if (request && sameRowSwitchContext(request) && session.rows.some(row => row._row_id === request.rowId)) applyRowSelection(request.rowId, {shiftKey: false, metaKey: false, ctrlKey: false});
   }
 
   const selectedRow = session.rows.find(row => row._row_id === activeRowId) || null;
@@ -420,7 +477,9 @@ export function LibraryApp({
   const tableTargetError = tableTarget?.error ? describeError(tableTarget.error, '打开知识表') : null;
 
   return (
-    <div className="knowledge">
+    <div className="knowledge" onPointerDownCapture={event => {
+      rowClickFocus.current = event.button === 0 && event.target instanceof Element && event.target.closest('tr[data-row-id]') ? currentFieldFocus() : null;
+    }}>
       <LibrarySidebar
         tables={catalogue.tables}
         loading={catalogue.loading}
@@ -617,6 +676,7 @@ export function LibraryApp({
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          draftStateRef={inspectorDraft}
           uploadStore={uploadStore}
           table={table}
           columns={table.columns || []}
@@ -648,6 +708,15 @@ export function LibraryApp({
       )}
 
       <NewTableDialog open={dialog === 'new'} onClose={() => setDialog(null)} onCreate={createTable} />
+
+      <Modal
+        open={Boolean(pendingRowSwitch && sameRowSwitchContext(pendingRowSwitch))}
+        title="未保存的字段修改"
+        onClose={continueEditing}
+        footer={<><Button variant="primary" onClick={continueEditing}>继续编辑</Button><Button variant="danger" onClick={discardRowDraft}>放弃修改并切换</Button></>}
+      >
+        <p>当前记录有未保存的字段修改。继续编辑会保留草稿；放弃后才会切换到所选记录，不会自动保存。</p>
+      </Modal>
 
       {askAI && table && (
         <AskAIDialog
