@@ -1,5 +1,6 @@
 import React, {useEffect, useMemo, useState} from 'react';
 import {Badge, Button, ErrorState, IconButton, Input, Select, Skeleton, Spinner, StatusDot, Tabs, Textarea} from '../design-system/primitives';
+import type {UploadStore} from '../upload-state.js';
 import {Attachments} from '../Attachments';
 import {changedFields, describeError, indexStatusFromJobs, relativeTime} from './logic.js';
 import type {Column, Job, Row, Table} from './types';
@@ -39,6 +40,7 @@ export function Inspector({
   onReloadRow,
   onToggleFavorite,
   onClose,
+  uploadStore,
 }: {
   table: Table;
   columns: Column[];
@@ -61,6 +63,7 @@ export function Inspector({
   onReloadRow: () => void;
   onToggleFavorite: () => void;
   onClose: () => void;
+  uploadStore?: UploadStore;
 }) {
   const [tab, setTab] = useState<InspectorTab>('overview');
   const [draft, setDraft] = useState<Record<string, any>>({});
@@ -225,6 +228,7 @@ export function Inspector({
             <Button size="sm" onClick={onToggleFavorite}>★ 收藏此表</Button>
             {row && (
               <Attachments
+                uploadStore={uploadStore}
                 key={`overview:${table.id}:${row._row_id}`}
                 tableId={table.id}
                 rowId={row._row_id}
@@ -287,6 +291,7 @@ export function Inspector({
         {tab === 'attachments' && (
           row ? (
             <Attachments
+              uploadStore={uploadStore}
               key={`${table.id}:${row._row_id}`}
               tableId={table.id}
               rowId={row._row_id}
