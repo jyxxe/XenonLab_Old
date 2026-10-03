@@ -29,7 +29,7 @@ def main():
             result = client.post(
                 "/api/v1/apps",
                 headers={"Authorization": f"Bearer {TOKEN}"},
-                json={"id": f"synthetic-{name}", "title": f"Synthetic {name.title()}", "origin": f"https://{name}.example.test", "entry": "/", "icon": "◇", "default_size": [1000, 700], "singleton": True, "permissions": [], "sandbox": {"allow_scripts": True, "allow_forms": True, "allow_downloads": False}},
+                json={"id": f"synthetic-{name}", "title": f"Synthetic {name.title()}", "origin": f"https://{name}.example.test", "entry": "/", "icon": "◇", "default_size": [1000, 700], "singleton": True, "permissions": ["desktop:read", "desktop:admin"] if name == "alpha" else [], "sandbox": {"allow_scripts": True, "allow_forms": True, "allow_downloads": False}},
             )
             assert result.status_code == 201, result.text
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

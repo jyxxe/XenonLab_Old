@@ -73,7 +73,7 @@ test('AppRegistry protects dirty existing/new drafts and keeps actual revision f
       ['应用来源','https://edited.example.test','https://alpha.example.test'],['入口路径','/changed','/'],
       ['默认宽度','1200','1000'],['默认高度','850','700'],
       ['只打开一个窗口',false,true],['运行脚本',false,true],['提交表单',false,true],['下载文件',true,false],
-      ['desktop:read',true,false],['desktop:admin',true,false],
+      ['desktop:read',false,true],['desktop:admin',false,true],
     ];
     for(const [label,edited,original] of cases){
       const input=page.getByLabel(label,{exact:true});
@@ -91,6 +91,17 @@ test('AppRegistry protects dirty existing/new drafts and keeps actual revision f
     assert.equal(mutations.length,0,'edits, confirmations, cancellation, reverted/clean navigation do not write');
     assert.deepEqual(await api('/apps/synthetic-alpha'),originalAlpha);
     assert.deepEqual(await api('/apps/synthetic-beta'),originalBeta);
+    // The initial API has two permissions. Removing then restoring the first
+    // checkbox appends it in UI array order, but the permission set is unchanged.
+    const readScope=page.getByLabel('desktop:read',{exact:true});
+    const adminScope=page.getByLabel('desktop:admin',{exact:true});
+    await readScope.uncheck();await beta.click();await expect(dialog).toBeVisible();
+    await dialog.getByRole('button',{name:'继续编辑'}).click();
+    await readScope.check();await expect(adminScope).toBeChecked();
+    await beta.click();await expect(title).toHaveValue('Synthetic Beta');await expect(dialog).toHaveCount(0);
+    await alpha.click();await expect(readScope).toBeChecked();await expect(adminScope).toBeChecked();
+    assert.equal(mutations.length,0,'permission remove/restore is clean and never writes');
+    assert.deepEqual((await api('/apps/synthetic-alpha')).permissions,['desktop:read','desktop:admin']);
 
     await title.fill('Alpha keyboard draft');await beta.click();await expect(dialog).toBeVisible();
     await page.screenshot({path:path.join(evidence,'dirty-confirmation.png'),fullPage:true,animations:'disabled'});
@@ -160,7 +171,7 @@ test('AppRegistry protects dirty existing/new drafts and keeps actual revision f
     await expect(title).toHaveValue('Alpha saved normally');
     assert.equal(mutations.length,2,'confirmed discard after failure sends no further mutation');
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-    await fs.writeFile(path.join(evidence,'browser-report.json'),JSON.stringify({outcome:'PASS',source:'Actual AppRegistry and product tokens/primitives/shell styles in real Chromium; physical owned loopback Desktop FastAPI and fresh temporary SQLite with synthetic human/two seeded apps. Actual stale If-Match returns412 after a controlled second local API update; no error envelope is fabricated. External origins are metadata only and never loaded. No production OIDC, admin account, registry or deployment verified.',fieldCases:cases.map(c=>c[0]),mutations,responses,requests,pageErrors:errors,external,checks:['each editable field independently protects dirty draft and reversion becomes clean','continue/cancel retains selection and values','Escape/Tab/Enter/focus return','explicit discard and dirty new ID','no autosave','successful PATCH updates baseline; held save disables audit and prevents competing act' ,'actual412 retains draft and still prompts']},null,2));
+    await fs.writeFile(path.join(evidence,'browser-report.json'),JSON.stringify({outcome:'PASS',source:'Actual AppRegistry and product tokens/primitives/shell styles in real Chromium; physical owned loopback Desktop FastAPI and fresh temporary SQLite with synthetic human/two seeded apps. Actual stale If-Match returns412 after a controlled second local API update; no error envelope is fabricated. External origins are metadata only and never loaded. No production OIDC, admin account, registry or deployment verified.',fieldCases:cases.map(c=>c[0]),permissionSetReversion:'two initial permissions, real removal prompts; restore appended first permission produces clean switch with no mutation or server change',mutations,responses,requests,pageErrors:errors,external,checks:['each editable field independently protects dirty draft and reversion becomes clean','continue/cancel retains selection and values','Escape/Tab/Enter/focus return','explicit discard and dirty new ID','no autosave','successful PATCH updates baseline; held save disables audit and prevents competing act' ,'actual412 retains draft and still prompts']},null,2));
   }catch(error){
     await fs.writeFile(path.join(evidence,'browser-failure.json'),JSON.stringify({error:String(error),stderr,mutations,responses,errors,external},null,2));
     await page?.screenshot({path:path.join(evidence,'browser-failure.png'),fullPage:true}).catch(()=>{});throw error;

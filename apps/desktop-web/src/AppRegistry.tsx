@@ -3,12 +3,14 @@ import {Button,Modal} from './design-system/primitives';
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type Entry={id:string;title:string;origin:string;entry:string;icon:string;default_size:[number,number];singleton:boolean;permissions:string[];sandbox:{allow_scripts:boolean;allow_forms:boolean;allow_downloads:boolean};revision?:number};
 const blank:Entry={id:'',title:'',origin:'https://',entry:'/',icon:'◇',default_size:[1000,700],singleton:true,permissions:[],sandbox:{allow_scripts:true,allow_forms:true,allow_downloads:false}};
+// Permission order is not meaningful to the API's scope-set checks.
+const comparableDraft=(entry:Entry)=>JSON.stringify({...entry,permissions:[...new Set(entry.permissions)].sort()});
 export function AppRegistry({api,changed}:{api:API;changed:()=>Promise<void>}){
  const [items,setItems]=useState<Entry[]>([]),[scopes,setScopes]=useState<string[]>([]),[draft,setDraft]=useState<Entry>(blank),[selected,setSelected]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[audit,setAudit]=useState<any[]>([]);
  const [baseline,setBaseline]=useState<Entry>(blank);
  const [pendingSelection,setPendingSelection]=useState<{id:string;draft:Entry}|null>(null);
  const operationPending=useRef(false);
- const dirty=JSON.stringify(draft)!==JSON.stringify(baseline);
+ const dirty=comparableDraft(draft)!==comparableDraft(baseline);
  function select(next:{id:string;draft:Entry}){setSelected(next.id);setDraft(next.draft);setBaseline(next.draft);setMessage('');setPendingSelection(null)}
  function requestSelection(item?:Entry){
   if(busy || item?.id===selected)return;
