@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Input, useFocusTrap} from '../design-system/primitives';
 import {launchpadSource} from './launchpad-source.js';
@@ -100,7 +101,7 @@ export function LaunchPad({
                 onMouseEnter={() => setActive(index)}
                 onClick={() => onLaunch(app.id)}
               >
-                <span className="launchpad-icon" aria-hidden="true">{app.icon}</span>
+                <span className="launchpad-icon" aria-hidden="true"><Icon value={app.icon} size={32} /></span>
                 <strong>{app.title}</strong>
                 {source && <small className="launchpad-source">{source.host}</small>}
                 <small>{category}</small>
