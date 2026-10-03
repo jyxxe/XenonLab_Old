@@ -2647,6 +2647,223 @@
         }
       }
     },
+    "/api/v1/index/vision/reindex": {
+      "post": {
+        "summary": "Rebuild image attachment indexes",
+        "description": "Create an owner-scoped durable vision-only job. Requires xelibrary:admin and real Qwen/Qdrant.",
+        "operationId": "reindex_api_v1_index_vision_reindex_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisionIndexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionJobResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current scope or ACL denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source attachment not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source attachment changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Image exceeds byte limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or model space",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Embedding worker busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Model, facade, storage or vector index unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/image": {
+      "post": {
+        "summary": "Search the Qwen vision index",
+        "description": "Choose exactly one multipart upload, attachment_id plus table_id, or text. Current ACL/binding/hash/revision checks apply; query and index use the same pinned Qwen space.",
+        "operationId": "image_search_api_v1_search_image_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_image_search_api_v1_search_image_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionSearchResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Current scope or ACL denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source attachment not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source attachment changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Image exceeds byte limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid input or model space",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Embedding worker busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Model, facade, storage or vector index unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/search/hybrid": {
       "post": {
         "summary": "Hybrid",
@@ -2755,6 +2972,83 @@
           "attachment_id"
         ],
         "title": "AttachmentBind"
+      },
+      "Body_image_search_api_v1_search_image_post": {
+        "properties": {
+          "upload": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload"
+          },
+          "attachment_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attachment Id"
+          },
+          "table_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table Id"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Path",
+            "default": "/**"
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 20
+          },
+          "filters": {
+            "type": "string",
+            "maxLength": 16384,
+            "title": "Filters",
+            "description": "JSON object of exact row field filters",
+            "default": "{}"
+          }
+        },
+        "type": "object",
+        "title": "Body_image_search_api_v1_search_image_post"
       },
       "Body_upload_api_v1_attachments_post": {
         "properties": {
@@ -2870,6 +3164,24 @@
         ],
         "title": "IndexRequest"
       },
+      "MatchedAttachment": {
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "title": "Attachment Id"
+          },
+          "object_hash": {
+            "type": "string",
+            "title": "Object Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attachment_id",
+          "object_hash"
+        ],
+        "title": "MatchedAttachment"
+      },
       "Move": {
         "properties": {
           "path": {
@@ -2895,6 +3207,19 @@
           "expression"
         ],
         "title": "QueryBody"
+      },
+      "RequestMeta": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "title": "RequestMeta"
       },
       "Restore": {
         "properties": {
@@ -3391,6 +3716,275 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VisionErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details",
+          "request_id"
+        ],
+        "title": "VisionErrorDetail"
+      },
+      "VisionErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/VisionErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "VisionErrorResponse"
+      },
+      "VisionHit": {
+        "properties": {
+          "table_id": {
+            "type": "string",
+            "title": "Table Id"
+          },
+          "row_id": {
+            "type": "string",
+            "title": "Row Id"
+          },
+          "row_revision": {
+            "type": "integer",
+            "title": "Row Revision"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "score_type": {
+            "type": "string",
+            "const": "qwen3vl_cosine",
+            "title": "Score Type",
+            "default": "qwen3vl_cosine"
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet"
+          },
+          "matched_chunks": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Matched Chunks"
+          },
+          "matched_attachments": {
+            "items": {
+              "$ref": "#/components/schemas/MatchedAttachment"
+            },
+            "type": "array",
+            "title": "Matched Attachments"
+          },
+          "approximate": {
+            "type": "boolean",
+            "title": "Approximate",
+            "default": true
+          },
+          "indexed_revision": {
+            "type": "integer",
+            "title": "Indexed Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "table_id",
+          "row_id",
+          "row_revision",
+          "path",
+          "score",
+          "snippet",
+          "matched_attachments",
+          "indexed_revision"
+        ],
+        "title": "VisionHit"
+      },
+      "VisionIndexRequest": {
+        "properties": {
+          "table_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Table Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "table_id"
+        ],
+        "title": "VisionIndexRequest"
+      },
+      "VisionJob": {
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
+          "space": {
+            "$ref": "#/components/schemas/VisionSpace"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job_id",
+          "space"
+        ],
+        "title": "VisionJob"
+      },
+      "VisionJobResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/VisionJob"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/RequestMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "VisionJobResponse"
+      },
+      "VisionMeta": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "partial": {
+            "type": "boolean",
+            "title": "Partial"
+          },
+          "missing_embeddings": {
+            "type": "integer",
+            "title": "Missing Embeddings"
+          },
+          "index_backend": {
+            "type": "string",
+            "const": "qdrant_vision",
+            "title": "Index Backend",
+            "default": "qdrant_vision"
+          },
+          "space": {
+            "$ref": "#/components/schemas/VisionSpace"
+          },
+          "candidate_limit": {
+            "type": "integer",
+            "title": "Candidate Limit"
+          },
+          "coverage_truncated": {
+            "type": "boolean",
+            "title": "Coverage Truncated"
+          },
+          "coverage_snapshot": {
+            "type": "boolean",
+            "const": true,
+            "title": "Coverage Snapshot",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "partial",
+          "missing_embeddings",
+          "space",
+          "candidate_limit",
+          "coverage_truncated"
+        ],
+        "title": "VisionMeta"
+      },
+      "VisionSearchResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/VisionHit"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/VisionMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "VisionSearchResponse"
+      },
+      "VisionSpace": {
+        "properties": {
+          "model_id": {
+            "type": "string",
+            "const": "Qwen/Qwen3-VL-Embedding-2B",
+            "title": "Model Id",
+            "default": "Qwen/Qwen3-VL-Embedding-2B"
+          },
+          "model_revision": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Revision"
+          },
+          "dimensions": {
+            "type": "integer",
+            "maximum": 2048.0,
+            "minimum": 1.0,
+            "title": "Dimensions"
+          },
+          "preprocessing_revision": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Preprocessing Revision"
+          },
+          "normalized": {
+            "type": "boolean",
+            "const": true,
+            "title": "Normalized",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_revision",
+          "dimensions",
+          "preprocessing_revision"
+        ],
+        "title": "VisionSpace"
       }
     }
   }

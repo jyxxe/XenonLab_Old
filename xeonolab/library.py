@@ -278,11 +278,20 @@ def create_app(settings=None):
                 raise APIError(404, "XL_TABLE_NOT_FOUND", "table is being deleted")
             yield db
 
-    def remove_qdrant_points(tid, row_id=None):
+    def remove_qdrant_points(tid, row_id=None, db=None):
         """Synchronously remove derived points before committing source changes."""
         cleanup = getattr(app.state, "qdrant_remove_points", None)
         if cleanup:
             cleanup(tid, row_id)
+        vision_cleanup = getattr(app.state, "vision_remove_points", None)
+        if vision_cleanup:
+            if db is not None:
+                vision_cleanup(db, tid, row_id)
+            else:
+                # Caller already holds the stable table lock. Do not acquire
+                # another flock through table_transaction/table_connect.
+                with transaction(file(tid)) as source:
+                    vision_cleanup(source, tid, row_id)
 
     def allowed(actor, table, action, row_id=None):
         if "xelibrary:admin" in actor.scopes:
@@ -707,7 +716,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db, transaction(catalogue) as catalog:
             meta = metadata(db)
             precondition(request, meta["table_revision"])
-            remove_qdrant_points(tid)
+            remove_qdrant_points(tid, db=db)
             try:
                 catalog.execute("UPDATE tables SET path=? WHERE id=?", (path, tid))
             except Exception:
@@ -791,7 +800,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db:
             row = load_row(db, rid)
             precondition(request, row["_revision"])
-            remove_qdrant_points(tid, rid)
+            remove_qdrant_points(tid, rid, db)
             values = {**row["values"], **validate_values(columns(db), body.values, True)}
             db.execute(
                 "UPDATE data SET values_json=?,_revision=_revision+1,_updated_at=? WHERE _row_id=?",
@@ -818,7 +827,7 @@ def create_app(settings=None):
             with table_transaction(tid) as db:
                 row = load_row(db, rid, True)
                 precondition(request, row["_revision"])
-                remove_qdrant_points(tid, rid)
+                remove_qdrant_points(tid, rid, db)
                 for name, column in [
                     ("data", "_row_id"),
                     ("__xl_changes", "row_id"),
@@ -839,7 +848,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db:
             row = load_row(db, rid)
             precondition(request, row["_revision"])
-            remove_qdrant_points(tid, rid)
+            remove_qdrant_points(tid, rid, db)
             db.execute("UPDATE data SET _deleted_at=?,_revision=_revision+1 WHERE _row_id=?", (now(), rid))
             change(db, load_row(db, rid, True), "delete")
             db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
@@ -879,7 +888,7 @@ def create_app(settings=None):
         with table_transaction(tid) as db:
             current = load_row(db, rid, True)
             precondition(request, current["_revision"])
-            remove_qdrant_points(tid, rid)
+            remove_qdrant_points(tid, rid, db)
             old = db.execute(
                 "SELECT snapshot FROM __xl_changes WHERE row_id=? AND revision=?", (rid, body.revision)
             ).fetchone()
@@ -1233,10 +1242,51 @@ def create_app(settings=None):
             ).fetchone()
             if attachment is None:
                 raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found for row")
+            cleanup = getattr(app.state, "vision_remove_points", None)
+            if cleanup:
+                cleanup(db, tid, rid, aid)
             db.execute("DELETE FROM __xl_attachments WHERE attachment_id=? AND row_id=?", (aid, rid))
             db.execute("UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?", (now(),))
         audit(actor, "attachment.unbound", f"{tid}:{rid}:{aid}")
         return response(request, {"attachment_id": aid, "unbound": True})
+
+    def image_attachment_eligible(attachment):
+        """A cheap image hint for coverage, independent of legacy MIME/name."""
+        digest = attachment["object_hash"]
+        target = root / "objects" / "sha256" / digest[:2] / digest[2:4] / digest
+        try:
+            with target.open("rb") as content:
+                header = content.read(12)
+        except OSError:
+            raise APIError(503, "ATTACHMENT_STORAGE_UNAVAILABLE", "attachment content unavailable") from None
+        return (header.startswith(b"\x89PNG\r\n\x1a\n") or header.startswith(b"\xff\xd8\xff")
+                or (header.startswith(b"RIFF") and header[8:12] == b"WEBP"))
+
+    def resolve_image_attachment(actor, tid, aid, *, include_payload=True):
+        """Resolve bytes only after current table/row/binding authorization."""
+        table = authorize(actor, tid, "read")
+        with table_connect(tid) as db:
+            attachment = db.execute("SELECT * FROM __xl_attachments WHERE attachment_id=?", (aid,)).fetchone()
+            if attachment is None:
+                raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found")
+            authorize(actor, tid, "read", attachment["row_id"])
+            row = load_row(db, attachment["row_id"])
+            if not include_payload:
+                return {**dict(attachment), "row_revision": row["_revision"], "path": table["path"]}
+            digest = attachment["object_hash"]
+            target = root / "objects" / "sha256" / digest[:2] / digest[2:4] / digest
+            from .vision_provider import IMAGE_MAX_BYTES
+
+            try:
+                with target.open("rb") as content:
+                    payload = content.read(IMAGE_MAX_BYTES + 1)
+            except OSError:
+                raise APIError(503, "ATTACHMENT_STORAGE_UNAVAILABLE", "attachment content unavailable") from None
+            if len(payload) > IMAGE_MAX_BYTES:
+                raise APIError(413, "UPLOAD_TOO_LARGE", "16 MiB image limit")
+            if hashlib.sha256(payload).hexdigest() != digest:
+                raise APIError(503, "ATTACHMENT_STORAGE_UNAVAILABLE", "attachment content unavailable")
+            return {**dict(attachment), "payload": payload, "row_revision": row["_revision"], "path": table["path"]}
 
     @app.get("/api/v1/attachments/{aid}")
     def get_attachment(aid: str, table_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
@@ -1303,6 +1353,11 @@ def create_app(settings=None):
         table_connect,
     )
     install_theorems(app, catalogue, allowed, audit)
+    from .image_search import install as install_image_search
+
+    install_image_search(
+        app, catalogue, authorize, allowed, load_row, table_transaction, table_connect, resolve_image_attachment, request_acl, image_attachment_eligible,
+    )
 
     @app.post("/api/v1/search/hybrid")
     def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
