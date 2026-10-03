@@ -51,6 +51,17 @@ test token. This is not production OIDC, TLS or a real account. Tables, schema,
 rows, history and query requests go through the real API; no production data or
 permissions are modified. Temporary records are removed when the process exits.
 
+The frontend CI job installs the same pinned uv/Python runtime as the backend
+job and synchronizes the locked repository dependencies before browser tests.
+The real API fixture requires that runtime even though the application build
+itself is JavaScript. Missing executables fail with a visible startup error;
+cleanup only waits for a process that actually started. The first remote run
+failed in Node's native callback handling before the new browser test could
+reach the API, while the other ten browser tests passed. A local PATH excluding
+uv reproduced `spawn uv ENOENT`; the fixture now handles this failure explicitly.
+That controlled reproduction supports the missing-runtime diagnosis without
+claiming to reproduce the exact native assertion from the CI Node version.
+
 Ordinary clicks verify unchanged unsafe integers of both signs and signed64
 bounds during a title edit, direct full-range edits, safe integer/float editing,
 invalid inputs with zero mutation requests, nested JSON and strings, history,

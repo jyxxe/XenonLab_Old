@@ -34,6 +34,8 @@ test('production Library entry preserves complete int64 values through the real 
   const manifestPath = path.join(temp, 'manifest.json');
   const apiProcess = spawn('uv', ['run', 'python', 'apps/desktop-web/tests/int64-local-api.py', '--data-dir', path.join(temp, 'data'), '--manifest', manifestPath, '--port', String(port)], {cwd: repositoryRoot, stdio: ['ignore', 'pipe', 'pipe']});
   let stderr = '';
+  let startupError;
+  apiProcess.once('error', error => { startupError = error; });
   apiProcess.stderr.on('data', data => {stderr += data.toString();});
   let server, browser, page;
   const requests = [];
@@ -42,6 +44,7 @@ test('production Library entry preserves complete int64 values through the real 
   try {
     let ready = false;
     for (let attempt = 0; attempt < 200; attempt += 1) {
+      if (startupError) throw new Error(`Local API could not start: ${startupError.message}. Install the pinned uv/Python fixture runtime.`);
       if (apiProcess.exitCode !== null) throw new Error(`Local API exited: ${stderr}`);
       try { if ((await fetch(`${apiOrigin}/health/live`)).ok) { ready = true; break; } } catch {}
       await sleep(100);
@@ -212,7 +215,11 @@ test('production Library entry preserves complete int64 values through the real 
   } finally {
     await browser?.close();
     await server?.close();
-    if (apiProcess.exitCode === null) {apiProcess.kill('SIGTERM'); await new Promise(resolve => apiProcess.once('exit', resolve));}
+    if (apiProcess.pid && apiProcess.exitCode === null && apiProcess.signalCode === null) {
+      const closed = new Promise(resolve => apiProcess.once('close', resolve));
+      apiProcess.kill('SIGTERM');
+      await closed;
+    }
     await fs.rm(temp, {recursive: true, force: true});
   }
 });
