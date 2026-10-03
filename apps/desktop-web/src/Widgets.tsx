@@ -1,5 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
+import {forgejoIssueUrl} from './shell/forgejo-links.js';
 import type {DesktopApp} from './shell/types';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
 type WorkItem={id:string;status:string;claim_active:boolean};
@@ -67,11 +68,15 @@ export function WorkWidget({apiPage,allowed,onOpen}:{apiPage:APIPage;allowed:boo
     const load=async()=>{try{const page=await latest.current('/work?limit=1000');if(active){setItems(page.data);setTruncated(Boolean(page.meta.next_cursor))}}catch{if(active)setItems(null)}};
     void load();const timer=setInterval(load,60_000);return()=>{active=false;clearInterval(timer)};
   },[allowed]);
-  const active=(items??[]).filter(isActiveWork).sort((a,b)=>a.repository.localeCompare(b.repository)||b.issue_id-a.issue_id).slice(0,5);
+  const active=(items??[]).filter(isActiveWork).sort((a,b)=>String(a.repository??'').localeCompare(String(b.repository??''))||b.issue_id-a.issue_id).slice(0,5);
   return <section className="widget widget-work" aria-label="任务队列">
     <header><strong>任务队列</strong><i className={`status-dot${allowed&&items===null?' bad':''}`}/></header>
     {!allowed?<small>当前账户没有任务读取权限</small>:items===null?<small>加载失败，稍后重试</small>:active.length===0?<small>暂无进行中任务</small>:
-      <ul>{active.map(item=><li key={item.id}><span className="work-title">{item.repository} #{item.issue_id} {item.title}</span><em data-status={workDisplayStatus(item)}>{workDisplayStatus(item)}</em></li>)}</ul>}
+      <ul>{active.map(item=>{
+        const href=forgejoIssueUrl(item.repository,item.issue_id);
+        const title=`${String(item.repository??'')} #${String(item.issue_id??'')} ${String(item.title??'')}`;
+        return <li key={item.id}>{href?<a className="work-title" href={href} target="_blank" rel="noopener noreferrer" title={title}>{title}</a>:<span className="work-title">{title}</span>}<em data-status={workDisplayStatus(item)}>{workDisplayStatus(item)}</em></li>;
+      })}</ul>}
     {allowed&&items!==null&&<small>{truncated?'至少 ':''}{items.filter(isActiveWork).length} 项进行中 · <button type="button" className="widget-link" onClick={onOpen}>打开任务</button></small>}
     {allowed&&items===null&&<small><button type="button" className="widget-link" onClick={onOpen}>打开任务面板</button></small>}
   </section>;

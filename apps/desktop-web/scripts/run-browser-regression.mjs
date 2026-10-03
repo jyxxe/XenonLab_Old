@@ -15,6 +15,8 @@ console.log(`Browser regressions use ${executablePath}`);
 const tests = [
   'tests/browser-acceptance-session.test.mjs',
   'tests/browser-acceptance-work.test.mjs',
+  'tests/browser-acceptance-work-widget-links.test.mjs',
+  'tests/browser-acceptance-forgejo-origins.test.mjs',
   'tests/browser-acceptance-shell.test.mjs',
   'tests/browser-acceptance-issues-narrow.test.mjs',
   'tests/browser-acceptance-query-drafts.test.mjs',
