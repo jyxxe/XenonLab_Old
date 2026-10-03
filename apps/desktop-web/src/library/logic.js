@@ -492,3 +492,9 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
   }
   return lines.join('\n');
 }
+
+// Only a deleted row actually returned by the current authenticated include_deleted page
+// replaces the default detail read. Active/unloaded rows retain their existing read path.
+export function loadedDeletedRow(rows, rowId) {
+  return rows?.find(row => row._row_id === rowId && row._deleted_at) || null;
+}

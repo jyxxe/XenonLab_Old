@@ -210,3 +210,16 @@ test('filtered path matches reveal descendants and support transient explicit co
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id).sort(), ['a', 'b']);
   assert.deepEqual([...collapsed], ['/数学']);
 });
+
+test('deleted Recent candidate is exact authenticated loaded row, not an active/missing or previous row', async () => {
+  const {loadedDeletedRow} = await import('../src/library/logic.js');
+  const deleted = {_row_id:'deleted',_deleted_at:'2026-10-03T00:00:00Z',_revision:4,values:{title:'recoverable'}};
+  const active = {_row_id:'active',_deleted_at:null,_revision:2};
+  const page = [active, deleted];
+  assert.equal(loadedDeletedRow(page,'deleted'),deleted);
+  assert.equal(loadedDeletedRow(page,'active'),null);
+  assert.equal(loadedDeletedRow(page,'missing'),null);
+  assert.equal(loadedDeletedRow([], 'deleted'),null);
+  assert.equal(loadedDeletedRow(undefined,'deleted'),null);
+  assert.deepEqual(page,[active,deleted]);
+});

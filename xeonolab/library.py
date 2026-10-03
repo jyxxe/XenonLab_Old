@@ -777,10 +777,16 @@ def create_app(settings=None):
         )
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}")
-    def get_row(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+    def get_row(
+        tid: str,
+        rid: str,
+        request: Request,
+        include_deleted: bool = False,
+        actor=Depends(scope("xelibrary:read")),
+    ):
         authorize(actor, tid, "read", rid)
         with table_connect(tid) as db:
-            row = load_row(db, rid)
+            row = load_row(db, rid, include_deleted=include_deleted)
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
     @app.patch("/api/v1/tables/{tid}/rows/{rid}")
