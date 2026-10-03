@@ -25,6 +25,10 @@ export const defaultPreferences: UserPreferences = {
   reduced_motion: false,
 };
 
+// Reset appearance without submitting user-authored content or a stale note snapshot.
+const defaultAppearancePreferences: Partial<UserPreferences> = {...defaultPreferences};
+delete defaultAppearancePreferences.notes;
+
 const widgetOptions: Array<[UserPreferences['widgets'][number], string]> = [
   ['clock', '时钟与日期'],
   ['status', '系统状态'],
@@ -345,7 +349,7 @@ export function DesktopPreferences({
       </Panel>
 
       <div className="preference-actions">
-        <Button onClick={() => update(defaultPreferences)}>恢复默认外观</Button>
+        <Button onClick={() => update(defaultAppearancePreferences)}>恢复默认外观</Button>
       </div>
 
       <Panel title="窗口布局" actions={<Badge tone="accent">自动保存</Badge>}>
