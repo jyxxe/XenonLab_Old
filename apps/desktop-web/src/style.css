@@ -233,3 +233,9 @@ a.job-table:hover{text-decoration:underline}
 .preference-form .pinned-apps li label{display:flex;align-items:center;gap:var(--spacing-2);flex:1;min-width:0;margin:0}
 
 .embedding-table-target{display:grid;gap:4px;min-width:0}.embedding-table-target>span{overflow:hidden;text-overflow:ellipsis}.embedding-table-target>button{justify-self:start}
+
+.existing-attachment-list {list-style:none;padding:0;}
+.existing-attachment-list li {display:flex;align-items:center;gap:var(--spacing-3);padding:var(--spacing-3) 0;border-bottom:1px solid var(--border);}
+.existing-attachment-list li>div {flex:1;min-width:0;overflow-wrap:anywhere;}
+.existing-attachment-list small {display:block;color:var(--text-secondary);}
+.existing-attachment-list button {flex-shrink:0;}

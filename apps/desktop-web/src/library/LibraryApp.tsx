@@ -617,6 +617,7 @@ export function LibraryApp({
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          identityKey={JSON.stringify([subject, authEpoch, identityLoaded])}
           uploadStore={uploadStore}
           table={table}
           columns={table.columns || []}
