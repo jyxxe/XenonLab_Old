@@ -123,7 +123,12 @@
 .widget-calendar header,.widget-shortcuts header{display:flex;align-items:center;justify-content:space-between;margin:0 0 var(--spacing-2);padding:0;background:transparent;border:0;height:auto}
 .widget-calendar header strong,.widget-shortcuts header strong{font-size:var(--font-size-sm)}
 .calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;text-align:center;font-size:var(--font-size-xs);font-variant-numeric:tabular-nums}
-.calendar-grid>span{display:grid;place-items:center;min-height:22px;border-radius:50%}
+.widget-calendar header{flex-wrap:wrap;gap:6px}
+.calendar-controls{display:flex;gap:4px}
+.calendar-controls button{min-width:24px;min-height:24px;padding:2px 5px;border:1px solid var(--border);border-radius:var(--radius-control);background:var(--control);color:var(--text-primary);font:inherit;font-size:var(--font-size-xs);cursor:pointer}
+.calendar-controls button:hover{background:var(--control-hover)}
+.calendar-row{display:contents}
+.calendar-grid span{display:grid;place-items:center;min-height:22px;border-radius:50%}
 .calendar-grid .calendar-weekday{color:var(--text-muted);font-weight:600}
 .calendar-grid .calendar-outside{visibility:hidden}
 .calendar-grid .calendar-today{background:var(--accent);color:var(--accent-contrast);font-weight:700}

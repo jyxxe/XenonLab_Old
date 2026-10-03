@@ -2,6 +2,7 @@ import React,{useEffect,useRef,useState} from 'react';
 import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
 import {forgejoIssueUrl} from './shell/forgejo-links.js';
 import type {DesktopApp} from './shell/types';
+import {calendarMonth, calendarToday, shiftCalendarMonth} from './calendar.js';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
 type WorkItem={id:string;status:string;claim_active:boolean};
 type Job={job_id:string;status:string};
@@ -25,27 +26,32 @@ export function ClockWidget({timezone}:{timezone:string}){
 
 export function CalendarWidget({timezone}:{timezone:string}){
   const [now,setNow]=useState(()=>new Date());
+  const [selectedMonth,setSelectedMonth]=useState<{year:number;month:number;timezone:string}|null>(null);
   useEffect(()=>{const timer=setInterval(()=>setNow(new Date()),60_000);return()=>clearInterval(timer)},[]);
-  let year=now.getFullYear(),month=now.getMonth()+1,day=now.getDate();
-  try{
-    const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone(timezone),year:'numeric',month:'numeric',day:'numeric'}).formatToParts(now);
-    year=Number(parts.find(part=>part.type==='year')?.value);
-    month=Number(parts.find(part=>part.type==='month')?.value);
-    day=Number(parts.find(part=>part.type==='day')?.value);
-  }catch{/* fall back to the browser's local calendar */}
-  const weekday=new Date(Date.UTC(year,month-1,1)).getUTCDay();
-  const days=new Date(Date.UTC(year,month,0)).getUTCDate();
-  const monthLabel=new Intl.DateTimeFormat('zh-CN',{timeZone:zone(timezone),year:'numeric',month:'long'}).format(now);
+  useEffect(()=>setSelectedMonth(null),[timezone]);
+  const today=calendarToday(now,timezone);
+  const displayed=selectedMonth?.timezone===timezone?selectedMonth:today;
+  const {weekday,days,label:monthLabel}=calendarMonth(displayed);
+  const currentMonth=displayed.year===today.year&&displayed.month===today.month;
+  const browse=(offset:number)=>setSelectedMonth({...shiftCalendarMonth(displayed,offset),timezone});
   const headings=['日','一','二','三','四','五','六'];
   return <section className="widget widget-calendar" aria-label={`${monthLabel}日历`}>
-    <header><strong>{monthLabel}</strong></header>
-    <div className="calendar-grid" role="grid" aria-label={`${monthLabel}日期`}>
-      {headings.map((label,index)=><span className="calendar-weekday" role="columnheader" key={`${label}-${index}`}>{label}</span>)}
-      {Array.from({length:42},(_,index)=>{
+    <header><strong role="status" aria-live="polite" aria-atomic="true">{monthLabel}</strong>
+      <div className="calendar-controls">
+        <button type="button" aria-label="上个月" onClick={()=>browse(-1)}>‹</button>
+        <button type="button" aria-label="回到今天" onClick={()=>{setNow(new Date());setSelectedMonth(null)}}>今天</button>
+        <button type="button" aria-label="下个月" onClick={()=>browse(1)}>›</button>
+      </div>
+    </header>
+    <div className="calendar-grid" role="grid" aria-readonly="true" aria-label={`${monthLabel}日期`}>
+      <div className="calendar-row" role="row">{headings.map((label,index)=><span className="calendar-weekday" role="columnheader" key={`${label}-${index}`}>{label}</span>)}</div>
+      {Array.from({length:6},(_,week)=><div className="calendar-row" role="row" key={week}>{Array.from({length:7},(_,column)=>{
+        const index=week*7+column;
         const value=index-weekday+1;
         const inMonth=value>=1&&value<=days;
-        return <span role="gridcell" aria-current={inMonth&&value===day?'date':undefined} className={inMonth&&value===day?'calendar-today':inMonth?'':'calendar-outside'} key={index}>{inMonth?value:''}</span>;
-      })}
+        const isToday=currentMonth&&inMonth&&value===today.day;
+        return <span role="gridcell" aria-label={inMonth?`${displayed.year}年${displayed.month}月${value}日`:undefined} aria-current={isToday?'date':undefined} className={isToday?'calendar-today':inMonth?'':'calendar-outside'} key={index}>{inMonth?value:''}</span>;
+      })}</div>)}
     </div>
   </section>;
 }
