@@ -24,6 +24,26 @@ function parseTSV(text) {
   return JSON.parse(result.stdout);
 }
 
+function verifyExactIntegers(text) {
+  const script = `import csv,json,sys,io
+rows=list(csv.reader(io.StringIO(sys.stdin.read(), newline=""), delimiter="\\t"))[1:]
+expected=[9223372036854775807,-9223372036854775808,9007199254740993]
+assert len(rows)==len(expected)
+for row,integer in zip(rows,expected):
+    values=json.loads(row[4])
+    assert type(values['integer']) is int and values['integer']==integer
+    assert '"integer":'+str(integer) in row[4], 'integer must be a raw JSON number token'
+    assert values['payload']['endpoints']=={'max':9223372036854775807,'min':-9223372036854775808}
+    assert values['payload']['endpoint_array'][0]==9223372036854775807
+    nested=values['payload']['endpoint_array'][1]
+    assert type(nested['min']) is int and nested['min']==-9223372036854775808
+    assert type(nested['numericString']) is str and nested['numericString']=='9223372036854775807'
+print(json.dumps({'checked_rows':len(rows),'decimal_integers':[str(value) for value in expected],'nested_endpoints_exact':True}))`;
+  const result = spawnSync(python, ['-c', script], {input: text, encoding: 'utf8'});
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
 async function startAPI() {
   const child = spawn(python, [path.join(appRoot, 'tests/query_copy_api.py')], {cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe']});
   let stderr = '';
@@ -105,17 +125,22 @@ test('real temporary XeLibrary query copies only its current page to the native 
       const row = fixture.rows[index];
       assert.equal(parsed[index + 1].length, 5);
       assert.deepEqual(parsed[index + 1].slice(0, 4), [fixture.names[row.table_id], row.path, row._row_id, String(row._revision)]);
-      assert.deepEqual(JSON.parse(parsed[index + 1][4]), row.values);
+      assert.equal(parsed[index + 1][4], fixture.expected_values_json[index], 'raw JSON matches independent Python decimal serialization');
       assert.ok(parsed[index + 1][4].length > 160, 'full JSON exceeds the truncated UI display');
       assert.equal(row.values.status, 'ready', 'draft is excluded by the actual Query API');
     }
     assert.deepEqual(parsed.slice(1).map(row => JSON.parse(row[4]).amount), [30, 20, 10]);
+    const exactCheck = verifyExactIntegers(text);
+    assert.deepEqual(exactCheck.decimal_integers, ['9223372036854775807', '-9223372036854775808', '9007199254740993']);
+    assert.deepEqual(await page.evaluate(() => window.queryCopyFixture.lastQuery.data.map(row => [typeof row.values.integer, row.values.integer.toString(), typeof row.values.payload.endpoint_array[0]])),
+      [['bigint', '9223372036854775807', 'bigint'], ['bigint', '-9223372036854775808', 'bigint'], ['bigint', '9007199254740993', 'bigint']], 'actual UI adapter preserves BigInt values');
     assert.equal(parsed[1][0], '合成表 A\t"引号"\r\n第二行', 'quoted metadata delimiters roundtrip as one cell');
     assert.equal(await editor.inputValue(), fixture.expression);
     assert.deepEqual(await page.evaluate(() => window.queryCopyFixture.calls), before, 'copy triggers no API, row, export or pagination call');
     assert.deepEqual((await (await fetch(backend.base + '/__fixture')).json()).calls, backendBefore, 'server saw no new API requests');
     await fs.writeFile(path.join(outputDir, 'native-clipboard.tsv'), text);
-    await fs.writeFile(path.join(outputDir, 'native-api-evidence.json'), JSON.stringify({synthetic: true, rows: fixture.rows, names: fixture.names, calls: before, parsed}, null, 2));
+    const rowMetadata = fixture.rows.map(({table_id, path, _row_id, _revision}) => ({table_id, path, _row_id, _revision}));
+    await fs.writeFile(path.join(outputDir, 'native-api-evidence.json'), JSON.stringify({synthetic: true, rowMetadata, expectedValuesJSON: fixture.expected_values_json, names: fixture.names, calls: before, parsed, exactCheck}, null, 2));
     await page.screenshot({path: path.join(outputDir, 'desktop-copy.png'), fullPage: true});
     await page.setViewportSize({width: 390, height: 844});
     await copiedStatus(page).scrollIntoViewIfNeeded();

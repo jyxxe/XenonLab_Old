@@ -5,6 +5,7 @@ import '../src/design-system/primitives.css';
 import '../src/style.css';
 import '../src/library/library.css';
 import {APIRequestError} from '../src/api-error.js';
+import {parseAPIJSON} from '../src/library/json.js';
 import {LibraryApp} from '../src/library/LibraryApp';
 import {QueryConsole} from '../src/library/QueryConsole';
 
@@ -13,8 +14,9 @@ const calls: Array<{path: string; method: string; body?: string}> = [];
 async function apiPage(path: string, init: RequestInit = {}) {
   calls.push({path, method: init.method || 'GET', body: init.body as string | undefined});
   const response = await fetch('/api/v1' + path, {...init, headers: {'Authorization': 'Bearer query-copy-synthetic', 'Content-Type': 'application/json', ...init.headers}});
-  const body = await response.json();
+  const body = parseAPIJSON(path, await response.text());
   if (!response.ok) throw new APIRequestError(body.error.message, response.status, body.error.code);
+  if (path === '/query') (window as any).queryCopyFixture.lastQuery = body;
   return body;
 }
 const api = async (path: string, init?: RequestInit) => (await apiPage(path, init)).data;

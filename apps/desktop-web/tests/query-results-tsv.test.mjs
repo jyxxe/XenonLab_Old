@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {parseExactJSON} from '../src/library/json.js';
 import {serializeQueryResultsTSV} from '../src/library/query-results-tsv.js';
 import {serializeTSV} from '../src/library/tsv.js';
 
@@ -25,4 +26,18 @@ test('null provenance stays empty while JSON null and unknown full table IDs are
   ], id => { calls.push(id); return id; }),
   '表\t路径\tRow ID\tRevision\t值\r\n\t\t\t\t"{""null"":null}"\r\nunknown-full-table-123456789\t/path\trow\t1\tnull');
   assert.deepEqual(calls, ['unknown-full-table-123456789'], 'null metadata is never passed to the name resolver');
+});
+
+
+test('query TSV preserves exact integer tokens parsed from API JSON', () => {
+  const valuesJSON = '{"max":9223372036854775807,"min":-9223372036854775808,"safe":9007199254740991,"unsafe":9007199254740993,"nested":[null,{"min":-9223372036854775808,"numericString":"9223372036854775807"}]}';
+  const values = parseExactJSON(valuesJSON);
+  const rows = [{table_id: 'table', path: '/Int64', _row_id: 'row-full-id', _revision: 1, values}];
+  const before = structuredClone(rows);
+  assert.equal(typeof values.max, 'bigint');
+  assert.equal(serializeQueryResultsTSV(rows, () => 'Integers'), serializeTSV(
+    ['表', '路径', 'Row ID', 'Revision', '值'],
+    [['Integers', '/Int64', 'row-full-id', 1, valuesJSON]],
+  ));
+  assert.deepEqual(rows, before);
 });
