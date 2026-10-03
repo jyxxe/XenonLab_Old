@@ -36,6 +36,16 @@ rows, per request. `limit` defaults to25 and is bounded1–100; query length is 
 schema-ordered string/text columns, clipped to256 characters; Row ID is the fallback.
 Other row fields are neither returned nor searched.
 
+The bounded reference scan reads lightweight metadata and live-source markers.
+Source values are loaded only after the row read ACL check, once per distinct
+readable row; the request cache retains only the bounded displayed label. This
+avoids duplicating a large row JSON for every reference, including hidden rows.
+The existing shared table lock prevents API mutations during the scan; the lazy
+source read also rejects missing or deleted rows. The API and cursor contract
+are unchanged. A bounded256KiB/501-reference local allocation regression covers
+readable limit1, hidden-source and search-miss requests; it is not a production
+latency or capacity claim.
+
 Results use the existing unique attachment-ID index in ascending keyset order.
 A versioned opaque cursor binds the boundary to table and normalized query; its
 position grants no authority and is checked as a canonical UUID. Invalid or

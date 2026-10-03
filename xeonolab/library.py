@@ -1225,19 +1225,30 @@ def create_app(settings=None):
                 name for name in names if name not in ("title", "name")
             ]
             rows = db.execute(
-                "SELECT a.*,d.values_json,d._deleted_at FROM __xl_attachments a LEFT JOIN data d ON d._row_id=a.row_id "
+                "SELECT a.*,d._row_id AS source_row_id,d._deleted_at FROM __xl_attachments a LEFT JOIN data d ON d._row_id=a.row_id "
                 "WHERE a.attachment_id>? "
                 "ORDER BY a.attachment_id LIMIT 501", (after,)
             ).fetchall()
+            # References can share a large source row; retain only its bounded label,
+            # and never load its values before checking the current read permission.
+            labels = {}
             for attachment in rows[:500]:
-                if (attachment["values_json"] is not None and not attachment["_deleted_at"]
+                if (attachment["source_row_id"] is not None and not attachment["_deleted_at"]
                         and permits("read", attachment["row_id"])):
-                    values = json.loads(attachment["values_json"])
-                    label = next((values[name].strip()[:256] for name in names
-                                  if isinstance(values.get(name), str) and values[name].strip()),
-                                 attachment["row_id"])
-                    if (not query or query in attachment["filename"].casefold()
-                            or query in label.casefold()):
+                    source = attachment["row_id"]
+                    if source not in labels:
+                        row = db.execute(
+                            "SELECT values_json FROM data WHERE _row_id=? "
+                            "AND (_deleted_at IS NULL OR _deleted_at='')", (source,)
+                        ).fetchone()
+                        labels[source] = None
+                        if row is not None and row["values_json"] is not None:
+                            values = json.loads(row["values_json"])
+                            labels[source] = next((values[name].strip()[:256] for name in names
+                                                   if isinstance(values.get(name), str) and values[name].strip()), source)
+                    label = labels[source]
+                    if label is not None and (not query or query in attachment["filename"].casefold()
+                                              or query in label.casefold()):
                         if len(visible) == limit:
                             more = True
                             break

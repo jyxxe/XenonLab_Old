@@ -2,6 +2,7 @@
 import base64
 import json
 import sqlite3
+import tracemalloc
 from uuid import UUID
 
 import pytest
@@ -22,6 +23,54 @@ def populate(client, tid, rid, count=3, start=1, filename="proof.pdf"):
 
 def page(client, tid, token="alice", **params):
     return client.get(f"/api/v1/tables/{tid}/attachments", headers=auth(token), params=params)
+
+
+@pytest.mark.parametrize("scenario", ["readable", "hidden", "query_miss"])
+def test_large_shared_source_does_not_amplify_metadata_page_memory(library, monkeypatch, scenario):
+    created = library.post("/api/v1/tables", headers=auth(), json={
+        "path": "/Memory", "name": "Shared source",
+        "columns": [{"name": "title", "type": "string"}, {"name": "body", "type": "text"}],
+    })
+    assert created.status_code == 201, created.text
+    tid = created.json()["data"]["table_id"]
+    values = {"title": "Readable source", "body": ""}
+    values["body"] = "A" * (256 * 1024 - len(json.dumps(values).encode()))
+    encoded = json.dumps(values)
+    assert len(encoded.encode()) == 256 * 1024
+    created = library.post(f"/api/v1/tables/{tid}/rows", headers=auth(), json={"values": values})
+    assert created.status_code == 201, created.text
+    rid = created.json()["data"]["_row_id"]
+    aids = populate(library, tid, rid, 501)
+    assert put_acl(library, "table", tid, {"alice": ["read"], "bob": ["read"]}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{rid}", {"alice": ["read"]}).status_code == 200
+    decoded_sources = []
+    original_loads = json.loads
+
+    def loads(value, *args, **kwargs):
+        if value == encoded:
+            decoded_sources.append(len(value))
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", loads)
+    tracemalloc.start()
+    try:
+        result = page(library, tid, "bob" if scenario == "hidden" else "alice",
+                      limit=1, q="absent" if scenario == "query_miss" else "")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result.status_code == 200, result.text
+    # Generous allocation guard: the original repeated JOIN takes ~126MiB for
+    # this bounded input. This guards amplification, not latency or host RSS.
+    assert peak < 20 * 1024 * 1024
+    assert len(decoded_sources) == (0 if scenario == "hidden" else 1)
+    result = result.json()
+    assert result["meta"]["next_cursor"]
+    if scenario == "readable":
+        assert [item["attachment_id"] for item in result["data"]] == aids[:1]
+        assert result["data"][0]["source_label"] == "Readable source"
+    else:
+        assert result["data"] == []
 
 
 def test_metadata_pages_search_and_no_content_or_row_values(library):
