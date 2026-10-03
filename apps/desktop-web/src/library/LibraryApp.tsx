@@ -509,6 +509,7 @@ export function LibraryApp({
             onValidate={text => void query.validate(text)}
             onOpenRow={(tableId, rowId) => void openRow(tableId, rowId)}
             tableName={tableName}
+            tableNameForCopy={id => tableNames.get(id) ?? id}
           />
         )}
 
