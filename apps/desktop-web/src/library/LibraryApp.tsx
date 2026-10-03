@@ -183,6 +183,19 @@ export function LibraryApp({
     }
   }
 
+  function rememberLoadedRow(rowId: string) {
+    if (table && session.rows.some(row => row._row_id === rowId)) {
+      prefs.remember({kind: 'row', id: `${table.id}:${rowId}`, title: `${table.name} · ${rowId.slice(0, 8)}`, at: Date.now()});
+    }
+  }
+
+  function activateLoadedRow(rowId: string) {
+    setActiveRowId(rowId);
+    setInspectorOpen(true);
+    setInspectorTab('overview');
+    rememberLoadedRow(rowId);
+  }
+
   function onSelectRow(rowId: string, event: React.MouseEvent) {
     ++rowNavigation.current;
     setActiveRowId(rowId);
@@ -205,8 +218,7 @@ export function LibraryApp({
       }
       return new Set([rowId]);
     });
-    const row = session.rows.find(item => item._row_id === rowId);
-    if (row) prefs.remember({kind: 'row', id: `${table?.id}:${rowId}`, title: `${table?.name} · ${rowId.slice(0, 8)}`, at: Date.now()});
+    rememberLoadedRow(rowId);
   }
 
   const selectedRow = session.rows.find(row => row._row_id === activeRowId) || null;
@@ -585,7 +597,7 @@ export function LibraryApp({
               selection={selection}
               activeRowId={activeRowId}
               onSelectRow={onSelectRow}
-              onActivateRow={rowId => { setActiveRowId(rowId); setInspectorOpen(true); setInspectorTab('overview'); }}
+              onActivateRow={activateLoadedRow}
               onSelectionChange={setSelection}
               onLoadMore={() => void session.loadMore()}
               onRetry={() => void session.refresh()}
