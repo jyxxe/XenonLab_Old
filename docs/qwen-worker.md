@@ -19,12 +19,34 @@ are 2048; operator-configured 64–2048 dimensional output is a separate space.
 Transformers 4.57.3 requires Hub <1, which cannot coexist with this project's Hub >=1. The selected
 [5.2.0 metadata](https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/dependency_versions_table.py)
 accepts Hub >=1.3,<2, Torch >=2.4 and tokenizers <=0.23.0. The optional artifact pins tokenizers
-0.23.0 (within the project's >=0.20,<1 range), rather than the default lock's 0.23.2. The reviewed
+0.22.2 (within the project's >=0.20,<1 range), rather than the default lock's 0.23.2. The upper bound 0.23.0 is not an available stable PyPI release;
+[0.22.2](https://pypi.org/pypi/tokenizers/0.22.2/json) is published, non-yanked and satisfies both ranges.
+The tokenizer pin is part of preprocessing_revision, preventing reuse across tokenizer changes. The reviewed
 5.2 Qwen model/processor symbols are present; the removed, unused `check_model_inputs` import is
 also removed from the vendor copy. This is static source/metadata compatibility, not a tested
 heavy-runtime installation. Actual CPU wheels, final dependency lock/hashes and model compatibility
 must be built and validated by the coordinator. The loader rejects mismatched pinned dependency
 versions before importing model code.
+
+Official public metadata confirms CPython3.12/Linux x86_64 CPU wheels for torch2.8.0+cpu and
+vision0.23.0+cpu, tagged manylinux_2_28: the actual runtime therefore needs glibc>=2.28 (not musl).
+[Index](https://download.pytorch.org/whl/cpu/torch/) wheel SHA256 is
+`cb9a8ba8137ab24e36bf1742cb79a1294bd374db570f09fc15a5e1318160db4e`; matching
+[vision index](https://download.pytorch.org/whl/cpu/torchvision/) SHA256 is
+`ae459d4509d3b837b978dc6c66106601f916b6d2cda75c137e3f5f48324ce1da`.
+Tokenizers0.22.2's cp39-abi3-manylinux_2_17_x86_64 wheel (compatible with CPython3.12) SHA256 is
+`369cc9fc8cc10cb24143873a0d95438bb8ee257bb80c71989e3ee290e8d72c67`.
+These are registry inventory hashes, not a completed/download-verified artifact. Only JSON/index
+and small wheel metadata sidecars were fetched; no wheel was downloaded or installed. PyTorch
+sidecar hashes matched the index. Vision's torch==2.8.0 accepts the pinned +cpu local version.
+
+[Qwen-vl-utils0.0.14 metadata](https://pypi.org/pypi/qwen-vl-utils/0.0.14/json) also requires av and
+requests unconditionally, even when serving only images. The coordinator must resolve/hash the
+full runtime dependency closure (including these and their compiled/transitive dependencies),
+produce the exact platform wheel inventory and immutable offline artifact, and run installation,
+CPU imports, D100M smoke and real Qwen tests. requirements-qwen-cpu.txt is not a complete hashed
+lock. Default uv.lock cannot be used as that artifact lock. Metadata availability/intersections do
+not prove binary linking or inference compatibility.
 
 A coordinator-controlled build can resolve the project and optional requirements together:
 

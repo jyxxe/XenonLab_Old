@@ -354,3 +354,13 @@ def test_actual_common_error_envelope_matches_declared_models_on_all_embedding_r
                     "schema"
                 ]
                 assert ref["$ref"].endswith("EmbeddingErrorResponse")
+
+
+def test_preprocessing_space_includes_effective_tokenizer_pin(tmp_path, monkeypatch):
+    from xeonolab.qwen_encoder import RUNTIME_VERSIONS
+
+    pinned = config(tmp_path)
+    first = pinned.preprocessing_revision
+    assert "-tk0.22.2-" in first
+    monkeypatch.setitem(RUNTIME_VERSIONS, "tokenizers", "synthetic-other-tokenizer")
+    assert pinned.preprocessing_revision != first

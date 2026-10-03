@@ -19,7 +19,7 @@ RUNTIME_VERSIONS = {
     "torch": "2.8.0+cpu",
     "torchvision": "0.23.0+cpu",
     "transformers": "5.2.0",
-    "tokenizers": "0.23.0",
+    "tokenizers": "0.22.2",
     "qwen-vl-utils": "0.0.14",
 }
 IMAGE_MAX_BYTES = 16 * 1024 * 1024
@@ -60,9 +60,7 @@ class QwenConfig:
 
     @property
     def preprocessing_revision(self):
-        return (
-            f"xl-qwen-v1-{UPSTREAM_REVISION[:12]}-tf5.2.0-f32-eager-p{self.process_pixels}-t{self.max_tokens}"
-        )
+        return f"xl-qwen-v1-{UPSTREAM_REVISION[:12]}-tf5.2.0-tk{RUNTIME_VERSIONS['tokenizers']}-f32-eager-p{self.process_pixels}-t{self.max_tokens}"
 
     def descriptor(self, status):
         return {
