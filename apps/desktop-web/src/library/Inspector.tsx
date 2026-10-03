@@ -42,6 +42,7 @@ export function Inspector({
   onToggleFavorite,
   onClose,
   uploadStore,
+  identityKey = '',
 }: {
   table: Table;
   columns: Column[];
@@ -65,6 +66,7 @@ export function Inspector({
   onToggleFavorite: () => void;
   onClose: () => void;
   uploadStore?: UploadStore;
+  identityKey?: string;
 }) {
   const [tab, setTab] = useState<InspectorTab>('overview');
   const [draft, setDraft] = useState<Record<string, any>>({});
@@ -232,13 +234,14 @@ export function Inspector({
             {row && (
               <Attachments
                 uploadStore={uploadStore}
-                key={`overview:${table.id}:${row._row_id}`}
+                key={`overview:${identityKey}:${table.id}:${row._row_id}`}
                 tableId={table.id}
                 rowId={row._row_id}
                 api={api}
                 apiPage={apiPage}
                 apiRaw={apiRaw}
                 canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
                 onChanged={async () => undefined}
               />
             )}
@@ -296,13 +299,14 @@ export function Inspector({
           row ? (
             <Attachments
               uploadStore={uploadStore}
-              key={`${table.id}:${row._row_id}`}
+              key={`${identityKey}:${table.id}:${row._row_id}`}
               tableId={table.id}
               rowId={row._row_id}
               api={api}
               apiPage={apiPage}
               apiRaw={apiRaw}
               canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
               onChanged={async () => undefined}
             />
           ) : (
