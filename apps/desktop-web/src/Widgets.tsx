@@ -1,3 +1,4 @@
+import {Icon} from './design-system/Icon';
 import React,{useEffect,useRef,useState} from 'react';
 import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
 import {forgejoIssueUrl} from './shell/forgejo-links.js';
@@ -55,7 +56,7 @@ export function AppShortcutsWidget({apps,selected,onOpen}:{apps:DesktopApp[];sel
   return <section className="widget widget-shortcuts" aria-label="应用快捷入口">
     <header><strong>应用快捷入口</strong></header>
     {choices.length?<div className="shortcut-grid">{choices.slice(0,12).map(app=><button type="button" key={app.id} onClick={()=>onOpen(app.id)} aria-label={`打开${app.title}`}>
-      <span aria-hidden="true">{app.icon}</span><small>{app.title}</small>
+      <span aria-hidden="true"><Icon value={app.icon} size={24} /></span><small>{app.title}</small>
     </button>)}</div>:<p className="muted">没有可用的授权应用</p>}
   </section>;
 }
