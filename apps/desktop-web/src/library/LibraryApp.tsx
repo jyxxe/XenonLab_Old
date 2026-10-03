@@ -1,5 +1,5 @@
 import {normalizeColumnDefaults, stringifyExactJSON} from './json.js';
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Select, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
@@ -14,19 +14,11 @@ import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
 import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
+import {createRequestLifetime} from './request-lifetime.js';
 import {ancestorPaths, changedFields, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
-export function LibraryApp({
-  api,
-  apiPage,
-  apiRaw,
-  intent,
-  apps,
-  openApp,
-  notify,
-  authEpoch = 0,
-}: {
+type LibraryAppProps = {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
@@ -35,8 +27,44 @@ export function LibraryApp({
   openApp?: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
   notify?: (toast: {title: string; tone?: 'info' | 'success' | 'danger'}) => void;
   authEpoch?: number;
-}) {
-  const {scopes, subject, loaded: identityLoaded} = useScopes(api, authEpoch);
+};
+
+export function LibraryApp(props: LibraryAppProps) {
+  const identity = useScopes(props.api, props.authEpoch);
+  if (!identity.loaded) return (
+    <div className="knowledge">
+      <main aria-label="知识库身份验证">
+        <p role="status"><Spinner label="正在确认知识库身份" /> 正在确认知识库身份…</p>
+      </main>
+    </div>
+  );
+  if (!identity.subject) {
+    const error = describeError(identity.error || new Error('当前会话没有已验证的用户身份。'), '确认知识库身份');
+    return (
+      <div className="knowledge">
+        <main aria-label="知识库身份验证">
+          <ErrorState title="无法确认知识库身份" message={error.message} errorCode={error.code} requestId={error.requestId} onRetry={identity.reload} />
+        </main>
+      </div>
+    );
+  }
+  // A different epoch hides the old workspace synchronously, even while the
+  // next subject is still being verified. All resource/UI state belongs here.
+  return <LibraryWorkspace key={JSON.stringify([props.authEpoch ?? 0, identity.subject])} {...props} subject={identity.subject} scopes={identity.scopes} />;
+}
+
+function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourceAPIRaw, intent, apps, openApp, notify, authEpoch = 0, subject, scopes}: LibraryAppProps & {subject: string; scopes: string[]}) {
+  const lifetime = useMemo(() => createRequestLifetime(), []);
+  useLayoutEffect(() => {
+    lifetime.activate();
+    return () => lifetime.end();
+  }, [lifetime]);
+  // Stable wrappers reject late responses and prevent old async chains from
+  // starting follow-up requests with a new session's live credentials.
+  const api = useMemo(() => lifetime.bind(sourceAPI), [lifetime, sourceAPI]);
+  const apiPage = useMemo(() => lifetime.bind(sourceAPIPage), [lifetime, sourceAPIPage]);
+  const apiRaw = useMemo(() => lifetime.bind(sourceAPIRaw), [lifetime, sourceAPIRaw]);
+  const identityLoaded = true;
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
   const search = useSearch(apiPage);
