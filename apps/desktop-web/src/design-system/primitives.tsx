@@ -217,6 +217,8 @@ function MenuList({
   style,
   role = 'menu',
   ariaLabel,
+  description,
+  descriptionId,
 }: {
   items: MenuItem[];
   onClose: () => void;
@@ -225,6 +227,8 @@ function MenuList({
   style?: React.CSSProperties;
   role?: string;
   ariaLabel?: string;
+  description?: string;
+  descriptionId?: string;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(() => (autoFocus ? firstEnabledIndex(items) : -1));
@@ -250,6 +254,7 @@ function MenuList({
       ref={listRef}
       role={role}
       aria-label={ariaLabel}
+      aria-describedby={description ? descriptionId : undefined}
       className={cx('ds-menu', className)}
       style={style}
       onKeyDown={event => {
@@ -277,6 +282,7 @@ function MenuList({
         }
       }}
     >
+      {description && <p className="ds-menu-description">{description}</p>}
       {items.map((item, index) =>
         item.separator ? (
           <hr key={item.id ?? `separator-${index}`} className="ds-menu-separator" />
@@ -349,15 +355,18 @@ export function MenuButton({
   className,
   active = false,
   align = 'left',
+  description,
 }: {
   label: React.ReactNode;
   items: MenuItem[];
   className?: string;
   active?: boolean;
   align?: 'left' | 'right';
+  description?: string;
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
+  const descriptionId = useId();
   const close = useCallback(() => {setOpen(false); trigger.current?.focus()}, []);
   return (
     <div className={cx('ds-menu-button', className)}>
@@ -367,13 +376,15 @@ export function MenuButton({
         className={cx('ds-menubar-item', (open || active) && 'ds-active')}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-describedby={description ? descriptionId : undefined}
         onClick={() => setOpen(value => !value)}
         onKeyDown={event => {if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {event.preventDefault();setOpen(true)}}}
       >
         {label}
       </button>
+      {description && <span id={descriptionId} hidden>{description}</span>}
       <Popover anchorRef={trigger} open={open} onClose={close} className={cx('ds-menu-popover', align === 'right' && 'ds-align-right')}>
-        <MenuList items={items} onClose={close} autoFocus ariaLabel={typeof label === 'string' ? label : undefined} />
+        <MenuList items={items} onClose={close} autoFocus ariaLabel={typeof label === 'string' ? label : undefined} description={description} descriptionId={descriptionId} />
       </Popover>
     </div>
   );
