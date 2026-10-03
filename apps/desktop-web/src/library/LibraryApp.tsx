@@ -64,6 +64,7 @@ export function LibraryApp({
 
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
+  const canReadTheorems = scopes.includes('xelibrary:theorem:read');
   const table = session.table;
   const {jobs, error: jobsError, reload: reloadJobs} = useJobs(apiPage, table?.id ?? '', canAdmin && view === 'library' && Boolean(table));
 
@@ -130,8 +131,18 @@ export function LibraryApp({
     ++rowNavigation.current;
     setTableTarget(null);
     setView(next);
-    if (next === 'theorems' && !theorems.items.length && !theorems.loading) void theorems.load();
+    if (next === 'theorems' && canReadTheorems && !theorems.items.length && !theorems.loading) void theorems.load();
   }
+
+  // The identity may resolve after a deep link lands on the theorems view;
+  // fire the deferred first load once the scope gate is known.
+  useEffect(() => {
+    if (identityLoaded && view === 'theorems' && canReadTheorems && !theorems.items.length && !theorems.loading) {
+      void theorems.load();
+    }
+    // Deliberately keyed on the gate inputs only: item/loading changes must not re-trigger loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identityLoaded, canReadTheorems]);
 
   async function openRow(tableId: string, rowId: string, remember = true) {
     const request = ++rowNavigation.current;
@@ -498,6 +509,8 @@ export function LibraryApp({
 
         {view === 'theorems' && (
           <TheoremView
+            canRead={canReadTheorems}
+            identityReady={identityLoaded}
             items={theorems.items}
             searchResults={theorems.searchResults}
             searchPartial={theorems.searchPartial}
