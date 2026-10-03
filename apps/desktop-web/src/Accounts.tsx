@@ -8,11 +8,14 @@ function Scopes({available,selected,setSelected}:{available:string[];selected:st
 export function Accounts({api}:{api:API}){
  const [me,setMe]=useState<any>(null),[nodes,setNodes]=useState<Account[]>([]),[chosen,setChosen]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
  const [rootCandidates,setRootCandidates]=useState<string[]>([]);
+ const [treeFilter,setTreeFilter]=useState('');
  const [treeState,setTreeState]=useState<'loading'|'unregistered'|'ready'>('loading');
  const [name,setName]=useState(''),[enabled,setEnabled]=useState(true),[inherit,setInherit]=useState(false),[grants,setGrants]=useState<string[]>([]);
  const [parent,setParent]=useState(''),[username,setUsername]=useState(''),[newName,setNewName]=useState(''),[password,setPassword]=useState(''),[newAll,setNewAll]=useState(false),[newScopes,setNewScopes]=useState<string[]>(['desktop:read']);
  const [reset,setReset]=useState(''),[keys,setKeys]=useState<any[]>([]),[keyName,setKeyName]=useState(''),[keyScopes,setKeyScopes]=useState<string[]>([]),[secret,setSecret]=useState(''),[audit,setAudit]=useState<any[]>([]);
  const selected=nodes.find(n=>n.id===chosen),parentNode=nodes.find(n=>n.id===parent);
+ const treeQuery=treeFilter.trim().toLowerCase();
+ const visibleNodes=treeQuery?nodes.filter(node=>node.name.toLowerCase().includes(treeQuery)||node.username.toLowerCase().includes(treeQuery)):nodes;
  const auditAccount=(id:string)=>{const account=nodes.find(node=>node.id===id);return account?`${account.name}（${account.username}） · ${id}`:id};
  const canManage=me?.kind==='human'&&(me.scopes.includes('accounts:manage')||me.scopes.includes('desktop:admin'));
  const canPolicy=canManage&&!!selected&&(chosen!==me?.subject||selected.parent===null);
@@ -46,7 +49,13 @@ export function Accounts({api}:{api:API}){
  return <section className="account-manager"><h2>账号与 API key</h2><p>子账号的有效权限随父账号变化。API key 只显示一次，撤销后立即停止授权。</p><p role="status">{message}</p>
  {treeState==='loading'&&<p role="status">正在检查账号树状态…</p>}
  {treeState==='unregistered'&&<section className="account-setup" aria-labelledby="account-setup-title"><h3 id="account-setup-title">首次启用账号树</h3><p>当前登录身份尚未登记到受管账号树。初始化会将当前身份登记为根账号，并沿用已验证的现有权限；不会自动启用账号树或增加权限。</p>{me?.kind==='human'&&me?.scopes?.includes('desktop:admin')?<button disabled={busy} onClick={()=>act(async()=>{await api('/auth/accounts/bootstrap',{method:'POST',body:JSON.stringify({name:'管理员'})});await load();setMessage('账号树已启用')})}>初始化我的账号树</button>:<p>请联系具有桌面管理员权限的人工用户完成初始化。此页面不会自动执行此操作。</p>}</section>}
- {nodes.length>0&&<div className="account-columns"><aside className="account-tree"><h3>我的账号树</h3>{nodes.map(n=><button key={n.id} className={n.id===chosen?'active':''} style={{paddingLeft:12+depth(n)*16}} onClick={()=>setChosen(n.id)}>{n.name}<small>{n.username} · {n.enabled?'启用':'停用'}</small></button>)}</aside>
+ {nodes.length>0&&<div className="account-columns"><aside className="account-tree"><h3>我的账号树</h3>
+  <label className="account-tree-filter">筛选账号<input type="search" placeholder="名称或登录名" value={treeFilter} onChange={event=>setTreeFilter(event.target.value)}/></label>
+  <button type="button" disabled={!treeFilter} onClick={()=>setTreeFilter('')}>清除筛选</button>
+  <p className="muted" role="status">{visibleNodes.length} / {nodes.length} 个账号</p>
+  {!visibleNodes.length&&<p role="status">没有匹配的账号</p>}
+  <div className="account-tree-list">{visibleNodes.map(n=><button key={n.id} className={n.id===chosen?'active':''} style={{paddingLeft:12+depth(n)*16}} onClick={()=>setChosen(n.id)}>{n.name}<small>{n.username} · {n.enabled?'启用':'停用'}</small></button>)}</div>
+ </aside>
  <div className="account-detail">{selected&&<><h3>{selected.name}</h3><p className="muted">{selected.id}</p><label>显示名称<input value={name} onChange={e=>setName(e.target.value)}/></label>
  {canPolicy&&<><label><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/>启用账号</label>{selected.parent&&<label><input type="checkbox" checked={inherit} onChange={e=>setInherit(e.target.checked)}/>继承父账号全部权限</label>}{!inherit&&<>{isOwnRoot&&rootCandidates.length>0&&<p>以下权限已由当前登录角色授权，可由根账号显式加入；不会自动启用。</p>}<Scopes available={editableScopes} selected={grants} setSelected={setGrants}/></>}</>}
  {canManage&&<button disabled={busy} onClick={()=>act(saveAccount)}>保存账号设置</button>}
