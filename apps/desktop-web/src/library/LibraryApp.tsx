@@ -14,7 +14,7 @@ import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
 import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
-import {ancestorPaths, changedFields, classifySchemaChange, describeError} from './logic.js';
+import {ancestorPaths, changedFields, classifySchemaChange, describeError, rowSelectionRange} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
 export function LibraryApp({
@@ -197,19 +197,13 @@ export function LibraryApp({
     rememberLoadedRow(rowId);
   }
 
-  function onSelectRow(rowId: string, event: React.MouseEvent) {
+  function onSelectRow(rowId: string, event: React.MouseEvent, visibleRowIds: string[]) {
     ++rowNavigation.current;
     setActiveRowId(rowId);
     setInspectorOpen(true);
     setSelection(current => {
       if (event.shiftKey && activeRowId) {
-        const ids = session.rows.map(row => row._row_id);
-        const from = ids.indexOf(activeRowId);
-        const to = ids.indexOf(rowId);
-        if (from >= 0 && to >= 0) {
-          const [start, end] = from < to ? [from, to] : [to, from];
-          return new Set(ids.slice(start, end + 1));
-        }
+        return new Set(rowSelectionRange(visibleRowIds, activeRowId, rowId));
       }
       if (event.metaKey || event.ctrlKey) {
         const next = new Set(current);

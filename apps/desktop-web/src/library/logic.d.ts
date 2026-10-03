@@ -8,6 +8,7 @@ export const SYSTEM_FIELDS: Array<{name: string; label: string; type: string}>;
 export function rowValue(row: any, key: string): unknown;
 export function sortRows(rows: any[], key: string, direction?: 'asc' | 'desc'): any[];
 export function filterRows(rows: any[], query: string): any[];
+export function rowSelectionRange(visibleIds: string[], anchorId: string | null, targetId: string): string[];
 
 export type TreeNode = {path: string; name: string; tables: Table[]; children: TreeNode[]; count: number};
 export function buildPathTree(tables: Table[]): TreeNode;
