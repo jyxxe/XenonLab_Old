@@ -1,10 +1,11 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage} from '../shell/types';
-import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, toggleFavorite} from './logic.js';
+import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, SEARCH_LIMIT_OPTIONS, toggleFavorite} from './logic.js';
 import {addQueryRecent, QUERY_EXPRESSION_LIMIT, queryDraftsStorageKey, readQueryDrafts, writeQueryDrafts} from './query-drafts.js';
 import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
-export const SEARCH_LIMIT = 25;
+/** Default UI cap for search results; users may raise it through SEARCH_LIMIT_OPTIONS. */
+export const SEARCH_LIMIT = SEARCH_LIMIT_OPTIONS[0];
 export const DEFAULT_QUERY = 'FROM "/**" LIMIT 100';
 
 export function useScopes(api: API, authEpoch = 0) {
@@ -233,8 +234,12 @@ export function useSearch(apiPage: APIPage) {
   const [query, setQuery] = useState('');
   const [path, setPath] = useState('/**');
   const [filterText, setFilterText] = useState('');
+  const [limit, setLimit] = useState(SEARCH_LIMIT);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [meta, setMeta] = useState<SearchMeta>({});
+  // The cap actually sent with the results on screen, so "最多 N 条" never
+  // drifts from the hits while a changed limit has not been rerun yet.
+  const [resultLimit, setResultLimit] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
   const [ran, setRan] = useState(false);
@@ -260,7 +265,7 @@ export function useSearch(apiPage: APIPage) {
         const body: Record<string, unknown> = {
           query: text,
           path: scope,
-          limit: SEARCH_LIMIT,
+          limit,
           filters: {...parsed.filters, ...(overrides.filters || {})},
         };
         if (endpoint === '/search/semantic') body.mode = mode === 'quality' ? 'quality' : 'fast';
@@ -268,17 +273,19 @@ export function useSearch(apiPage: APIPage) {
         if (request !== generation.current) return;
         setHits(page.data as SearchHit[]);
         setMeta(page.meta as SearchMeta);
+        setResultLimit(limit);
       } catch (cause) {
         if (request === generation.current) {
           setHits([]);
           setMeta({});
+          setResultLimit(null);
           setError(cause);
         }
       } finally {
         if (request === generation.current) setRunning(false);
       }
     },
-    [apiPage, filterText, kind, mode, path, query],
+    [apiPage, filterText, kind, limit, mode, path, query],
   );
 
   const changeMode = useCallback((next: SearchMode) => {
@@ -288,6 +295,7 @@ export function useSearch(apiPage: APIPage) {
     setRunning(false);
     setHits([]);
     setMeta({});
+    setResultLimit(null);
     setError(null);
     setRan(false);
   }, []);
@@ -297,11 +305,12 @@ export function useSearch(apiPage: APIPage) {
     setRunning(false);
     setHits([]);
     setMeta({});
+    setResultLimit(null);
     setError(null);
     setRan(false);
   }, []);
 
-  return {mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, hits, meta, error, running, ran, run, reset};
+  return {mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, limit, setLimit, hits, meta, resultLimit, error, running, ran, run, reset};
 }
 
 export function useQueryConsole(apiPage: APIPage, subject: string | null, identityVerified = Boolean(subject), authEpoch = 0) {

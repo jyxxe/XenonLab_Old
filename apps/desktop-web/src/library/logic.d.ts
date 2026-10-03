@@ -38,6 +38,8 @@ export type SchemaChange = {
 };
 export function classifySchemaChange(current?: Column[], draft?: Column[]): SchemaChange;
 export function parseFieldFilters(text: string): {filters: Record<string, string>; errors: string[]};
+export const SEARCH_LIMIT_OPTIONS: number[];
+export function searchResultSummary(limit: unknown, hitCount: unknown): string | null;
 export function searchWarnings(meta?: Record<string, unknown>): string[];
 export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;

@@ -1,6 +1,6 @@
 import React, {useMemo, useState} from 'react';
-import {Badge, Button, EmptyState, ErrorState, Input, Skeleton, Tabs, Textarea} from '../design-system/primitives';
-import {describeError, isKeywordResult, parseFieldFilters, searchWarnings} from './logic.js';
+import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton, Tabs, Textarea} from '../design-system/primitives';
+import {SEARCH_LIMIT_OPTIONS, describeError, isKeywordResult, parseFieldFilters, searchResultSummary, searchWarnings} from './logic.js';
 import type {SearchHit, SearchMeta, SearchMode} from './types';
 
 export function SearchView({
@@ -14,6 +14,9 @@ export function SearchView({
   onPath,
   filterText,
   onFilterText,
+  limit,
+  onLimit,
+  resultLimit,
   hits,
   meta,
   error,
@@ -34,6 +37,9 @@ export function SearchView({
   onPath: (value: string) => void;
   filterText: string;
   onFilterText: (value: string) => void;
+  limit: number;
+  onLimit: (value: number) => void;
+  resultLimit: number | null;
   hits: SearchHit[];
   meta: SearchMeta;
   error: unknown;
@@ -81,6 +87,16 @@ export function SearchView({
           onChange={event => onQuery(event.target.value)}
           onKeyDown={event => event.key === 'Enter' && onRun()}
         />
+        <label className="library-search-limit">
+          结果条数
+          <Select
+            aria-label="结果条数上限"
+            value={String(limit)}
+            onChange={event => onLimit(Number(event.target.value))}
+          >
+            {SEARCH_LIMIT_OPTIONS.map(option => <option key={option} value={String(option)}>{option}</option>)}
+          </Select>
+        </label>
         <Button variant="primary" onClick={onRun} disabled={running}>{running ? '搜索中…' : '搜索'}</Button>
       </div>
 
@@ -146,7 +162,12 @@ export function SearchView({
           }
         />
       ) : hits.length ? (
-        <ol className="library-results">
+        <>
+          <p className="library-result-count" role="status">
+            <span className="library-result-count-main">{searchResultSummary(resultLimit ?? limit, hits.length)}</span>
+            <small>指本次请求的上限与返回数，不代表知识库中匹配的总数。</small>
+          </p>
+          <ol className="library-results">
           {hits.map(hit => (
             <li key={`${hit.table_id}:${hit.row_id}`}>
               <button type="button" onClick={() => onOpenHit(hit)}>
@@ -169,7 +190,8 @@ export function SearchView({
               </button>
             </li>
           ))}
-        </ol>
+          </ol>
+        </>
       ) : (
         <EmptyState icon="⌕" title="统一搜索" description="在 Fast 中输入关键词，或在 Structured 中编写 Query DSL。" />
       )}
