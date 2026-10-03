@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ancestorPaths,
+  clampColumnWidth,
+  keyboardColumnWidth,
   buildPathTree,
   changedFields,
   classifySchemaChange,
@@ -209,4 +211,17 @@ test('filtered path matches reveal descendants and support transient explicit co
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered, collapsed)).filter(item => item.kind === 'table'), []);
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id).sort(), ['a', 'b']);
   assert.deepEqual([...collapsed], ['/数学']);
+});
+
+test('column resize shares limits and keyboard steps without treating grid keys as resize', () => {
+  assert.equal(clampColumnWidth(40), 80);
+  assert.equal(clampColumnWidth(600), 520);
+  assert.equal(clampColumnWidth(NaN), 160);
+  assert.equal(keyboardColumnWidth(137, 'ArrowRight'), 147);
+  assert.equal(keyboardColumnWidth(137, 'ArrowLeft', true), 97);
+  assert.equal(keyboardColumnWidth(85, 'ArrowLeft'), 80);
+  assert.equal(keyboardColumnWidth(515, 'ArrowRight', true), 520);
+  assert.equal(keyboardColumnWidth(137, 'Home'), 80);
+  assert.equal(keyboardColumnWidth(137, 'End'), 520);
+  for (const key of ['ArrowDown', 'Enter', 'Escape', 'Tab']) assert.equal(keyboardColumnWidth(137, key), null);
 });

@@ -83,3 +83,6 @@ export function buildSelectionPrompt(
   columns?: Column[],
   question?: string,
 ): string;
+
+export function clampColumnWidth(width: number): number;
+export function keyboardColumnWidth(width: number, key: string, shift?: boolean): number | null;
