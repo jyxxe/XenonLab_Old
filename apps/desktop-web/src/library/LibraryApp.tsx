@@ -645,6 +645,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          identityKey={JSON.stringify([subject, authEpoch, identityLoaded])}
           uploadStore={uploadStore}
           table={table}
           columns={table.columns || []}

@@ -1,3 +1,5 @@
+import base64
+import binascii
 import fcntl
 import hashlib
 import json
@@ -15,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 
-from fastapi import Depends, Header, Request, UploadFile
+from fastapi import Depends, Header, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -136,6 +138,22 @@ class Restore(BaseModel):
 
 class AttachmentBind(BaseModel):
     attachment_id: str = Field(min_length=1, max_length=64)
+
+
+class AttachmentCandidate(BaseModel):
+    attachment_id: str
+    row_id: str
+    filename: str
+    media_type: str
+    size: int
+    created_at: str
+    metadata: dict
+    source_label: str
+
+
+class AttachmentCandidatePage(BaseModel):
+    data: list[AttachmentCandidate]
+    meta: dict
 
 
 class ACLWrite(BaseModel):
@@ -1166,6 +1184,84 @@ def create_app(settings=None):
         table_connect=table_connect,
     )
     recover_table_deletions()
+
+    @app.get("/api/v1/tables/{tid}/attachments", response_model=AttachmentCandidatePage, description=(
+        "List same-table attachment metadata for currently readable, live source rows. "
+        "Requires xelibrary:read and table/row ACL. UUID keyset cursor is bound to table "
+        "and normalized search, not authority; every page checks current identity/ACL. "
+        "At most 500 references are examined per page; empty pages may have next_cursor. "
+        "Search is a casefolded substring of filename or displayed source_label. "
+        "No content, object hash, row values, preview or total count is returned."
+    ))
+    def list_table_attachments(
+        tid: str,
+        request: Request,
+        limit: int = Query(default=25, ge=1, le=100),
+        q: str = Query(default="", max_length=200),
+        cursor: str = Query(default="", max_length=2048),
+        actor=Depends(scope("xelibrary:read")),
+    ):
+        _, permits = authorize_request(actor, tid, "read")
+        query = q.strip().casefold()
+        after = ""
+        if cursor:
+            try:
+                decoded = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+                if not isinstance(decoded, dict) or set(decoded) != {"v", "table", "q", "after"}:
+                    raise ValueError
+                after = decoded["after"]
+                if (type(decoded["v"]) is not int or decoded["v"] != 1 or decoded["table"] != tid or decoded["q"] != query
+                        or not isinstance(after, str) or str(UUID(after)) != after):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError, binascii.Error):
+                raise APIError(422, "INVALID_CURSOR", "invalid attachment list cursor") from None
+        visible = []
+        last = after
+        more = False
+        with table_connect(tid) as db:
+            schema = columns(db)
+            names = [c["name"] for c in schema if c["type"] in ("string", "text")]
+            names = [name for name in ("title", "name") if name in names] + [
+                name for name in names if name not in ("title", "name")
+            ]
+            rows = db.execute(
+                "SELECT a.*,d._row_id AS source_row_id,d._deleted_at FROM __xl_attachments a LEFT JOIN data d ON d._row_id=a.row_id "
+                "WHERE a.attachment_id>? "
+                "ORDER BY a.attachment_id LIMIT 501", (after,)
+            ).fetchall()
+            # References can share a large source row; retain only its bounded label,
+            # and never load its values before checking the current read permission.
+            labels = {}
+            for attachment in rows[:500]:
+                if (attachment["source_row_id"] is not None and not attachment["_deleted_at"]
+                        and permits("read", attachment["row_id"])):
+                    source = attachment["row_id"]
+                    if source not in labels:
+                        row = db.execute(
+                            "SELECT values_json FROM data WHERE _row_id=? "
+                            "AND (_deleted_at IS NULL OR _deleted_at='')", (source,)
+                        ).fetchone()
+                        labels[source] = None
+                        if row is not None and row["values_json"] is not None:
+                            values = json.loads(row["values_json"])
+                            labels[source] = next((values[name].strip()[:256] for name in names
+                                                   if isinstance(values.get(name), str) and values[name].strip()), source)
+                    label = labels[source]
+                    if label is not None and (not query or query in attachment["filename"].casefold()
+                                              or query in label.casefold()):
+                        if len(visible) == limit:
+                            more = True
+                            break
+                        # Only the readable row's label is exposed, never its other values.
+                        visible.append({**attachment_metadata(attachment), "source_label": label})
+                last = attachment["attachment_id"]
+            more = more or len(rows) > 500
+        next_cursor = None
+        if more:
+            next_cursor = base64.urlsafe_b64encode(json.dumps({
+                "v": 1, "table": tid, "q": query, "after": last
+            }, separators=(",", ":"), ensure_ascii=False).encode()).decode()
+        return response(request, visible, next_cursor=next_cursor)
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
     def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
