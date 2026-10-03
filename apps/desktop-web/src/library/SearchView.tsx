@@ -92,7 +92,7 @@ export function SearchView({
       )}
       {mode === 'quality' && (
         <p className="library-notice" role="status">
-          Quality search is not currently available. Qwen quality worker 尚未部署；此模式下请求会返回 QWEN_UNAVAILABLE。
+          Quality 对候选记录进一步精排，可能需要更长时间；服务不可用时会显示原因，可改用 Fast 或 Structured。
         </p>
       )}
 

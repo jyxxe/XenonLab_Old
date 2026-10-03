@@ -20,7 +20,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
+from .quality_pipeline import ranked_fusion
 from .query import evaluate, json_ast, parse, path_matches, sort_key
+from .search_models import SEARCH_ERRORS, SearchResponse
 from .uploads import register_upload_routes
 
 TYPES = {
@@ -1304,12 +1306,7 @@ def create_app(settings=None):
     )
     install_theorems(app, catalogue, allowed, audit)
 
-    @app.post("/api/v1/search/hybrid")
-    def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
-        raise APIError(503, "HYBRID_NOT_CONFIGURED", "hybrid fusion not yet implemented")
-
-    @app.post("/api/v1/search/text")
-    def text_search(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+    def collect_text(body, actor):
         # Literal term query: user input cannot inject FTS operators.
         terms = body.query.split()
         fts_query = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
@@ -1444,12 +1441,41 @@ def create_app(settings=None):
                         break
         results = list(results_by_row.values())
         results.sort(key=lambda x: x["score"], reverse=True)
-        return response(
-            request,
-            results[: body.limit],
-            partial=partial,
-            approximate=partial or any(hit["approximate"] for hit in results[: body.limit]),
-        )
+        return results[: body.limit], {
+            "partial": partial,
+            "approximate": partial or any(hit["approximate"] for hit in results[: body.limit]),
+        }
+
+    @app.post(
+        "/api/v1/search/text",
+        response_model=SearchResponse,
+        response_model_exclude_none=True,
+        responses=SEARCH_ERRORS,
+    )
+    def text_search(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        hits, meta = collect_text(body, actor)
+        return response(request, hits, **meta)
+
+    @app.post(
+        "/api/v1/search/hybrid",
+        response_model=SearchResponse,
+        response_model_exclude_none=True,
+        responses=SEARCH_ERRORS,
+    )
+    def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        # FTS and vector scores occupy different spaces; merge ranks only.
+        quality = app.state.quality_pipeline
+        deadline = quality.clock() + quality.time_budget if body.mode == "quality" else None
+        semantic_hits, meta = app.state.semantic_collect(body, actor, request.state.request_id, deadline=deadline)
+        text_body = body.model_copy(update={"limit": min(max(body.limit * 5, 100), 500)})
+        text_hits, text_meta = collect_text(text_body, actor)
+        hits = ranked_fusion([semantic_hits, text_hits], "hybrid_rrf")
+        current = [hit for hit in hits if app.state.search_revalidate(hit, body, actor)]
+        if deadline is not None:
+            quality.check_deadline(deadline)
+        meta["partial"] = bool(meta["partial"] or text_meta["partial"] or len(current) != len(hits))
+        meta["approximate"] = bool(text_meta["approximate"] or any(hit["approximate"] for hit in current))
+        return response(request, current[: body.limit], **meta)
 
     snapshot_ttl = 60
     snapshot_lock = threading.Lock()
