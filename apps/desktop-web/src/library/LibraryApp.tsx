@@ -5,6 +5,7 @@ import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
 import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
 import {TableView, type SortState} from './TableView';
+import {createUploadStore} from '../upload-state.js';
 import {Inspector, type ConflictInfo, type InspectorTab} from './Inspector';
 import {SearchView} from './SearchView';
 import {QueryConsole} from './QueryConsole';
@@ -41,6 +42,8 @@ export function LibraryApp({
   const query = useQueryConsole(apiPage, subject, identityLoaded && Boolean(subject), authEpoch);
   const theorems = useTheorems(apiPage);
   const prefs = useLibraryPrefs(subject);
+  const uploadStore = useMemo(()=>createUploadStore(),[subject,authEpoch]);
+  useEffect(()=>()=>uploadStore.dispose(),[uploadStore]);
 
   const [view, setView] = useState<LibraryViewKind>('library');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -601,6 +604,7 @@ export function LibraryApp({
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          uploadStore={uploadStore}
           table={table}
           columns={table.columns || []}
           row={selectedRow}
