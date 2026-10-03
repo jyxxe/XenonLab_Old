@@ -72,7 +72,7 @@ export function System(props: AppViewProps) {
       {sections.map(([id,label]) => <button type="button" key={id} aria-current={tab===id ? 'page' : undefined} onClick={() => setTab(id)}>{label}</button>)}
     </nav>
     <section className="system-content" aria-label={`系统${title}`}>
-      {tab === 'overview' ? <Dashboard apiPage={apiPage} openApp={openApp}/> : <>
+      {tab === 'overview' ? <Dashboard apiPage={apiPage} openApp={openApp} canOpenTasks={props.apps.some(app=>app.id==='issues')}/> : <>
         <header className="app-head"><div><h2>{title}</h2><p>只展示当前可读取的真实状态</p></div><Button disabled={loading} onClick={() => setTick(value => value+1)}>刷新</Button></header>
         {loading ? <div role="status"><Skeleton height={28}/><Skeleton height={28}/><Skeleton height={28}/></div> : error ? <ErrorState title="状态读取失败" message={error} onRetry={() => setTick(value => value+1)}/> : missing ? <EmptyState title={missing[0]} description={missing[1]}/> : tab==='services' ? <>
           {ready && <p><Badge tone={ready.ready ? 'success' : 'danger'}>{ready.ready ? 'Ready' : 'Unavailable'}</Badge> {ready.service}</p>}
