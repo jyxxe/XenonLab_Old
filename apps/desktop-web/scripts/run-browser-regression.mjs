@@ -21,6 +21,7 @@ const tests = [
   'tests/browser-acceptance-issues-narrow.test.mjs',
   'tests/browser-acceptance-query-drafts.test.mjs',
   'tests/browser-acceptance-account-patch.test.mjs',
+  'tests/browser-acceptance-account-audit.test.mjs',
   'tests/browser-acceptance-embedding-table.test.mjs',
   'tests/browser-acceptance-int64.test.mjs',
 ];

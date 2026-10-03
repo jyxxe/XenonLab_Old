@@ -5,12 +5,14 @@ import {AppRegistry} from './AppRegistry';
 import {DesktopPreferences} from './DesktopPreferences';
 import {ACLManager} from './ACLManager';
 import type {DesktopApp, PreferenceApplyOptions, UserPreferences} from './shell/types';
-import type {APIRaw} from './shell/types';
+import type {APIPage, APIRaw} from './shell/types';
 
 type API = (path: string, init?: RequestInit) => Promise<any>;
 
 export function Settings({
   api,
+  apiPage,
+  authEpoch = 0,
   apiRaw,
   saveLayout,
   preferences,
@@ -19,6 +21,8 @@ export function Settings({
   apps, dockIds, togglePin, movePinned,
 }: {
   api: API;
+  apiPage: APIPage;
+  authEpoch?: number;
   apiRaw: APIRaw;
   apps: DesktopApp[];
   dockIds: string[];
@@ -48,7 +52,7 @@ export function Settings({
       </nav>
       <div className="settings-body">
         {tab === 'accounts' ? (
-          <Accounts api={api} />
+          <Accounts key={authEpoch} api={api} apiPage={apiPage} authEpoch={authEpoch} />
         ) : tab === 'permissions' ? (
           <Permissions api={api} />
         ) : tab === 'acl' ? (

@@ -1,12 +1,13 @@
 import json
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from xeonolab.common import connect
+from xeonolab.accounts import audit_cursor
+from xeonolab.common import connect, transaction
 from xeonolab.desktop import create_app
 from xeonolab.role_scopes import OIDC_ROLE_SCOPES
 
@@ -470,3 +471,124 @@ def test_password_provider_preserves_profile_while_updating_credential_version()
     assert updated["email"] == profile["email"] and updated["emailVerified"] is True
     assert updated["attributes"] == {"existing": ["retained"], "xeonolab_credential_epoch": ["new-version"]}
     assert calls[2][1].endswith("/reset-password") and calls[3][1].endswith("/logout")
+
+
+def seed_audit(settings, rows):
+    with transaction(settings.data_dir / "accounts.sqlite") as db:
+        db.execute("DELETE FROM account_audit")
+        db.executemany("INSERT INTO account_audit VALUES(?,?,?,?,?)", rows)
+
+
+def test_account_audit_cursor_covers_ties_default_page_and_read_only(accounts):
+    client, settings, _app = accounts
+    rows = [
+        (str(UUID(int=i + 1)), "admin", "synthetic", "admin", 1700000000.125 + i // 80)
+        for i in range(207)
+    ]
+    seed_audit(settings, rows)
+    expected = [row[0] for row in sorted(rows, key=lambda row: (row[4], row[0]), reverse=True)]
+    first = client.get("/api/v1/auth/accounts/audit/events", headers=auth("admin")).json()
+    assert [row["id"] for row in first["data"]] == expected[:200]
+    assert first["meta"]["next_cursor"]
+    assert first["meta"]["request_id"]
+    second = client.get(
+        "/api/v1/auth/accounts/audit/events",
+        headers=auth("admin"), params={"cursor": first["meta"]["next_cursor"]},
+    ).json()
+    assert [row["id"] for row in second["data"]] == expected[200:]
+    assert second["meta"]["next_cursor"] is None
+
+    seen, cursor = [], ""
+    while True:
+        result = client.get(
+            "/api/v1/auth/accounts/audit/events", headers=auth("admin"),
+            params={"limit": 13, "cursor": cursor},
+        )
+        assert result.status_code == 200, result.text
+        page = result.json()
+        seen.extend(row["id"] for row in page["data"])
+        cursor = page["meta"]["next_cursor"]
+        if cursor is None:
+            break
+    assert seen == expected
+    with connect(settings.data_dir / "accounts.sqlite") as db:
+        assert [tuple(row) for row in db.execute("SELECT * FROM account_audit ORDER BY at DESC,id DESC")] == sorted(
+            rows, key=lambda row: (row[4], row[0]), reverse=True,
+        )
+    empty = client.get(
+        "/api/v1/auth/accounts/audit/events", headers=auth("admin"),
+        params={"cursor": audit_cursor(0, "end")},
+    ).json()
+    assert empty["data"] == [] and empty["meta"]["next_cursor"] is None
+
+
+def test_account_audit_pages_recheck_current_subtree_and_identity(accounts):
+    client, settings, _app = accounts
+    uid = child(client, grants=["desktop:read", "accounts:manage"])
+    grand = child(client, parent=uid, actor=uid, grants=["desktop:read"])
+    sibling = child(client)
+    rows = [
+        (str(UUID(int=7)), uid, "actor-visible", sibling, 100),
+        (str(UUID(int=6)), sibling, "target-visible", grand, 100),
+        (str(UUID(int=5)), grand, "moved-actor", sibling, 100),
+        (str(UUID(int=4)), sibling, "outside", sibling, 100),
+        (str(UUID(int=3)), uid, "older-actor", sibling, 99),
+        (str(UUID(int=2)), sibling, "moved-target", grand, 98),
+        (str(UUID(int=1)), uid, "older-actor", grand, 97),
+    ]
+    seed_audit(settings, rows)
+    first = client.get(
+        "/api/v1/auth/accounts/audit/events", headers=auth(uid), params={"limit": 2},
+    ).json()
+    assert [row["event"] for row in first["data"]] == ["actor-visible", "target-visible"]
+    # Storage-only synthetic tree change; the product exposes no reparent API.
+    with transaction(settings.data_dir / "accounts.sqlite") as db:
+        db.execute("UPDATE accounts SET parent=? WHERE id=?", (sibling, grand))
+    second = client.get(
+        "/api/v1/auth/accounts/audit/events", headers=auth(uid),
+        params={"limit": 2, "cursor": first["meta"]["next_cursor"]},
+    ).json()
+    assert [row["id"] for row in second["data"]] == [str(UUID(int=3)), str(UUID(int=1))]
+    assert second["meta"]["next_cursor"] is None
+    # Even a cursor issued to the wider root cannot widen the caller's subtree.
+    root_page = client.get(
+        "/api/v1/auth/accounts/audit/events", headers=auth("admin"), params={"limit": 1},
+    ).json()
+    restricted = client.get(
+        "/api/v1/auth/accounts/audit/events", headers=auth(uid),
+        params={"cursor": root_page["meta"]["next_cursor"]},
+    ).json()
+    assert {row["id"] for row in restricted["data"]} == {str(UUID(int=3)), str(UUID(int=1))}
+    assert client.patch(
+        f"/api/v1/auth/accounts/{uid}", headers=auth("admin"), json={"enabled": False},
+    ).status_code == 200
+    assert client.get(
+        "/api/v1/auth/accounts/audit/events", headers=auth(uid),
+        params={"cursor": first["meta"]["next_cursor"]},
+    ).status_code == 401
+
+
+@pytest.mark.parametrize("count", [0, 1, 200])
+def test_account_audit_single_page_is_terminal(accounts, count):
+    client, settings, _app = accounts
+    seed_audit(settings, [
+        (str(UUID(int=i + 1)), "admin", "synthetic", "admin", 100) for i in range(count)
+    ])
+    result = client.get("/api/v1/auth/accounts/audit/events", headers=auth("admin")).json()
+    assert len(result["data"]) == count
+    assert result["meta"]["next_cursor"] is None
+
+
+@pytest.mark.parametrize("params,code", [
+    ({"limit": 0}, "INVALID_LIMIT"), ({"limit": 1001}, "INVALID_LIMIT"),
+    ({"cursor": "not-a-cursor!"}, "INVALID_CURSOR"),
+    ({"cursor": "W10"}, "INVALID_CURSOR"),  # []
+    ({"cursor": "W3RydWUsImEiXQ"}, "INVALID_CURSOR"),  # [true,"a"]
+    ({"cursor": "W05hTiwieCJd"}, "INVALID_CURSOR"),  # [NaN,"x"]
+    ({"cursor": "a" * 513}, "INVALID_CURSOR"),
+])
+def test_account_audit_rejects_invalid_page_parameters(accounts, params, code):
+    client, _settings, _app = accounts
+    result = client.get("/api/v1/auth/accounts/audit/events", headers=auth("admin"), params=params)
+    assert result.status_code == 422, result.text
+    assert result.json()["error"]["code"] == code

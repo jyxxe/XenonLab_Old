@@ -1,17 +1,19 @@
 import React,{useEffect,useState} from 'react';
 import {isUnregisteredAccountError} from './api-error.js';
+import {AccountAudit} from './AccountAudit';
+import type {APIPage} from './shell/types';
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type Account={id:string;parent:string|null;username:string;name:string;enabled:boolean;inherit_all:boolean;grants:string[];effective_scopes:string[];kind:string};
 const labels:Record<string,string>={'accounts:manage':'管理子账号','desktop:read':'访问桌面','desktop:admin':'管理桌面应用','dev:read':'读取开发任务','dev:write':'更新开发任务','xelibrary:read':'读取知识库','xelibrary:write':'编辑知识库','xelibrary:query':'查询知识库','xelibrary:attach':'管理附件','xelibrary:admin':'管理知识库权限','embedding:read':'读取向量','embedding:write':'生成向量','llm:use':'使用模型','deploy:read':'查看发布','deploy:release':'登记发布','deploy:approve':'审批发布','deploy:execute':'执行发布（仍需 Codex 身份）'};
 function displayError(error:unknown,fallback:string){return error instanceof Error&&error.message.trim()?error.message:fallback}
 function Scopes({available,selected,setSelected}:{available:string[];selected:string[];setSelected:(s:string[])=>void}){return <div className="scope-grid">{available.map(scope=><label key={scope}><input type="checkbox" checked={selected.includes(scope)} onChange={e=>setSelected(e.target.checked?[...selected,scope]:selected.filter(s=>s!==scope))}/>{labels[scope]||scope}</label>)}</div>}
-export function Accounts({api}:{api:API}){
+export function Accounts({api,apiPage,authEpoch=0}:{api:API;apiPage:APIPage;authEpoch?:number}){
  const [me,setMe]=useState<any>(null),[nodes,setNodes]=useState<Account[]>([]),[chosen,setChosen]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
  const [rootCandidates,setRootCandidates]=useState<string[]>([]);
  const [treeState,setTreeState]=useState<'loading'|'unregistered'|'ready'>('loading');
  const [name,setName]=useState(''),[enabled,setEnabled]=useState(true),[inherit,setInherit]=useState(false),[grants,setGrants]=useState<string[]>([]);
  const [parent,setParent]=useState(''),[username,setUsername]=useState(''),[newName,setNewName]=useState(''),[password,setPassword]=useState(''),[newAll,setNewAll]=useState(false),[newScopes,setNewScopes]=useState<string[]>(['desktop:read']);
- const [reset,setReset]=useState(''),[keys,setKeys]=useState<any[]>([]),[keyName,setKeyName]=useState(''),[keyScopes,setKeyScopes]=useState<string[]>([]),[secret,setSecret]=useState(''),[audit,setAudit]=useState<any[]>([]);
+ const [reset,setReset]=useState(''),[keys,setKeys]=useState<any[]>([]),[keyName,setKeyName]=useState(''),[keyScopes,setKeyScopes]=useState<string[]>([]),[secret,setSecret]=useState('');
  const selected=nodes.find(n=>n.id===chosen),parentNode=nodes.find(n=>n.id===parent);
  const auditAccount=(id:string)=>{const account=nodes.find(node=>node.id===id);return account?`${account.name}（${account.username}） · ${id}`:id};
  const canManage=me?.kind==='human'&&(me.scopes.includes('accounts:manage')||me.scopes.includes('desktop:admin'));
@@ -57,6 +59,6 @@ export function Accounts({api}:{api:API}){
  <label>新 key 名称<input value={keyName} onChange={e=>setKeyName(e.target.value)}/></label><Scopes available={selected.effective_scopes.filter(s=>me?.scopes?.includes(s))} selected={keyScopes} setSelected={setKeyScopes}/><button disabled={busy||!keyName} onClick={()=>act(async()=>{const key=await api('/auth/api-keys',{method:'POST',body:JSON.stringify({owner:chosen,name:keyName,scopes:keyScopes})});setSecret(key.token);setKeyName('');setKeys(await api('/auth/api-keys?owner='+chosen));setMessage('请保存新 key；关闭后无法再次查看')})}>建立 API key</button>
  {secret&&<div className="one-time-key"><input readOnly aria-label="新 API key（仅显示一次）" value={secret}/><button onClick={()=>act(async()=>{await navigator.clipboard.writeText(secret);setMessage('已复制到剪贴板')})}>复制</button><button onClick={()=>setSecret('')}>已保存，关闭</button></div>}</>}
  {canManage&&<details><summary>建立子账号</summary><label>父账号<select value={parent} onChange={e=>{setParent(e.target.value);setNewScopes(['desktop:read'].filter(s=>nodes.find(n=>n.id===e.target.value)?.effective_scopes.includes(s)))}}>{nodes.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}</select></label><label>登录名<input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="off" placeholder="字母、数字、点、横线，下划线"/></label><label>显示名称<input value={newName} onChange={e=>setNewName(e.target.value)}/></label><label>初始密码<input type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)}/></label><label><input type="checkbox" checked={newAll} onChange={e=>setNewAll(e.target.checked)}/>继承父账号全部权限</label>{!newAll&&<Scopes available={parentNode?.effective_scopes||[]} selected={newScopes} setSelected={setNewScopes}/>}<button disabled={busy||password.length<12||!username||!newName} onClick={()=>act(async()=>{await api('/auth/accounts',{method:'POST',body:JSON.stringify({parent_id:parent,username,name:newName,password,inherit_all:newAll,grants:newAll?[]:newScopes})});setPassword('');setUsername('');setNewName('');await load();setMessage('子账号已创建，可使用统一登录入口')})}>创建子账号</button></details>}
- <details><summary>账号审计</summary><button disabled={busy} onClick={()=>act(async()=>setAudit(await api('/auth/accounts/audit/events')))}>读取最近记录</button><p className="muted">名称与登录名来自当前可见账号树；原始 ID 保留供核对。</p><ul>{audit.map(event=><li key={event.id}>{new Date(event.at*1000).toLocaleString()} · {event.event}<div>操作人：{auditAccount(event.actor)}</div><div>目标：{auditAccount(event.target)}</div></li>)}</ul></details>
+ <AccountAudit apiPage={apiPage} identityKey={`${authEpoch}:${me?.subject||''}`} accountLabel={auditAccount}/>
  </div></div>}</section>
 }
