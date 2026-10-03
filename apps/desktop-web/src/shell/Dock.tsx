@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React, {useEffect, useRef, useState} from 'react';
 import {flushSync} from 'react-dom';
 import {ContextMenu, type MenuItem} from '../design-system/primitives';
@@ -138,7 +139,7 @@ export function Dock({
       >
         <div className="dock-inner">
         <button type="button" className="dock-item" title="LaunchPad" onClick={onToggleLaunchPad}>
-          <span className="dock-icon" aria-hidden="true">▦</span>
+          <span className="dock-icon" aria-hidden="true"><Icon value="launchpad" /></span>
           <span className="dock-label">LaunchPad</span>
         </button>
         {visibleIds.map(id => {
@@ -186,7 +187,7 @@ export function Dock({
                 setContext({x: event.clientX, y: event.clientY, appId: id});
               }}
             >
-              <span className="dock-icon" aria-hidden="true">{app.icon}</span>
+              <span className="dock-icon" aria-hidden="true"><Icon value={app.icon} /></span>
               <span className="dock-label">{app.title}</span>
               {badge === null ? <span className="dock-badge" title="队列数量尚未完整确认" aria-label="队列数量尚未完整确认">?</span> : badge ? <span className="dock-badge">{badge > 99 ? '99+' : badge}</span> : null}
             </button>
@@ -196,7 +197,7 @@ export function Dock({
           <div className="dock-minimized">
             {minimized.map(win => (
               <button key={win.id} type="button" title={`恢复 ${win.title}`} onClick={() => onRestore(win.id)}>
-                <span aria-hidden="true">◱</span>
+                <span aria-hidden="true"><Icon value="window" size={14} /></span>
                 {win.title.length > 10 ? `${win.title.slice(0, 10)}…` : win.title}
               </button>
             ))}

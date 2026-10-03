@@ -1,3 +1,4 @@
+import {Icon} from './design-system/Icon';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './design-system/tokens.css';
@@ -440,7 +441,7 @@ function App() {
     return (
       <div className="login-page">
         <header className="menubar">
-          <span className="menubar-brand"><b>✦</b> XeonoLab</span>
+          <span className="menubar-brand"><b><Icon value="sparkle" size={18} /></b> XeonoLab</span>
           <span className="menubar-spacer" />
           <span className="menubar-status">知识 · 模型 · 工作空间</span>
         </header>
