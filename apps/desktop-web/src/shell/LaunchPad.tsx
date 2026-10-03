@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Input, useFocusTrap} from '../design-system/primitives';
 import type {DesktopApp} from './types';
@@ -93,7 +94,7 @@ export function LaunchPad({
               onMouseEnter={() => setActive(index)}
               onClick={() => onLaunch(app.id)}
             >
-              <span className="launchpad-icon" aria-hidden="true">{app.icon}</span>
+              <span className="launchpad-icon" aria-hidden="true"><Icon value={app.icon} size={32} /></span>
               <strong>{app.title}</strong>
               <small>{recentIds.includes(app.id) && !query.trim() ? '最近使用' : app.kind === 'native' ? '桌面应用' : '外部应用'}</small>
             </button>
