@@ -192,6 +192,10 @@ def install(app, catalogue, authorize, allowed, load_row, table_transaction, tab
                 for item in batch:
                     cursor = item["attachment_id"]
                     try:
+                        metadata = resolve_attachment(actor, tid, cursor, include_payload=False)
+                        if not attachment_is_image(metadata):
+                            skipped += 1
+                            continue
                         source = resolve_attachment(actor, tid, cursor)
                         validate_image(source["payload"])
                     except APIError as error:

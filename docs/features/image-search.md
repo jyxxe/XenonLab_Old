@@ -57,7 +57,10 @@ query/document instructions, pooling and normalization.
 `xelibrary:admin` and returns HTTP 202 with `data.job_id` and `data.space`.
 Inspect the existing `/api/v1/jobs/{id}` as its owner. The durable job carries
 `kind=vision`, its space, indexed/skipped counts and failure error code.
-Unsupported non-image attachments are skipped. Provider failures explicitly
+Unsupported non-image attachments are skipped after authorized metadata and
+12-byte content-header checks, before applying image-specific byte limits;
+this includes non-images uploaded through the existing resumable upload API.
+Oversized supported images still explicitly fail the job. Provider failures explicitly
 fail the job; already published current references remain usable. A later
 explicit reindex is idempotent. Restarted queued/running jobs retain the
 existing JobStore interrupted/failed behavior; no automatic retry is implied.

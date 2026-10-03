@@ -49,7 +49,7 @@ def synthetic(settings, tmp_path, monkeypatch):
             return httpx.Response(200, json={"data": [{
                 "id": QWEN_MODEL, "alias": "quality", "status": "ready" if state["ready"] else "not_configured",
                 **space.model_dump(exclude={"model_id"}), "max_batch_size": 1, "max_tokens": 8192,
-                "image_max_bytes": 16 * 1024 * 1024, "image_max_pixels": 16_000_000,
+                "image_max_bytes": state.get("image_max_bytes", 16 * 1024 * 1024), "image_max_pixels": 16_000_000,
             }]})
         state["encodes"].append((request.url.path, request.read()))
         if state["provider_error"]:
@@ -499,3 +499,46 @@ def test_normal_mixed_nonimage_binding_is_skipped(synthetic):
     assert job["indexed"] == 1 and job["skipped"] == 1
     assert len(points(state)) == 1
     assert search(client)["meta"]["missing_embeddings"] == 0
+
+
+def test_normal_resumable_nonimage_above_image_budget_is_skipped(synthetic, monkeypatch):
+    from xeonolab import vision_provider
+
+    client, state, tid, rid, _ = synthetic
+    content = b"ordinary synthetic notes\n" * 32
+    # Small normal data exercises the real resumable attachment path; no large files.
+    session = client.post("/api/v1/uploads", headers=auth(), json={
+        "table_id": tid, "row_id": rid, "filename": "notes.txt", "size": len(content),
+    })
+    assert session.status_code == 201, session.text
+    upload_id = session.json()["data"]["upload_id"]
+    uploaded = client.put(f"/api/v1/uploads/{upload_id}/parts/1", headers=auth(), content=content)
+    assert uploaded.status_code == 200, uploaded.text
+    completed = client.post(f"/api/v1/uploads/{upload_id}/complete", headers=auth())
+    assert completed.status_code == 200, completed.text
+    monkeypatch.setattr(vision_provider, "IMAGE_MAX_BYTES", 128)
+    state["image_max_bytes"] = 128
+    assert len(picture()) <= 128 < len(content)
+    before_row = client.get(f"/api/v1/tables/{tid}/rows/{rid}", headers=auth()).json()["data"]
+    before_etag = client.get(f"/api/v1/tables/{tid}", headers=auth()).headers["ETag"]
+    job = index(client, tid)
+    assert job["indexed"] == 1 and job["skipped"] == 1
+    assert len(points(state)) == 1 and len(state["encodes"]) == 1
+    assert client.get(f"/api/v1/tables/{tid}/rows/{rid}", headers=auth()).json()["data"] == before_row
+    assert client.get(f"/api/v1/tables/{tid}", headers=auth()).headers["ETag"] == before_etag
+    assert client.get(f"/api/v1/attachments/{completed.json()['data']['attachment_id']}/content",
+                      params={"table_id": tid}, headers=auth()).content == content
+
+
+def test_normal_image_above_image_budget_still_fails_explicitly(synthetic, monkeypatch):
+    from xeonolab import vision_provider
+
+    client, state, tid, _, _ = synthetic
+    monkeypatch.setattr(vision_provider, "IMAGE_MAX_BYTES", len(picture()) - 1)
+    state["image_max_bytes"] = len(picture()) - 1
+    created = client.post("/api/v1/index/vision/reindex", headers=auth("admin"), json={"table_id": tid})
+    assert created.status_code == 202, created.text
+    job = client.get(f"/api/v1/jobs/{created.json()['data']['job_id']}", headers=auth("admin")).json()["data"]
+    assert job["status"] == "failed" and job["error_code"] == "UPLOAD_TOO_LARGE"
+    assert job["indexed"] == 0 and job["skipped"] == 0
+    assert not points(state) and not state["encodes"]
