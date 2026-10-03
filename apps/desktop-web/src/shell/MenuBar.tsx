@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React from 'react';
 import {MenuButton, type MenuItem} from '../design-system/primitives';
 import {appEntryUrl, forgejoBase} from './apps';
@@ -113,7 +114,7 @@ export function MenuBar({
 
   return (
     <header className="menubar" ref={elementRef}>
-      <MenuButton label={<span className="menubar-brand"><b>✦</b> XeonoLab</span>} items={systemMenu} className="menubar-app-menu" />
+      <MenuButton label={<span className="menubar-brand"><b><Icon value="sparkle" size={18} /></b> XeonoLab</span>} items={systemMenu} className="menubar-app-menu" />
       <MenuButton label={activeApp ? activeApp.title : 'Desktop'} items={appMenu} />
       <MenuButton label="文件" items={fileMenu} />
       <MenuButton label="显示" items={viewMenu} />
@@ -126,7 +127,7 @@ export function MenuBar({
         {id: 'mobile-launchpad', label: '打开 LaunchPad', onSelect: onOpenLaunchPad},
       ]} align="right" /></div>
       {status ? <span className="menubar-status menubar-secondary">{status}</span> : null}
-      <button type="button" className="menubar-icon" aria-label="命令面板" title="命令面板 (⌘K)" onClick={onOpenPalette}>⌕</button>
+      <button type="button" className="menubar-icon" aria-label="命令面板" title="命令面板 (⌘K)" onClick={onOpenPalette}><Icon value="search" size={18} /></button>
       <span className="menubar-clock">{clock}</span>
       <MenuButton
         label={<span title={userLabel}>{userLabel.slice(0, 12) || '账户'}</span>}

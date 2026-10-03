@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React, {useMemo, useState} from 'react';
 import {Badge, Button, IconButton, Input, Spinner} from '../design-system/primitives';
 import {ancestorPaths, buildPathTree, filterTree, filteredTreeExpansion, flattenTree} from './logic.js';
@@ -85,7 +86,7 @@ export function LibrarySidebar({
             aria-pressed={view === id}
             onClick={() => onSetView(id as LibraryViewKind)}
           >
-            <span aria-hidden="true">{icon}</span>
+            <span aria-hidden="true"><Icon value={icon} size={18} /></span>
             <span>{label}</span>
             {id === 'theorems' && theoremCount != null ? <Badge>{theoremCount}</Badge> : null}
           </button>
@@ -102,7 +103,7 @@ export function LibrarySidebar({
             {favorites.map(entry => (
               <li key={`${entry.kind}:${entry.id}`}>
                 <button type="button" onClick={() => onOpenEntry(entry)} title={entry.title}>
-                  ★ {entry.title}
+                  <Icon value="favorite" size={16} /> {entry.title}
                 </button>
                 <IconButton label={`取消收藏 ${entry.title}`} size="sm" onClick={() => onToggleFavorite(entry)}>✕</IconButton>
               </li>
@@ -127,7 +128,7 @@ export function LibrarySidebar({
               {recent.slice(0, 6).map(entry => (
                 <li key={`${entry.kind}:${entry.id}`}>
                   <button type="button" onClick={() => onOpenEntry(entry)} title={entry.title}>
-                    {entry.kind === 'table' ? '▤' : entry.kind === 'row' ? '≡' : entry.kind === 'theorem' ? '⊢' : '⌂'} {entry.title}
+                    <Icon value={entry.kind === 'table' ? 'library' : entry.kind === 'row' ? 'rows' : entry.kind === 'theorem' ? 'theorem' : 'home'} size={16} /> {entry.title}
                   </button>
                 </li>
               ))}
@@ -140,7 +141,7 @@ export function LibrarySidebar({
       <div className="library-sidebar-section library-tree-section">
         <div className="library-sidebar-section-head">
           <strong>路径</strong>
-          <Button size="sm" variant="ghost" onClick={onCreateTable} title="新建知识表">＋</Button>
+          <Button size="sm" variant="ghost" onClick={onCreateTable} title="新建知识表" aria-label="新建知识表"><Icon value="plus" size={16} /></Button>
         </div>
         <Input
           type="search"
@@ -176,7 +177,7 @@ export function LibrarySidebar({
                       style={{paddingLeft: 8 + item.depth * 14}}
                       onClick={() => togglePath(item.path)}
                     >
-                      <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+                      <span aria-hidden="true"><Icon value={isOpen ? 'chevron-down' : 'chevron-right'} size={14} /></span>
                       <span>{item.path === '/' ? '全部' : item.name}</span>
                       <small>{item.count}</small>
                     </button>

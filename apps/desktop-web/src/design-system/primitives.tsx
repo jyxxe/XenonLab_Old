@@ -1,3 +1,4 @@
+import {Icon} from './Icon';
 import React, {
   createContext,
   forwardRef,
@@ -40,7 +41,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       disabled={disabled || loading}
       aria-busy={loading || undefined}
     >
-      {loading ? <Spinner size="sm" label="处理中" /> : icon ? <span className="ds-button-icon">{icon}</span> : null}
+      {loading ? <Spinner size="sm" label="处理中" /> : icon ? <span className="ds-button-icon"><Icon value={icon} size={16} /></span> : null}
       {children}
     </button>
   );
@@ -65,7 +66,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={label}
       title={rest.title ?? label}
     >
-      {children}
+      <Icon value={children} size={18} />
     </button>
   );
 });
@@ -299,7 +300,7 @@ function MenuList({
             onMouseEnter={() => setActive(index)}
             onClick={() => choose(item)}
           >
-            <span className="ds-menu-icon" aria-hidden="true">{item.checked ? '✓' : item.icon ?? ''}</span>
+            <span className="ds-menu-icon" aria-hidden="true"><Icon value={item.checked ? '✓' : item.icon ?? ''} size={16} /></span>
             <span className="ds-menu-label">{item.label}</span>
             {item.shortcut ? <kbd>{item.shortcut}</kbd> : null}
           </button>
@@ -581,7 +582,7 @@ export function Progress({value, max = 100, label}: {value: number; max?: number
 export function EmptyState({icon = '◇', title, description, action}: {icon?: React.ReactNode; title: React.ReactNode; description?: React.ReactNode; action?: React.ReactNode}) {
   return (
     <div className="ds-empty">
-      <b aria-hidden="true">{icon}</b>
+      <b aria-hidden="true"><Icon value={icon} size={32} /></b>
       <strong>{title}</strong>
       {description ? <p>{description}</p> : null}
       {action}
@@ -606,7 +607,7 @@ export function ErrorState({
 }) {
   return (
     <div className={cx('ds-error')} role="alert">
-      <b aria-hidden="true">!</b>
+      <b aria-hidden="true"><Icon value="error" size={18} /></b>
       <div>
         <strong>{title}</strong>
         <p>{message}</p>

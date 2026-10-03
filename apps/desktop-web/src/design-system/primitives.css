@@ -162,4 +162,10 @@ table.ds-table tbody tr.ds-selected td{color:var(--text-primary)}
 :root[data-reduced-motion="true"] *, :root[data-reduced-motion="true"] *::before, :root[data-reduced-motion="true"] *::after,
 :root[data-animations="off"] *, :root[data-animations="off"] *::before, :root[data-animations="off"] *::after{animation:none !important;transition:none !important}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none !important;transition:none !important}}
+
+/* Shared vectors inherit theme/text colors and stay decorative beside labels. */
+.ui-icon{display:inline-block;flex-shrink:0;vertical-align:middle;overflow:visible}
+.ui-icon-custom{display:inline-flex;align-items:center;justify-content:center;font-size:inherit;line-height:1}
+.ds-button-icon,.ds-menu-icon{display:inline-flex;align-items:center;justify-content:center}
+.ds-empty>b,.ds-error>b{display:inline-flex;align-items:center;justify-content:center}
 .ds-menu-description{margin:4px 8px 8px;max-width:300px;white-space:normal;color:var(--text-secondary);font-size:var(--font-size-sm);line-height:1.5}

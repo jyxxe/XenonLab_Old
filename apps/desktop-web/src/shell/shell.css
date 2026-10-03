@@ -211,3 +211,9 @@
   .desktop.ds-compact .window.ds-window-maximized{left:0 !important;top:var(--menubar-height) !important;width:100vw !important;height:calc(100dvh - var(--menubar-height)) !important;border-radius:0}
   .desktop[data-maximized-active] .widgets{visibility:hidden;pointer-events:none}
 }
+
+.dock-icon>svg.ui-icon{width:22px;height:22px}
+.dock-size-small .dock-icon>svg.ui-icon{width:19px;height:19px}
+.dock-size-large .dock-icon>svg.ui-icon{width:28px;height:28px}
+.launchpad-icon>svg.ui-icon{width:36px;height:36px}
+@media(max-width:767px){.dock-icon>svg.ui-icon{width:19px;height:19px}.launchpad-icon>svg.ui-icon{width:29px;height:29px}}
