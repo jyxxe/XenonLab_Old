@@ -227,6 +227,11 @@ test('production Library entry preserves complete int64 values through the real 
     tearingDown = true;
     try {
       while (pendingRoutes.size) await Promise.all([...pendingRoutes]);
+      // Keep interception in place while closing the only page. A final app
+      // request between the first drain and unrouteAll is then aborted locally
+      // and tracked instead of escaping the virtual hostname to the network.
+      await page?.close();
+      while (pendingRoutes.size) await Promise.all([...pendingRoutes]);
       await context?.unrouteAll({behavior: 'wait'});
     }
     finally {
