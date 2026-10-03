@@ -10,13 +10,16 @@ import {emptyAccess, accessExpired, canReplayRequest, classifyFailure, DEFAULT_R
 import {ToastProvider} from './design-system/primitives';
 import {DesktopShell} from './shell/DesktopShell';
 import {Knowledge} from './Knowledge';
+import {LibraryJSONError, parseAPIJSON} from './library/json.js';
 import {APIRequestError, apiErrorFromResponse} from './api-error.js';
 
 type APIPage<T = any> = {data: T; meta: {request_id?: string; next_cursor?: string | null; [key: string]: any}};
 type PendingRequest = {generation:number; replay:()=>Promise<unknown>; resolve:(value:unknown)=>void; reject:(reason:unknown)=>void};
 const libraryView = location.hostname === 'library.xenon.lan';
+class LibraryResponseError extends APIRequestError {}
 
 function isRetryable(error:unknown){
+  if(error instanceof LibraryResponseError)return false;
   if(error instanceof SessionFailure)return error.kind==='temporary';
   if(error instanceof APIRequestError)return error.status===0||error.status===429||error.status>=500;
   return false;
@@ -238,12 +241,14 @@ function App() {
         throw failure;
       }
       let result:any=null;
-      try{result=raw?JSON.parse(raw):null}catch{}
+      let decodingError:unknown;
+      try{result=raw?parseAPIJSON(path,raw):null}catch(cause){decodingError=cause}
       if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
       if (!response.ok) {
         applyFailureState(response.status,response.headers,result?.error,generation);
         throw apiErrorFromResponse(response, result);
       }
+      if(decodingError instanceof LibraryJSONError)throw new LibraryResponseError(decodingError.message,502,'INVALID_RESPONSE',{requestId:response.headers.get('X-Request-ID')||undefined});
       if(!result||typeof result!=='object'){
         const failure=new APIRequestError('服务返回了无法读取的数据',502,'INVALID_RESPONSE',{requestId:response.headers.get('X-Request-ID')||undefined});
         applyFailureState(502,response.headers,{message:failure.message,code:failure.code},generation);
