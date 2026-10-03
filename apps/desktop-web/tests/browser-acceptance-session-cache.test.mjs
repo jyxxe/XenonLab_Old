@@ -8,7 +8,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(appRoot, '../..');
 const evidence = path.join(repoRoot, 'runtime/verification/issue219');
@@ -220,7 +220,7 @@ test('Library isolates verified workspaces across identity changes and late read
         await surface.getByText('A_ONLY_CONFIDENTIAL_ROW', { exact: true }).click();
         await surface.getByRole('button', { name: 'Ask AI', exact: true }).click();
         await surface.getByRole('dialog').waitFor();
-        assert.match(await surface.getByRole('dialog').locator('textarea').last().inputValue(), /A_ONLY_CONFIDENTIAL_ROW/);
+        await expect(surface.getByRole('textbox', { name: 'AI 草稿', exact: true })).toHaveValue(/A_ONLY_CONFIDENTIAL_ROW/);
         const prod = holdNext(r => r.path === '/users/me' && r.token === B);
         await page.getByRole('button', { name: 'Switch child to synthetic B', exact: true }).click();
         await prod.seen;
