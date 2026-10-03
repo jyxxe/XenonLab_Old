@@ -1,9 +1,11 @@
+import {stringifyExactJSON} from './json.js';
 /**
  * Pure helpers for the XeLibrary application. Kept as plain JS so the Node test
  * runner can exercise them without a bundler.
  */
 
 export function formatNumber(value) {
+  if (typeof value === 'bigint') return value.toLocaleString('zh-CN');
   return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
 }
 
@@ -34,16 +36,16 @@ export function relativeTime(value, now = Date.now()) {
 export function sortableValue(value) {
   if (value === null || value === undefined) return [0, ''];
   if (typeof value === 'boolean') return [1, value ? 1 : 0];
-  if (typeof value === 'number') return [2, value];
+  if (typeof value === 'number' || typeof value === 'bigint') return [2, value];
   if (typeof value === 'string') return [3, value];
-  return [4, JSON.stringify(value)];
+  return [4, stringifyExactJSON(value)];
 }
 
 function compare(left, right) {
   const a = sortableValue(left);
   const b = sortableValue(right);
   if (a[0] !== b[0]) return a[0] - b[0];
-  if (a[1] === b[1]) return 0;
+  if (a[1] === b[1] || (a[0] === 2 && a[1] >= b[1] && a[1] <= b[1])) return 0;
   return a[1] > b[1] ? 1 : -1;
 }
 
@@ -73,7 +75,7 @@ export function filterRows(rows, query) {
     if (row._row_id.toLowerCase().includes(needle)) return true;
     return Object.values(row.values || {}).some(value => {
       if (value === null || value === undefined) return false;
-      return String(typeof value === 'object' ? JSON.stringify(value) : value).toLowerCase().includes(needle);
+      return String(typeof value === 'object' ? stringifyExactJSON(value) : value).toLowerCase().includes(needle);
     });
   });
 }
@@ -299,7 +301,7 @@ export function isFavorite(list, entry) {
 
 export function changedFields(before = {}, after = {}) {
   const names = new Set([...Object.keys(before), ...Object.keys(after)]);
-  return [...names].filter(name => JSON.stringify(before[name] ?? null) !== JSON.stringify(after[name] ?? null));
+  return [...names].filter(name => stringifyExactJSON(before[name] ?? null) !== stringifyExactJSON(after[name] ?? null));
 }
 
 export function rowHasAttachment(row, columns = []) {
@@ -438,7 +440,7 @@ const SELECTION_AI_VALUE_LIMIT = 200;
 
 function selectionValueText(value) {
   if (value === null || value === undefined) return '';
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  const text = typeof value === 'object' ? stringifyExactJSON(value) : String(value);
   return text.length > SELECTION_AI_VALUE_LIMIT ? `${text.slice(0, SELECTION_AI_VALUE_LIMIT)}…` : text;
 }
 

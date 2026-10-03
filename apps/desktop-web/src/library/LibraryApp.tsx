@@ -1,3 +1,4 @@
+import {normalizeColumnDefaults, stringifyExactJSON} from './json.js';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Select, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
@@ -13,7 +14,7 @@ import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
 import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
-import {ancestorPaths, classifySchemaChange, describeError} from './logic.js';
+import {ancestorPaths, changedFields, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
 export function LibraryApp({
@@ -183,6 +184,19 @@ export function LibraryApp({
     }
   }
 
+  function rememberLoadedRow(rowId: string) {
+    if (table && session.rows.some(row => row._row_id === rowId)) {
+      prefs.remember({kind: 'row', id: `${table.id}:${rowId}`, title: `${table.name} · ${rowId.slice(0, 8)}`, at: Date.now()});
+    }
+  }
+
+  function activateLoadedRow(rowId: string) {
+    setActiveRowId(rowId);
+    setInspectorOpen(true);
+    setInspectorTab('overview');
+    rememberLoadedRow(rowId);
+  }
+
   function onSelectRow(rowId: string, event: React.MouseEvent) {
     ++rowNavigation.current;
     setActiveRowId(rowId);
@@ -205,8 +219,7 @@ export function LibraryApp({
       }
       return new Set([rowId]);
     });
-    const row = session.rows.find(item => item._row_id === rowId);
-    if (row) prefs.remember({kind: 'row', id: `${table?.id}:${rowId}`, title: `${table?.name} · ${rowId.slice(0, 8)}`, at: Date.now()});
+    rememberLoadedRow(rowId);
   }
 
   const selectedRow = session.rows.find(row => row._row_id === activeRowId) || null;
@@ -217,7 +230,7 @@ export function LibraryApp({
       const page = await apiPage(`/tables/${table.id}/rows/${selectedRow._row_id}`, {
         method: 'PATCH',
         headers: {'If-Match': `"revision:${revision}"`},
-        body: JSON.stringify({values}),
+        body: stringifyExactJSON({values: Object.fromEntries(changedFields(selectedRow.values, values).map(name => [name, values[name]]))}),
       });
       const saved = page.data as Row;
       session.setRows(old => old.map(row => (row._row_id === saved._row_id ? saved : row)));
@@ -241,7 +254,7 @@ export function LibraryApp({
 
   async function createRow(values: Record<string, any>) {
     if (!table) return;
-    const page = await apiPage(`/tables/${table.id}/rows`, {method: 'POST', body: JSON.stringify({values})});
+    const page = await apiPage(`/tables/${table.id}/rows`, {method: 'POST', body: stringifyExactJSON({values})});
     const created = page.data as Row;
     session.setRows(old => [created, ...old]);
     setActiveRowId(created._row_id);
@@ -266,14 +279,14 @@ export function LibraryApp({
     await apiPage(`/tables/${table.id}/rows/${selectedRow._row_id}/restore`, {
       method: 'POST',
       headers: {'If-Match': `"revision:${currentRevision}"`},
-      body: JSON.stringify({revision}),
+      body: stringifyExactJSON({revision}),
     });
     await session.refresh(true);
     setNotice({tone: 'success', message: `已恢复到 r${revision}；恢复创建了新的 revision。`});
   }
 
   async function createTable(payload: {path: string; name: string; columns: Column[]}) {
-    const page = await apiPage('/tables', {method: 'POST', body: JSON.stringify(payload)});
+    const page = await apiPage('/tables', {method: 'POST', body: stringifyExactJSON({...payload, columns: normalizeColumnDefaults(payload.columns)})});
     await catalogue.load();
     openTable({id: page.data.table_id, path: page.data.path, name: page.data.name});
   }
@@ -286,7 +299,7 @@ export function LibraryApp({
       await apiPage(`/tables/${table.id}/move`, {
         method: 'POST',
         headers: {'If-Match': `"revision:${table.table_revision}"`},
-        body: JSON.stringify({path: movePath}),
+        body: stringifyExactJSON({path: movePath}),
       });
       await catalogue.load();
       await session.refreshMetadata();
@@ -312,7 +325,7 @@ export function LibraryApp({
       await apiPage(`/tables/${table.id}/schema`, {
         method: 'PATCH',
         headers: {'If-Match': `"revision:${table.table_revision}"`},
-        body: JSON.stringify({columns: schemaDraft}),
+        body: stringifyExactJSON({columns: normalizeColumnDefaults(schemaDraft)}),
       });
       setDialog(null);
       setDestructiveConfirmed(false);
@@ -346,7 +359,7 @@ export function LibraryApp({
     if (!table) return;
     setBusy(true);
     try {
-      await apiPage('/index/reindex', {method: 'POST', body: JSON.stringify({table_id: table.id})});
+      await apiPage('/index/reindex', {method: 'POST', body: stringifyExactJSON({table_id: table.id})});
       setNotice({tone: 'success', message: '索引任务已排队，等待 Embedding worker。'});
       await reloadJobs();
     } catch (cause) {
@@ -585,7 +598,7 @@ export function LibraryApp({
               selection={selection}
               activeRowId={activeRowId}
               onSelectRow={onSelectRow}
-              onActivateRow={rowId => { setActiveRowId(rowId); setInspectorOpen(true); setInspectorTab('overview'); }}
+              onActivateRow={activateLoadedRow}
               onSelectionChange={setSelection}
               onLoadMore={() => void session.loadMore()}
               onRetry={() => void session.refresh()}
