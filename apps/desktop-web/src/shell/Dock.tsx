@@ -24,6 +24,7 @@ export function Dock({
   onTogglePin,
   onReorder,
   onCloseWindow,
+  elementRef,
 }: {
   apps: DesktopApp[];
   windows: WindowState[];
@@ -38,6 +39,7 @@ export function Dock({
   onTogglePin: (id: string) => void;
   onReorder: (sourceId: string, targetId: string) => void;
   onCloseWindow: (windowId: string) => void;
+  elementRef?: React.Ref<HTMLElement>;
 }) {
   const [context, setContext] = useState<{x: number; y: number; appId: string} | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
@@ -125,6 +127,7 @@ export function Dock({
         />
       )}
       <nav
+        ref={elementRef}
         className={[
           'dock',
           `dock-size-${size}`,

@@ -168,3 +168,4 @@ table.ds-table tbody tr.ds-selected td{color:var(--text-primary)}
 .ui-icon-custom{display:inline-flex;align-items:center;justify-content:center;font-size:inherit;line-height:1}
 .ds-button-icon,.ds-menu-icon{display:inline-flex;align-items:center;justify-content:center}
 .ds-empty>b,.ds-error>b{display:inline-flex;align-items:center;justify-content:center}
+.ds-menu-description{margin:4px 8px 8px;max-width:300px;white-space:normal;color:var(--text-secondary);font-size:var(--font-size-sm);line-height:1.5}

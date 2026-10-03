@@ -15,6 +15,7 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  halfScreenPlacement,
   LEGACY_XELIBRARY_APP_ID,
   migrateLegacyAppReferences,
   minSizeOf,
@@ -24,9 +25,20 @@ import {
   toggleMaximize,
   maximizedRect,
 } from './window-manager.js';
+import type {DesktopBounds, HalfScreenPlacement, HalfScreenSide} from './window-manager.js';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp, PreferenceApplyOptions, RegistryApp, UserPreferences, WindowState} from './types';
 
 const RECENT_KEY = 'xeonolab.recent-apps';
+
+function placementReason(placement: HalfScreenPlacement, minSize: {width: number; height: number}): string | null {
+  switch (placement.reason) {
+    case 'unmeasured': return '左右排列不可用：正在测量桌面工作区';
+    case 'compact': return '左右排列不可用：窄屏使用单窗口布局';
+    case 'width': return `左右排列不可用：半屏宽度不足，当前窗口至少需要 ${minSize.width}px`;
+    case 'height': return `左右排列不可用：工作区高度不足，当前窗口至少需要 ${minSize.height}px`;
+    default: return null;
+  }
+}
 
 const defaultPreferences: UserPreferences = {
   theme: 'system',
@@ -100,6 +112,28 @@ export function DesktopShell({
   currentAPI.current = api;
   useLayoutEffect(() => {preferenceLifetime.current = true; return () => {preferenceLifetime.current = false;};}, []);
   const viewport = useRef({width: innerWidth, height: innerHeight});
+  const [menuElement, setMenuElement] = useState<HTMLElement | null>(null);
+  const [dockElement, setDockElement] = useState<HTMLElement | null>(null);
+  const [arrangementBounds, setArrangementBounds] = useState<(DesktopBounds & {width: number; height: number}) | null>(null);
+  const readArrangementBounds = useCallback(() => {
+    if (!menuElement || !dockElement) return null;
+    return {width: innerWidth, height: innerHeight, menuBottom: menuElement.getBoundingClientRect().bottom, dockTop: dockElement.getBoundingClientRect().top};
+  }, [menuElement, dockElement]);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const next = readArrangementBounds();
+      setArrangementBounds(current => current && next && current.width === next.width && current.height === next.height
+        && current.menuBottom === next.menuBottom && current.dockTop === next.dockTop ? current : next);
+    };
+    measure();
+    if (!menuElement || !dockElement) return;
+    // Observe the natural nav box: auto-hide transforms its child, not this box.
+    const observer = new ResizeObserver(measure);
+    observer.observe(menuElement);
+    observer.observe(dockElement);
+    addEventListener('resize', measure);
+    return () => {observer.disconnect(); removeEventListener('resize', measure);};
+  }, [menuElement, dockElement, readArrangementBounds]);
 
   const [appIntents, setAppIntents] = useState<Record<string, AppIntent>>({});
 
@@ -110,6 +144,12 @@ export function DesktopShell({
     const win = windows.find(item => item.id === activeId);
     return win ? apps.find(app => app.id === win.app_id) ?? null : null;
   }, [activeId, windows, apps]);
+  const activeMinSize = minSizeOf(activeApp);
+  const arrangementReasons: Record<HalfScreenSide, string | null> = {left: null, right: null};
+  for (const side of ['left', 'right'] as const) {
+    arrangementReasons[side] = !activeApp ? '左右排列不可用：请先打开或恢复一个窗口'
+      : placementReason(halfScreenPlacement(arrangementBounds ?? viewport.current, activeMinSize, side, arrangementBounds), activeMinSize);
+  }
   const customWallpaper = useMemo(() => customWallpaperStyle(preferences, wallpaperImageUrl), [preferences, wallpaperImageUrl]);
   const knowledgeSearchAvailable = useMemo(() => apps.some(app => app.id === 'knowledge') && accountScopes.includes('xelibrary:query'), [apps, accountScopes]);
   const workAvailable = useMemo(() => apps.some(app => app.id === 'issues'), [apps]);
@@ -305,6 +345,21 @@ export function DesktopShell({
   const toggleWindowMaximize = useCallback((id: string) => {
     editWindows(current => current.map(win => (win.id === id ? toggleMaximize(win, viewport.current) : win)));
   }, [editWindows]);
+  const arrangeWindow = useCallback((id: string, side: HalfScreenSide) => {
+    const win = windows.find(item => item.id === id);
+    const app = apps.find(item => item.id === win?.app_id);
+    if (!win || !app) return;
+    const minSize = minSizeOf(app);
+    const bounds = readArrangementBounds();
+    const placement = halfScreenPlacement({width: innerWidth, height: innerHeight}, minSize, side, bounds);
+    if (!placement.rect) {
+      push({tone: 'warning', title: '窗口未排列', description: placementReason(placement, minSize) ?? undefined});
+      return;
+    }
+    const rect = placement.rect;
+    editWindows(current => focusWindow(current.map(item => item.id === id
+      ? {...item, ...rect, minimized: false, maximized: false, restore: undefined} : item), id));
+  }, [apps, windows, readArrangementBounds, editWindows, push]);
   const updateRect = useCallback(
     (id: string, rect: {x: number; y: number; width: number; height: number}) => {
       editWindows(current =>
@@ -561,6 +616,8 @@ export function DesktopShell({
           onCloseWindow={() => undefined}
           onMinimizeWindow={() => undefined}
           onToggleMaximize={() => undefined}
+          onArrangeWindow={() => undefined}
+          arrangementReasons={{left: '左右排列不可用：桌面尚未加载', right: '左右排列不可用：桌面尚未加载'}}
           onSaveLayout={() => undefined}
           onLogout={() => void onLogout()}
           onApplyPreferences={patch => void applyPreferences(patch).catch(() => undefined)}
@@ -608,6 +665,9 @@ export function DesktopShell({
         onCloseWindow={closeWindow}
         onMinimizeWindow={minimizeWindow}
         onToggleMaximize={toggleWindowMaximize}
+        onArrangeWindow={arrangeWindow}
+        arrangementReasons={arrangementReasons}
+        elementRef={setMenuElement}
         onSaveLayout={() => void saveLayoutWithFeedback()}
         onLogout={() => void onLogout()}
         onApplyPreferences={patch => void applyPreferences(patch).catch(() => undefined)}
@@ -696,6 +756,7 @@ export function DesktopShell({
       {wallpaperError && <div className="wallpaper-load-error" role="alert">{wallpaperError}</div>}
 
       <Dock
+        elementRef={setDockElement}
         apps={apps}
         windows={windows}
         activeWindowId={activeId}
