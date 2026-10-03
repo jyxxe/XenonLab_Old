@@ -34,7 +34,7 @@
 | 1 skeleton | 已实现独立入口与 OpenAPI；CI 工作流已提供；生产 readiness 仍需扩展依赖探针 |
 | 2 数据核心 | bootstrap 已可用；PostgreSQL catalogue、路径对象、完整 DSL、批量作业、import/restore/purge、分片待实施 |
 | 3 D100M | 实际推理与 Qdrant fast_text 生产连接已验证；后台自动索引队列、优先级调度和领域检索评测待实施 |
-| 4 Qwen | 尚无模型 worker、vision、quality rerank/cache；质量请求返回 unavailable |
+| 4 Qwen | #23已实现可选离线CPU worker与typed text/image facade，合成进程/API控制流可验证；真实weights、兼容CPU artifact、资源/吞吐/上线未验收，未配置仍503；vision、quality rerank/cache、优先级调度仍不属于本增量，见[Qwen worker](qwen-worker.md) |
 | 5 UI/Tools | 桌面和只读网关已实现；OIDC 浏览器 PKCE 登录已接入；OpenWebUI 原生用户 token exchange 尚未接入 |
 | 6 Library Agent | 只有 skeleton；推理、证据、proposal、Lean sandbox 未实现 |
 | 7 DevAgent | V1 已部署至 VM111：OpenCode 1.18.34、deepseek-v4.1-flash、2 分钟 watcher 与 30 分钟 reconciliation；自动模式只做协调和 Issue 路由，不修改代码。生产部署/重启验证及权限边界见 [DevAgent runbook](runbooks/devagent-maintainer.md) 与 [deployment runbook](runbooks/deployment.md)。多副本共享队列库仍未实施 |

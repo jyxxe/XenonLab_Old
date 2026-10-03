@@ -1,0 +1,11 @@
+# Optional Linux CPU worker artifact. Never installed by the default application environment.
+# Provision reviewed wheels offline in production; do not run this from an API request.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.8.0+cpu
+torchvision==0.23.0+cpu
+transformers==5.2.0
+tokenizers==0.23.0
+huggingface-hub>=1.3,<2
+qwen-vl-utils==0.0.14
+numpy>=1.26,<3
+safetensors>=0.4,<1

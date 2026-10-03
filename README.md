@@ -30,6 +30,11 @@ SERVICE=desktop-web uv run uvicorn xeonolab.services:create_app --factory --host
 `{"local-test":{"sub":"local-user","scope":"xelibrary:read xelibrary:write xelibrary:query desktop:read"}}`。
 此令牌仅用于隔离的本机开发环境，不用于部署。令牌不存储在浏览器 localStorage 或 URL。
 
+## Optional Qwen worker
+
+Quality 的可选离线 CPU worker、text/image typed API 与资源限制见 [Qwen worker](docs/qwen-worker.md)。
+默认安装不含推理依赖和权重，仍明确返回 503；真实模型与生产验收尚未执行。
+
 ## D100M
 
 ```bash
