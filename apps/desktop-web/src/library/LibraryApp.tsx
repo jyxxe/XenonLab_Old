@@ -69,6 +69,12 @@ export function LibraryApp({
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
   const table = session.table;
+  const rowMutationContext = useRef({api, apiPage, authEpoch, subject, tableId: table?.id, activeRowId, selection, view, generation: 0});
+  const previousMutation = rowMutationContext.current;
+  if (previousMutation.api !== api || previousMutation.apiPage !== apiPage || previousMutation.authEpoch !== authEpoch || previousMutation.subject !== subject || previousMutation.tableId !== table?.id || previousMutation.activeRowId !== activeRowId || previousMutation.selection !== selection || previousMutation.view !== view) {
+    rowMutationContext.current = {api, apiPage, authEpoch, subject, tableId: table?.id, activeRowId, selection, view, generation: previousMutation.generation + 1};
+  }
+  useEffect(() => () => { ++rowMutationContext.current.generation; }, []);
   const {jobs, error: jobsError, reload: reloadJobs} = useJobs(apiPage, table?.id ?? '', canAdmin && view === 'library' && Boolean(table));
 
   const movePaths = useMemo(() => [...new Set(['/', ...catalogue.tables.flatMap(item => ancestorPaths(item.path))])].sort((left, right) => left.localeCompare(right, 'zh')), [catalogue.tables]);
@@ -253,14 +259,21 @@ export function LibraryApp({
   }
 
   async function createRow(values: Record<string, any>) {
-    if (!table) return;
-    const page = await apiPage(`/tables/${table.id}/rows`, {method: 'POST', body: stringifyExactJSON({values})});
+    if (!table) return false;
+    const generation = rowMutationContext.current.generation;
+    const isCurrent = () => rowMutationContext.current.generation === generation;
+    const page = await apiPage(`/tables/${table.id}/rows`, {method: 'POST', body: stringifyExactJSON({values})}).catch(cause => {
+      if (isCurrent()) throw cause;
+      return null;
+    });
+    if (!page || !isCurrent()) return false;
     const created = page.data as Row;
     session.setRows(old => [created, ...old]);
+    await session.refresh(session.includeDeleted, created, isCurrent);
+    if (!isCurrent()) return false;
+    // This operation's own selection transition happens after its final await.
     setActiveRowId(created._row_id);
     setSelection(new Set([created._row_id]));
-    await session.refresh();
-    setActiveRowId(created._row_id);
     setNotice({tone: 'success', message: '记录已创建。当前平台没有自动 indexing worker；需要时请手动重建索引。'});
   }
 
@@ -275,13 +288,22 @@ export function LibraryApp({
   }
 
   async function restoreRow(revision: number, currentRevision: number) {
-    if (!table || !selectedRow) return;
-    await apiPage(`/tables/${table.id}/rows/${selectedRow._row_id}/restore`, {
+    if (!table || !selectedRow) return false;
+    const generation = rowMutationContext.current.generation;
+    const isCurrent = () => rowMutationContext.current.generation === generation;
+    const page = await apiPage(`/tables/${table.id}/rows/${selectedRow._row_id}/restore`, {
       method: 'POST',
       headers: {'If-Match': `"revision:${currentRevision}"`},
       body: stringifyExactJSON({revision}),
+    }).catch(cause => {
+      if (isCurrent()) throw cause;
+      return null;
     });
-    await session.refresh(true);
+    if (!page || !isCurrent()) return false;
+    const restored = page.data as Row;
+    session.setRows(old => old.map(row => row._row_id === restored._row_id ? restored : row));
+    await session.refresh(true, restored, isCurrent);
+    if (!isCurrent()) return false;
     setNotice({tone: 'success', message: `已恢复到 r${revision}；恢复创建了新的 revision。`});
   }
 

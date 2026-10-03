@@ -492,3 +492,10 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
   }
   return lines.join('\n');
 }
+
+// Keep the precise mutation result when refreshing only the first page. A newer
+// server page containing the same row takes precedence over the retained value.
+export function retainRefreshedRow(rows, retainedRow) {
+  if (!retainedRow || rows.some(row => row._row_id === retainedRow._row_id)) return rows;
+  return [...rows, retainedRow];
+}

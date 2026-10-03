@@ -1,4 +1,4 @@
-import type {Column, Job, Table, Theorem} from './types';
+import type {Column, Job, Row, Table, Theorem} from './types';
 
 export function formatNumber(value: unknown): string;
 export function formatBytes(value: unknown): string;
@@ -83,3 +83,5 @@ export function buildSelectionPrompt(
   columns?: Column[],
   question?: string,
 ): string;
+
+export function retainRefreshedRow(rows: Row[], retainedRow?: Row): Row[];
