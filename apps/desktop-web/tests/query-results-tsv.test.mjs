@@ -41,3 +41,15 @@ test('query TSV preserves exact integer tokens parsed from API JSON', () => {
   ));
   assert.deepEqual(rows, before);
 });
+
+
+test('query protects free provenance while preserving exact JSON tokens', () => {
+  const json = '{"integer":-9223372036854775808,"label":"=synthetic label","nested":[9223372036854775807]}';
+  const rows = [{table_id:'table', path:'@synthetic path', _row_id:'-synthetic row', _revision:2, values:parseExactJSON(json)}];
+  assert.equal(serializeQueryResultsTSV(rows, () => '+synthetic table'), serializeTSV(
+    ['表','路径','Row ID','Revision','值'], [["'+synthetic table", "'@synthetic path", "'-synthetic row", 2, json]],
+  ));
+  assert.equal(serializeQueryResultsTSV([{...rows[0], values:-9223372036854775808n}], () => 'ordinary table'), serializeTSV(
+    ['表','路径','Row ID','Revision','值'], [['ordinary table', "'@synthetic path", "'-synthetic row", 2, '-9223372036854775808']],
+  ), 'standalone JSON number token is not modified by the text-column policy');
+});

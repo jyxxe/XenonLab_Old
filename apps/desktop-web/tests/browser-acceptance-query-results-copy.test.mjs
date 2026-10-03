@@ -124,7 +124,7 @@ test('real temporary XeLibrary query copies only its current page to the native 
     for (let index = 0; index < 3; index += 1) {
       const row = fixture.rows[index];
       assert.equal(parsed[index + 1].length, 5);
-      assert.deepEqual(parsed[index + 1].slice(0, 4), [fixture.names[row.table_id], row.path, row._row_id, String(row._revision)]);
+      assert.deepEqual(parsed[index + 1].slice(0, 4), [fixture.expected_names[row.table_id], row.path, row._row_id, String(row._revision)]);
       assert.equal(parsed[index + 1][4], fixture.expected_values_json[index], 'raw JSON matches independent Python decimal serialization');
       assert.ok(parsed[index + 1][4].length > 160, 'full JSON exceeds the truncated UI display');
       assert.equal(row.values.status, 'ready', 'draft is excluded by the actual Query API');
@@ -134,13 +134,13 @@ test('real temporary XeLibrary query copies only its current page to the native 
     assert.deepEqual(exactCheck.decimal_integers, ['9223372036854775807', '-9223372036854775808', '9007199254740993']);
     assert.deepEqual(await page.evaluate(() => window.queryCopyFixture.lastQuery.data.map(row => [typeof row.values.integer, row.values.integer.toString(), typeof row.values.payload.endpoint_array[0]])),
       [['bigint', '9223372036854775807', 'bigint'], ['bigint', '-9223372036854775808', 'bigint'], ['bigint', '9007199254740993', 'bigint']], 'actual UI adapter preserves BigInt values');
-    assert.equal(parsed[1][0], '合成表 A\t"引号"\r\n第二行', 'quoted metadata delimiters roundtrip as one cell');
+    assert.equal(parsed[1][0], '\'=合成表 A\t"引号"\r\n第二行', 'protected text keeps every original character after its marker in one cell');
     assert.equal(await editor.inputValue(), fixture.expression);
     assert.deepEqual(await page.evaluate(() => window.queryCopyFixture.calls), before, 'copy triggers no API, row, export or pagination call');
     assert.deepEqual((await (await fetch(backend.base + '/__fixture')).json()).calls, backendBefore, 'server saw no new API requests');
     await fs.writeFile(path.join(outputDir, 'native-clipboard.tsv'), text);
     const rowMetadata = fixture.rows.map(({table_id, path, _row_id, _revision}) => ({table_id, path, _row_id, _revision}));
-    await fs.writeFile(path.join(outputDir, 'native-api-evidence.json'), JSON.stringify({synthetic: true, rowMetadata, expectedValuesJSON: fixture.expected_values_json, names: fixture.names, calls: before, parsed, exactCheck}, null, 2));
+    await fs.writeFile(path.join(outputDir, 'native-api-evidence.json'), JSON.stringify({synthetic: true, rowMetadata, expectedValuesJSON: fixture.expected_values_json, names: fixture.names, expectedNames: fixture.expected_names, calls: before, parsed, exactCheck}, null, 2));
     await page.screenshot({path: path.join(outputDir, 'desktop-copy.png'), fullPage: true});
     await page.setViewportSize({width: 390, height: 844});
     await copiedStatus(page).scrollIntoViewIfNeeded();
@@ -273,5 +273,33 @@ test('copy snapshots isolate delayed completion, double clicks, page changes, id
     assert.equal(await copiedStatus(page).count(), 0, 'unmounted copy cannot publish into a new console');
     assert.equal(await copyButton(page).isEnabled(), true);
     assert.deepEqual(await page.evaluate(() => window.queryCopyFixture.calls), []);
+  });
+});
+
+
+test('native Clipboard protects inert leading metadata and keeps exact JSON independently parseable', async t => {
+  await withBrowser(t, false, async ({page}) => {
+    await copyButton(page).waitFor();
+    const labels = ['=synthetic label', '+synthetic label', '-synthetic label', '@synthetic label', ' \t=synthetic label', '\tplain label', '\rplain label', '\u0000plain label', '\ufeff@synthetic label'];
+    await page.evaluate(labels => window.queryCopyFixture.set({rows: labels.map((label, index) => ({
+      table_id: label, path: label, _row_id: label, _revision: index,
+      values: {integer: -9223372036854775808n, label: '=synthetic JSON text', nested: [9223372036854775807n]},
+    }))}), labels);
+    await page.waitForFunction(() => document.querySelectorAll('.library-query-results tbody tr').length === 9);
+    await copyButton(page).click();
+    await copiedStatus(page).filter({hasText: '9 行'}).waitFor();
+    const text = await page.evaluate(() => navigator.clipboard.readText());
+    const parsed = parseTSV(text);
+    assert.equal(parsed.length, 10);
+    const expectedJSON = '{"integer":-9223372036854775808,"label":"=synthetic JSON text","nested":[9223372036854775807]}';
+    for (let index = 0; index < labels.length; index += 1) {
+      assert.deepEqual(parsed[index + 1], ["'" + labels[index], "'" + labels[index], "'" + labels[index], String(index), expectedJSON]);
+      assert.equal(parsed[index + 1][0].slice(1), labels[index], 'marker is the only text transformation');
+    }
+    const script = 'import csv,json,sys,io; rows=list(csv.reader(io.StringIO(sys.stdin.read(),newline=""),delimiter="\\t"))[1:]; assert all(json.loads(r[4])["integer"]==-9223372036854775808 and json.loads(r[4])["nested"][0]==9223372036854775807 for r in rows)';
+    const independent = spawnSync(python, ['-c', script], {input:text, encoding:'utf8'});
+    assert.equal(independent.status, 0, independent.stderr);
+    assert.deepEqual(await page.evaluate(() => window.queryCopyFixture.calls), [], 'protection creates no API traffic');
+    await fs.writeFile(path.join(outputDir, 'spreadsheet-text-native-clipboard.tsv'), text);
   });
 });

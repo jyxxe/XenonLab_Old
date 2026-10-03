@@ -40,7 +40,7 @@ def main():
             if index:
                 columns.append({"name": "secondary", "type": "string"})
             result = client.post("/api/v1/tables", headers=headers, json={
-                "path": f"/S215/{index}", "name": ['合成表 A\t"引号"\r\n第二行', "合成表 B"][index], "columns": columns,
+                "path": f"/S215/{index}", "name": ['=合成表 A\t"引号"\r\n第二行', "\t合成表 B"][index], "columns": columns,
             })
             assert result.status_code == 201, result.text
             tables.append(result.json()["data"]["table_id"])
@@ -73,7 +73,8 @@ def main():
         @app.get("/__fixture")
         def fixture():
             return {"synthetic": True, "rows": expected, "expected_values_json": expected_values_json,
-                    "names": names, "expression": expression, "calls": calls}
+                    "names": names, "expected_names": {key: "'" + value for key, value in names.items()},
+                    "expression": expression, "calls": calls}
 
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
