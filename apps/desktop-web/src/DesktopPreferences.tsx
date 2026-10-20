@@ -17,6 +17,7 @@ export const defaultPreferences: UserPreferences = {
   wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
+  plugin_widgets: [],
   shortcut_apps: [],
   notes: '',
   dock_size: 'medium',

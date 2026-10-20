@@ -218,3 +218,7 @@
 .dock-size-large .dock-icon>svg.ui-icon{width:28px;height:28px}
 .launchpad-icon>svg.ui-icon{width:36px;height:36px}
 @media(max-width:767px){.dock-icon>svg.ui-icon{width:19px;height:19px}.launchpad-icon>svg.ui-icon{width:29px;height:29px}}
+.widget-plugin{display:flex;flex-direction:column;gap:6px}
+.widget-plugin>header{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-2);margin:0;padding:0;background:transparent;border:0;height:auto}
+.widget-plugin>header strong{display:inline-flex;align-items:center;gap:4px;min-width:0;font-size:var(--font-size-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.widget-plugin iframe{flex:1;width:100%;min-height:0;border:1px solid var(--border-subtle);border-radius:var(--radius-control);background:var(--surface)}
