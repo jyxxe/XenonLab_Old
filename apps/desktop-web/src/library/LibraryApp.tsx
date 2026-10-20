@@ -5,7 +5,7 @@ import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
 import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
-import {TableView, type SortState} from './TableView';
+import {TableView} from './TableView';
 import {createUploadStore} from '../upload-state.js';
 import {Inspector, type ConflictInfo, type InspectorTab} from './Inspector';
 import {SearchView} from './SearchView';
@@ -78,7 +78,6 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
-  const [sort, setSort] = useState<SortState>(null);
   const [filter, setFilter] = useState('');
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1023);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
@@ -129,7 +128,6 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
     setSelection(new Set());
     setActiveRowId(null);
     setFilter('');
-    setSort(null);
     setConflict(null);
     setInspectorOpen(true);
     if (expandPath) setExpanded(current => expandAncestors(current, next.path));
@@ -619,10 +617,16 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
               error={session.error}
               filter={filter}
               onFilter={setFilter}
-              sort={sort}
-              onSort={key =>
-                setSort(current => (current && current.key === key ? {key, direction: current.direction === 'asc' ? 'desc' : 'asc'} : {key, direction: 'asc'}))
-              }
+              sort={session.sort}
+              onSort={key => {
+                const current = session.sort;
+                const next = current && current.key === key
+                  ? {key, direction: current.direction === 'asc' ? 'desc' as const : 'asc' as const}
+                  : {key, direction: 'asc' as const};
+                setSelection(new Set());
+                setActiveRowId(null);
+                void session.changeSort(next);
+              }}
               selection={selection}
               activeRowId={activeRowId}
               onSelectRow={onSelectRow}

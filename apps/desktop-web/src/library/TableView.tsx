@@ -96,7 +96,7 @@ export function TableView({
   useEffect(() => {
     setScrollTop(0);
     scrollRef.current?.scrollTo({top: 0});
-  }, [table.id, filter]);
+  }, [table.id, filter, sort?.key, sort?.direction]);
 
   // Opening a row from search, recents or the inspector scrolls it into view so the
   // active row is always rendered, even when it sits outside the current window.

@@ -427,6 +427,7 @@
       },
       "get": {
         "summary": "List Rows",
+        "description": "List visible rows; sorted cursors are bound to the table, ordering, and deleted-row filter.",
         "operationId": "list_rows_api_v1_tables__tid__rows_get",
         "parameters": [
           {
@@ -467,6 +468,42 @@
               "default": false,
               "title": "Include Deleted"
             }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional schema or system field for table-wide ordering.",
+              "title": "Sort By"
+            },
+            "description": "Optional schema or system field for table-wide ordering."
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sort direction: asc or desc; defaults to asc when sort_by is set.",
+              "title": "Direction"
+            },
+            "description": "Sort direction: asc or desc; defaults to asc when sort_by is set."
           }
         ],
         "responses": {
