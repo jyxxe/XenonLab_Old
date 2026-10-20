@@ -12,6 +12,7 @@ export function filterRows(rows: any[], query: string): any[];
 export type TreeNode = {path: string; name: string; tables: Table[]; children: TreeNode[]; count: number};
 export function buildPathTree(tables: Table[]): TreeNode;
 export function filterTree(node: TreeNode, needle: string): TreeNode | null;
+export function filteredTreeExpansion(root: TreeNode | null, collapsed?: Set<string>): Set<string>;
 export function flattenTree(
   root: TreeNode,
   expanded: Set<string>,

@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React, {useEffect, useRef, useState} from 'react';
 import {Button, Spinner} from '../design-system/primitives';
 import {appEntryUrl, sandboxValue} from './apps';
@@ -116,7 +117,7 @@ export function IFrameApp({
       )}
       {['timeout', 'auth-error', 'network-error'].includes(phase) && (
         <div className="iframe-app-status" role="alert">
-          <b aria-hidden="true">⚠</b>
+          <b aria-hidden="true"><Icon value="warning" size={24} /></b>
           <strong>{app.title}{phase === 'auth-error' ? ' 需要重新授权' : ' 无法加载'}</strong>
           <p>
             {phase === 'auth-error' ? '应用报告登录失效或没有访问权限。请在浏览器中登录，然后重新加载；桌面窗口和平台登录保持不变。' : phase === 'network-error' ? '应用报告网络连接失败。请检查服务与网络后重试；当前窗口会保留打开状态。' : `在 ${timeoutMs / 1000} 秒内页面没有完成载入。可能是服务未启动、网络不可达，或 frame policy 阻止访问；当前窗口会保留打开状态。`}

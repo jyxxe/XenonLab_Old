@@ -1,10 +1,12 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {Badge, Button, Checkbox, ErrorState, Input, Modal, Spinner} from '../design-system/primitives';
+import {normalizeColumnDefaults, stringifyExactJSON} from './json.js';
+import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {Badge, Button, Checkbox, ErrorState, Input, Modal, Select, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
 import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
-import {TableView, type SortState} from './TableView';
+import {TableView} from './TableView';
+import {createUploadStore} from '../upload-state.js';
 import {Inspector, type ConflictInfo, type InspectorTab} from './Inspector';
 import {SearchView} from './SearchView';
 import {QueryConsole} from './QueryConsole';
@@ -12,19 +14,11 @@ import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
 import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
-import {ancestorPaths, classifySchemaChange, describeError} from './logic.js';
+import {createRequestLifetime} from './request-lifetime.js';
+import {ancestorPaths, changedFields, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
-export function LibraryApp({
-  api,
-  apiPage,
-  apiRaw,
-  intent,
-  apps,
-  openApp,
-  notify,
-  authEpoch = 0,
-}: {
+type LibraryAppProps = {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
@@ -33,20 +27,57 @@ export function LibraryApp({
   openApp?: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
   notify?: (toast: {title: string; tone?: 'info' | 'success' | 'danger'}) => void;
   authEpoch?: number;
-}) {
-  const {scopes, subject, loaded: identityLoaded} = useScopes(api, authEpoch);
+};
+
+export function LibraryApp(props: LibraryAppProps) {
+  const identity = useScopes(props.api, props.authEpoch);
+  if (!identity.loaded) return (
+    <div className="knowledge">
+      <main aria-label="知识库身份验证">
+        <p role="status"><Spinner label="正在确认知识库身份" /> 正在确认知识库身份…</p>
+      </main>
+    </div>
+  );
+  if (!identity.subject) {
+    const error = describeError(identity.error || new Error('当前会话没有已验证的用户身份。'), '确认知识库身份');
+    return (
+      <div className="knowledge">
+        <main aria-label="知识库身份验证">
+          <ErrorState title="无法确认知识库身份" message={error.message} errorCode={error.code} requestId={error.requestId} onRetry={identity.reload} />
+        </main>
+      </div>
+    );
+  }
+  // A different epoch hides the old workspace synchronously, even while the
+  // next subject is still being verified. All resource/UI state belongs here.
+  return <LibraryWorkspace key={JSON.stringify([props.authEpoch ?? 0, identity.subject])} {...props} subject={identity.subject} scopes={identity.scopes} />;
+}
+
+function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourceAPIRaw, intent, apps, openApp, notify, authEpoch = 0, subject, scopes}: LibraryAppProps & {subject: string; scopes: string[]}) {
+  const lifetime = useMemo(() => createRequestLifetime(), []);
+  useLayoutEffect(() => {
+    lifetime.activate();
+    return () => lifetime.end();
+  }, [lifetime]);
+  // Stable wrappers reject late responses and prevent old async chains from
+  // starting follow-up requests with a new session's live credentials.
+  const api = useMemo(() => lifetime.bind(sourceAPI), [lifetime, sourceAPI]);
+  const apiPage = useMemo(() => lifetime.bind(sourceAPIPage), [lifetime, sourceAPIPage]);
+  const apiRaw = useMemo(() => lifetime.bind(sourceAPIRaw), [lifetime, sourceAPIRaw]);
+  const identityLoaded = true;
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
   const search = useSearch(apiPage);
   const query = useQueryConsole(apiPage, subject, identityLoaded && Boolean(subject), authEpoch);
   const theorems = useTheorems(apiPage);
   const prefs = useLibraryPrefs(subject);
+  const uploadStore = useMemo(()=>createUploadStore(),[subject,authEpoch]);
+  useEffect(()=>()=>uploadStore.dispose(),[uploadStore]);
 
   const [view, setView] = useState<LibraryViewKind>('library');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
-  const [sort, setSort] = useState<SortState>(null);
   const [filter, setFilter] = useState('');
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1023);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
@@ -60,11 +91,14 @@ export function LibraryApp({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const rowNavigation = useRef(0);
+  const [tableTarget, setTableTarget] = useState<{id: string; loading: boolean; error: unknown} | null>(null);
 
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
   const table = session.table;
   const {jobs, error: jobsError, reload: reloadJobs} = useJobs(apiPage, table?.id ?? '', canAdmin && view === 'library' && Boolean(table));
+
+  const movePaths = useMemo(() => [...new Set(['/', ...catalogue.tables.flatMap(item => ancestorPaths(item.path))])].sort((left, right) => left.localeCompare(right, 'zh')), [catalogue.tables]);
 
   const tableNames = useMemo(() => new Map(catalogue.tables.map(item => [item.id, item.name])), [catalogue.tables]);
   const tableName = (id: string) => tableNames.get(id) || id.slice(0, 8);
@@ -87,28 +121,51 @@ export function LibraryApp({
     return () => clearTimeout(timer);
   }, [notice]);
 
-  function openTable(next: Table) {
+  function openTable(next: Table, expandPath = true) {
     ++rowNavigation.current;
+    setTableTarget(null);
     setView('library');
     setSelection(new Set());
     setActiveRowId(null);
     setFilter('');
-    setSort(null);
     setConflict(null);
     setInspectorOpen(true);
-    setExpanded(current => expandAncestors(current, next.path));
+    if (expandPath) setExpanded(current => expandAncestors(current, next.path));
     prefs.remember({kind: 'table', id: next.id, title: next.name, at: Date.now()});
     void session.open(next, session.includeDeleted);
   }
 
+  async function openTableTarget(id: string) {
+    const request = ++rowNavigation.current;
+    setView('library');
+    setTableTarget({id, loading: true, error: null});
+    setSelection(new Set());
+    setActiveRowId(null);
+    setConflict(null);
+    setDialog(null);
+    setAskAI(null);
+    session.clear();
+    try {
+      // Revalidate the current table ACL even when its metadata is cached in
+      // the catalogue. The table may also be beyond the loaded directory page.
+      const next = await api(`/tables/${encodeURIComponent(id)}`) as Table;
+      if (request !== rowNavigation.current) return;
+      openTable(next);
+    } catch (error) {
+      if (request === rowNavigation.current) setTableTarget({id, loading: false, error});
+    }
+  }
+
   function selectView(next: LibraryViewKind) {
     ++rowNavigation.current;
+    setTableTarget(null);
     setView(next);
     if (next === 'theorems' && !theorems.items.length && !theorems.loading) void theorems.load();
   }
 
   async function openRow(tableId: string, rowId: string, remember = true) {
     const request = ++rowNavigation.current;
+    setTableTarget(null);
     const known = catalogue.tables.find(item => item.id === tableId) || (await api(`/tables/${tableId}`).catch(() => null));
     if (request !== rowNavigation.current) return;
     if (!known) {
@@ -147,9 +204,23 @@ export function LibraryApp({
       void openRow(tableId, rowId);
     } else if (entry.kind === 'theorem') {
       ++rowNavigation.current;
+      setTableTarget(null);
       setView('theorems');
       void theorems.open(entry.id);
     }
+  }
+
+  function rememberLoadedRow(rowId: string) {
+    if (table && session.rows.some(row => row._row_id === rowId)) {
+      prefs.remember({kind: 'row', id: `${table.id}:${rowId}`, title: `${table.name} · ${rowId.slice(0, 8)}`, at: Date.now()});
+    }
+  }
+
+  function activateLoadedRow(rowId: string) {
+    setActiveRowId(rowId);
+    setInspectorOpen(true);
+    setInspectorTab('overview');
+    rememberLoadedRow(rowId);
   }
 
   function onSelectRow(rowId: string, event: React.MouseEvent) {
@@ -174,8 +245,7 @@ export function LibraryApp({
       }
       return new Set([rowId]);
     });
-    const row = session.rows.find(item => item._row_id === rowId);
-    if (row) prefs.remember({kind: 'row', id: `${table?.id}:${rowId}`, title: `${table?.name} · ${rowId.slice(0, 8)}`, at: Date.now()});
+    rememberLoadedRow(rowId);
   }
 
   const selectedRow = session.rows.find(row => row._row_id === activeRowId) || null;
@@ -186,7 +256,7 @@ export function LibraryApp({
       const page = await apiPage(`/tables/${table.id}/rows/${selectedRow._row_id}`, {
         method: 'PATCH',
         headers: {'If-Match': `"revision:${revision}"`},
-        body: JSON.stringify({values}),
+        body: stringifyExactJSON({values: Object.fromEntries(changedFields(selectedRow.values, values).map(name => [name, values[name]]))}),
       });
       const saved = page.data as Row;
       session.setRows(old => old.map(row => (row._row_id === saved._row_id ? saved : row)));
@@ -210,7 +280,7 @@ export function LibraryApp({
 
   async function createRow(values: Record<string, any>) {
     if (!table) return;
-    const page = await apiPage(`/tables/${table.id}/rows`, {method: 'POST', body: JSON.stringify({values})});
+    const page = await apiPage(`/tables/${table.id}/rows`, {method: 'POST', body: stringifyExactJSON({values})});
     const created = page.data as Row;
     session.setRows(old => [created, ...old]);
     setActiveRowId(created._row_id);
@@ -235,14 +305,14 @@ export function LibraryApp({
     await apiPage(`/tables/${table.id}/rows/${selectedRow._row_id}/restore`, {
       method: 'POST',
       headers: {'If-Match': `"revision:${currentRevision}"`},
-      body: JSON.stringify({revision}),
+      body: stringifyExactJSON({revision}),
     });
     await session.refresh(true);
     setNotice({tone: 'success', message: `已恢复到 r${revision}；恢复创建了新的 revision。`});
   }
 
   async function createTable(payload: {path: string; name: string; columns: Column[]}) {
-    const page = await apiPage('/tables', {method: 'POST', body: JSON.stringify(payload)});
+    const page = await apiPage('/tables', {method: 'POST', body: stringifyExactJSON({...payload, columns: normalizeColumnDefaults(payload.columns)})});
     await catalogue.load();
     openTable({id: page.data.table_id, path: page.data.path, name: page.data.name});
   }
@@ -255,7 +325,7 @@ export function LibraryApp({
       await apiPage(`/tables/${table.id}/move`, {
         method: 'POST',
         headers: {'If-Match': `"revision:${table.table_revision}"`},
-        body: JSON.stringify({path: movePath}),
+        body: stringifyExactJSON({path: movePath}),
       });
       await catalogue.load();
       await session.refreshMetadata();
@@ -281,7 +351,7 @@ export function LibraryApp({
       await apiPage(`/tables/${table.id}/schema`, {
         method: 'PATCH',
         headers: {'If-Match': `"revision:${table.table_revision}"`},
-        body: JSON.stringify({columns: schemaDraft}),
+        body: stringifyExactJSON({columns: normalizeColumnDefaults(schemaDraft)}),
       });
       setDialog(null);
       setDestructiveConfirmed(false);
@@ -315,7 +385,7 @@ export function LibraryApp({
     if (!table) return;
     setBusy(true);
     try {
-      await apiPage('/index/reindex', {method: 'POST', body: JSON.stringify({table_id: table.id})});
+      await apiPage('/index/reindex', {method: 'POST', body: stringifyExactJSON({table_id: table.id})});
       setNotice({tone: 'success', message: '索引任务已排队，等待 Embedding worker。'});
       await reloadJobs();
     } catch (cause) {
@@ -328,6 +398,11 @@ export function LibraryApp({
 
   useEffect(() => {
     if (!intent) return;
+    if (intent.action === 'openTable' && intent.table_id) {
+      void openTableTarget(intent.table_id);
+      return () => { ++rowNavigation.current; };
+    }
+    setTableTarget(null);
     if (intent.action === 'refresh') {
       void catalogue.load();
       if (session.table) void session.refresh();
@@ -368,6 +443,7 @@ export function LibraryApp({
   }
 
   const catalogueError = catalogue.error ? describeError(catalogue.error, '读取目录') : null;
+  const tableTargetError = tableTarget?.error ? describeError(tableTarget.error, '打开知识表') : null;
 
   return (
     <div className="knowledge">
@@ -487,7 +563,11 @@ export function LibraryApp({
           />
         )}
 
-        {view === 'library' && !table && (
+        {view === 'library' && tableTarget && (
+          tableTarget.loading ? <p role="status"><Spinner label="正在打开知识表" /> 正在打开知识表…</p> : tableTargetError && <ErrorState title={tableTargetError.title} message={tableTargetError.message} requestId={tableTargetError.requestId} errorCode={tableTargetError.code} onRetry={() => void openTableTarget(tableTarget.id)} />
+        )}
+
+        {view === 'library' && !table && !tableTarget && (
           <div className="library-welcome">
             <h2>XeLibrary</h2>
             <p>从左侧路径树打开一张知识表，或使用搜索与查询控制台。</p>
@@ -537,14 +617,20 @@ export function LibraryApp({
               error={session.error}
               filter={filter}
               onFilter={setFilter}
-              sort={sort}
-              onSort={key =>
-                setSort(current => (current && current.key === key ? {key, direction: current.direction === 'asc' ? 'desc' : 'asc'} : {key, direction: 'asc'}))
-              }
+              sort={session.sort}
+              onSort={key => {
+                const current = session.sort;
+                const next = current && current.key === key
+                  ? {key, direction: current.direction === 'asc' ? 'desc' as const : 'asc' as const}
+                  : {key, direction: 'asc' as const};
+                setSelection(new Set());
+                setActiveRowId(null);
+                void session.changeSort(next);
+              }}
               selection={selection}
               activeRowId={activeRowId}
               onSelectRow={onSelectRow}
-              onActivateRow={rowId => { setActiveRowId(rowId); setInspectorOpen(true); setInspectorTab('overview'); }}
+              onActivateRow={activateLoadedRow}
               onSelectionChange={setSelection}
               onLoadMore={() => void session.loadMore()}
               onRetry={() => void session.refresh()}
@@ -563,6 +649,8 @@ export function LibraryApp({
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          identityKey={JSON.stringify([subject, authEpoch, identityLoaded])}
+          uploadStore={uploadStore}
           table={table}
           columns={table.columns || []}
           row={selectedRow}
@@ -610,6 +698,14 @@ export function LibraryApp({
 
       <Modal open={dialog === 'move'} title={`移动 ${table?.name || ''}`} onClose={() => setDialog(null)} footer={<><Button variant="ghost" onClick={() => setDialog(null)}>取消</Button><Button variant="primary" disabled={busy || !movePath.startsWith('/')} onClick={() => void moveTable()}>移动知识表</Button></>}>
         {actionError ? <ErrorState title={describeError(actionError, '移动表').title} requestId={describeError(actionError).requestId} errorCode={describeError(actionError).code} message={describeError(actionError, '移动表').message} /> : null}
+        <label style={{display: 'grid', gap: 4, marginBottom: 12}}>
+          已加载目录（可选）
+          <Select value={movePaths.includes(movePath) ? movePath : ''} onChange={event => { if (event.target.value) setMovePath(event.target.value); }}>
+            <option value="">选择已有路径</option>
+            {movePaths.map(path => <option key={path} value={path}>{path}</option>)}
+          </Select>
+          <small className="muted">候选仅来自当前已加载的可见目录，不代表完整目录或目标写权限；也可在下方输入新路径。</small>
+        </label>
         <label>
           目标路径
           <Input value={movePath} onChange={event => setMovePath(event.target.value)} placeholder="/数学/分析" />
