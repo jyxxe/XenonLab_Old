@@ -12,10 +12,14 @@ export type WindowState = Rect & {
   restore?: Rect;
 };
 
-export type API<T = any> = (path: string, init?: RequestInit) => Promise<T>;
+/** Optional request flags. `soft` keeps a failed optional read from moving the
+ * whole session into the global retry state; the caller handles the failure. */
+export type APIOptions = {soft?: boolean};
+export type API<T = any> = (path: string, init?: RequestInit, options?: APIOptions) => Promise<T>;
 export type APIPage<T = any> = (
   path: string,
   init?: RequestInit,
+  options?: APIOptions,
 ) => Promise<{data: T; meta: {request_id?: string; next_cursor?: string | null; [key: string]: any}}>;
 export type APIRaw = (path: string, init?: RequestInit) => Promise<Response>;
 

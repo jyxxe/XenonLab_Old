@@ -167,7 +167,7 @@ export function DesktopShell({
       const [me, registry, widgets] = await Promise.all([
         api('/users/me'),
         api('/apps'),
-        api('/users/me/plugin-widgets').catch(() => [] as PluginWidgetInfo[]),
+        api('/users/me/plugin-widgets', undefined, {soft: true}).catch(() => [] as PluginWidgetInfo[]),
       ]);
       const [layout, stored] = await Promise.all([api('/users/me/layout'), api('/users/me/preferences')]);
       if (currentAPI.current !== api || !preferenceLifetime.current) return;
@@ -334,7 +334,7 @@ export function DesktopShell({
     const [me, registry, widgets] = await Promise.all([
       api('/users/me'),
       api('/apps'),
-      api('/users/me/plugin-widgets').catch(() => [] as PluginWidgetInfo[]),
+      api('/users/me/plugin-widgets', undefined, {soft: true}).catch(() => [] as PluginWidgetInfo[]),
     ]);
     const available = mergeApps(registry, me.scopes || []);
     const known = new Set(available.map(app => app.id));
