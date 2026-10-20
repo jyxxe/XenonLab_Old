@@ -639,6 +639,48 @@ def test_table_rows_sort_across_cursor_pages_with_stable_ties(library):
     assert legacy.json()["meta"]["next_cursor"] == legacy.json()["data"][-1]["_row_id"]
 
 
+def test_ascending_sort_pages_from_null_group_into_non_null_rows(library):
+    table = library.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/排序验收",
+            "name": "null-boundary-sort",
+            "columns": [{"name": "score", "type": "int64", "nullable": True}],
+        },
+    )
+    assert table.status_code == 201, table.text
+    tid = table.json()["data"]["table_id"]
+    created = []
+    for score in (None, None, 1):
+        result = library.post(
+            f"/api/v1/tables/{tid}/rows", headers=auth(), json={"values": {"score": score}}
+        )
+        assert result.status_code == 201, result.text
+        created.append(result.json()["data"])
+
+    rows_path = f"/api/v1/tables/{tid}/rows"
+    first = library.get(
+        rows_path, params={"limit": 2, "sort_by": "score", "direction": "asc"}, headers=auth()
+    )
+    assert first.status_code == 200, first.text
+    assert [row["values"]["score"] for row in first.json()["data"]] == [None, None]
+    cursor = first.json()["meta"]["next_cursor"]
+    assert cursor
+
+    second = library.get(
+        rows_path,
+        params={"limit": 2, "sort_by": "score", "direction": "asc", "cursor": cursor},
+        headers=auth(),
+    )
+    assert second.status_code == 200, second.text
+    assert [row["values"]["score"] for row in second.json()["data"]] == [1]
+    assert second.json()["meta"]["next_cursor"] is None
+    paged = first.json()["data"] + second.json()["data"]
+    assert {row["_row_id"] for row in paged} == {row["_row_id"] for row in created}
+    assert paged[-1]["values"]["score"] == 1
+
+
 def test_sorted_row_cursors_preserve_acl_deleted_filter_and_reject_bad_sort(library):
     table = library.post(
         "/api/v1/tables",

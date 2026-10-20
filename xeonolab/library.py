@@ -874,7 +874,13 @@ def create_app(settings=None):
                 after_value = sort_cursor["after_value"]
                 after_row_id = sort_cursor["after_row_id"]
                 if after_value is None:
-                    query += " AND __sort_value IS NULL AND _row_id>?"
+                    # SQLite sorts NULL first for ASC and last for DESC. An ASC
+                    # cursor inside the NULL group must still admit every
+                    # non-NULL row that follows it; only DESC NULLs are terminal.
+                    if direction == "asc":
+                        query += " AND ((__sort_value IS NULL AND _row_id>?) OR __sort_value IS NOT NULL)"
+                    else:
+                        query += " AND __sort_value IS NULL AND _row_id>?"
                     parameters.append(after_row_id)
                 else:
                     operator = ">" if direction == "asc" else "<"
