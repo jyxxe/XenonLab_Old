@@ -237,7 +237,6 @@ def create_app(settings=None):
         CREATE TABLE IF NOT EXISTS plugins(id TEXT PRIMARY KEY,version TEXT NOT NULL,
           manifest TEXT NOT NULL,app_id TEXT,published_by TEXT NOT NULL,published_at REAL NOT NULL,
           updated_at REAL NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
-        CREATE UNIQUE INDEX IF NOT EXISTS plugins_app_id ON plugins(app_id) WHERE app_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS plugin_installs(owner TEXT NOT NULL,
           plugin_id TEXT NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
           enabled INTEGER NOT NULL DEFAULT 1,installed_version TEXT NOT NULL,
@@ -249,19 +248,33 @@ def create_app(settings=None):
 
         if "revision" not in {row[1] for row in db.execute("PRAGMA table_info(apps)")}:
             db.execute("ALTER TABLE apps ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
-        install_columns = {row[1] for row in db.execute("PRAGMA table_info(plugin_installs)")}
-        if "manifest" not in install_columns:
+        plugin_columns = {row[1] for row in db.execute("PRAGMA table_info(plugins)")}
+        if "app_id" not in plugin_columns:
             # Additive repair for a database created by the first draft of the
             # plugin slice. Deployed databases do not contain these tables yet.
-            db.execute("ALTER TABLE plugin_installs ADD COLUMN manifest TEXT NOT NULL DEFAULT '{}'")
-            db.execute(
-                "ALTER TABLE plugin_installs ADD COLUMN catalog_revision INTEGER NOT NULL DEFAULT 1"
-            )
+            db.execute("ALTER TABLE plugins ADD COLUMN app_id TEXT")
+            db.execute("UPDATE plugins SET app_id=json_extract(manifest,'$.app.id')")
+        if "revision" not in plugin_columns:
+            db.execute("ALTER TABLE plugins ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+        db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS plugins_app_id ON plugins(app_id) WHERE app_id IS NOT NULL"
+        )
+        install_columns = {row[1] for row in db.execute("PRAGMA table_info(plugin_installs)")}
+        if "manifest" not in install_columns or "catalog_revision" not in install_columns:
+            if "manifest" not in install_columns:
+                db.execute("ALTER TABLE plugin_installs ADD COLUMN manifest TEXT NOT NULL DEFAULT '{}'")
+            if "catalog_revision" not in install_columns:
+                db.execute(
+                    "ALTER TABLE plugin_installs ADD COLUMN catalog_revision INTEGER NOT NULL DEFAULT 1"
+                )
             db.execute(
                 "UPDATE plugin_installs SET manifest=COALESCE("
                 "(SELECT manifest FROM plugins p WHERE p.id=plugin_id),'{}'), "
                 "catalog_revision=COALESCE((SELECT revision FROM plugins p WHERE p.id=plugin_id),1)"
             )
+            # A first-draft row whose plugin no longer exists cannot be projected;
+            # `{}` is not a valid manifest, so drop only those orphaned snapshots.
+            db.execute("DELETE FROM plugin_installs WHERE manifest='{}' OR manifest IS NULL")
 
     def canonical_origin(value):
         parsed = urlparse(value)
@@ -271,10 +284,18 @@ def create_app(settings=None):
                 try:
                     ip_address(host)
                 except ValueError:
+                    labels = host.split(".")
                     if len(host) > 253 or not all(
                         re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-                        for label in host.split(".")
+                        for label in labels
                     ):
+                        raise ValueError("invalid hostname")
+                    # Browsers normalize legacy IPv4 spellings (0177.0.0.1,
+                    # 127.1, 0x7f.1) to the same address, while Python keeps them
+                    # as names. Reject numeric hosts that are not canonical IPv4,
+                    # or a plugin origin could pass the separate-origin check
+                    # while the browser treats it as the desktop origin.
+                    if all(re.fullmatch(r"(?:0x[0-9a-f]+|\d+)", label) for label in labels):
                         raise ValueError("invalid hostname")
             return (
                 parsed.scheme.lower(),
@@ -411,6 +432,10 @@ def create_app(settings=None):
                 raise APIError(409, "APP_EXISTS", "application already exists")
             if db.execute("SELECT 1 FROM plugins WHERE app_id=?", (body.id,)).fetchone():
                 raise APIError(409, "APP_EXISTS", "application id is already provided by a plugin")
+            from .plugins import installed_app_ids
+
+            if installed_app_ids(db).get(body.id):
+                raise APIError(409, "APP_EXISTS", "application id is still installed by a plugin")
             db.execute("INSERT INTO apps(id,definition) VALUES(?,?)", (body.id, body.model_dump_json()))
             app_audit(db, actor, "app.created", body.id)
         return response(request, {**body.model_dump(), "revision": 1})

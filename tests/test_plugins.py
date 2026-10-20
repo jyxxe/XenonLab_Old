@@ -263,3 +263,159 @@ def test_plugin_routes_are_in_the_desktop_openapi(settings):
     assert "/api/v1/users/me/plugin-widgets" in document["paths"]
     schema = document["components"]["schemas"]["PluginManifest"]
     assert set(schema["required"]) >= {"id", "name", "version"}
+
+
+def test_installed_snapshot_keeps_its_app_id_reserved(settings):
+    client = TestClient(create_app("desktop-web", desktop_settings(settings)))
+    alpha = {**MANIFEST, "id": "alpha", "app": {**MANIFEST["app"], "id": "shared-app"}}
+    beta = {**MANIFEST, "id": "beta", "app": {**MANIFEST["app"], "id": "shared-app"}}
+    assert publish(client, alpha).status_code == 201
+    assert client.post("/api/v1/plugins/alpha/install", headers=auth()).status_code == 200
+    current = client.get("/api/v1/plugins/alpha", headers=auth())
+    moved = {**alpha, "version": "2.0.0", "app": {**alpha["app"], "id": "alpha-app"}}
+    assert client.put(
+        "/api/v1/plugins/alpha",
+        headers=auth("admin", **{"If-Match": current.headers["etag"]}),
+        json=moved,
+    ).status_code == 200
+    # The catalogue no longer owns shared-app, but Alice's accepted snapshot does.
+    assert client.get("/api/v1/apps/shared-app", headers=auth()).status_code == 200
+    assert publish(client, beta).json()["error"]["code"] == "APP_ID_CONFLICT"
+    assert client.post(
+        "/api/v1/apps",
+        headers=auth("admin"),
+        json={"id": "shared-app", "title": "Collision", "origin": "https://collide.example"},
+    ).json()["error"]["code"] == "APP_EXISTS"
+    ids = [entry["id"] for entry in client.get("/api/v1/apps", headers=auth()).json()["data"]]
+    assert ids.count("shared-app") == 1
+    # Dropping the snapshot releases the id.
+    assert client.delete("/api/v1/plugins/alpha/install", headers=auth()).status_code == 200
+    assert publish(client, beta).status_code == 201
+
+
+def test_installed_widget_snapshot_does_not_follow_catalogue_edits(settings):
+    client = TestClient(create_app("desktop-web", desktop_settings(settings)))
+    assert publish(client).status_code == 201
+    assert client.post("/api/v1/plugins/hello-plugin/install", headers=auth()).status_code == 200
+    current = client.get("/api/v1/plugins/hello-plugin", headers=auth())
+    without_widget = {**MANIFEST, "version": "2.0.0", "widget": None}
+    assert client.put(
+        "/api/v1/plugins/hello-plugin",
+        headers=auth("admin", **{"If-Match": current.headers["etag"]}),
+        json=without_widget,
+    ).status_code == 200
+    # The installed snapshot still declares the widget.
+    widgets = client.get("/api/v1/users/me/plugin-widgets", headers=auth()).json()["data"]
+    assert [widget["plugin_id"] for widget in widgets] == ["hello-plugin"]
+    item = client.get("/api/v1/plugins", headers=auth()).json()["data"][0]
+    assert item["widget"] is None and item["installed_widget"] is True
+    # Reinstalling accepts the new catalogue version, which has no widget.
+    assert client.post("/api/v1/plugins/hello-plugin/install", headers=auth()).status_code == 200
+    assert client.get("/api/v1/users/me/plugin-widgets", headers=auth()).json()["data"] == []
+    assert client.get("/api/v1/plugins", headers=auth()).json()["data"][0]["installed_widget"] is False
+
+
+def test_revoked_scopes_stop_projection_and_hide_plugin_widgets(settings):
+    client = TestClient(create_app("desktop-web", desktop_settings(settings)))
+    assert publish(client).status_code == 201
+    assert client.post("/api/v1/plugins/hello-plugin/install", headers=auth()).status_code == 200
+    assert any(
+        entry["id"] == "hello-app" for entry in client.get("/api/v1/apps", headers=auth()).json()["data"]
+    )
+    scopes = settings.dev_tokens["alice"]["scope"]
+    settings.dev_tokens["alice"]["scope"] = " ".join(
+        item for item in scopes.split() if item != "xelibrary:read"
+    )
+    try:
+        assert all(
+            entry["id"] != "hello-app"
+            for entry in client.get("/api/v1/apps", headers=auth()).json()["data"]
+        )
+        assert client.get("/api/v1/users/me/plugin-widgets", headers=auth()).json()["data"] == []
+        denied = client.patch(
+            "/api/v1/plugins/hello-plugin/install", headers=auth(), json={"enabled": True}
+        )
+        assert denied.status_code == 403
+        assert denied.json()["error"]["details"] == {"missing_scopes": ["xelibrary:read"]}
+    finally:
+        settings.dev_tokens["alice"]["scope"] = scopes
+    assert client.get("/api/v1/users/me/plugin-widgets", headers=auth()).json()["data"] != []
+
+
+def test_catalog_mutations_require_admin_and_preconditions(settings):
+    client = TestClient(create_app("desktop-web", desktop_settings(settings)))
+    assert publish(client).status_code == 201
+    assert client.put(
+        "/api/v1/plugins/hello-plugin", headers=auth(), json={**MANIFEST, "version": "1.1.0"}
+    ).status_code == 403
+    assert client.delete("/api/v1/plugins/hello-plugin", headers=auth()).status_code == 403
+    assert client.delete("/api/v1/plugins/hello-plugin", headers=auth("admin")).status_code == 412
+    current = client.get("/api/v1/plugins/hello-plugin", headers=auth())
+    stale = client.delete(
+        "/api/v1/plugins/hello-plugin", headers=auth("admin", **{"If-Match": '"revision:99"'})
+    )
+    assert stale.status_code == 412
+    assert client.delete(
+        "/api/v1/plugins/hello-plugin",
+        headers=auth("admin", **{"If-Match": current.headers["etag"]}),
+    ).status_code == 200
+
+
+def test_reserved_and_legacy_numeric_app_origins_are_rejected(settings):
+    client = TestClient(create_app("desktop-web", desktop_settings(settings)))
+    reserved = {**MANIFEST, "app": {**MANIFEST["app"], "id": "xelibrary"}}
+    refused = publish(client, reserved)
+    assert refused.status_code == 422
+    assert refused.json()["error"]["code"] in {"RESERVED_APP_ID", "VALIDATION_ERROR"}
+    for origin in ("https://0177.0.0.1", "https://127.1", "https://0x7f.1"):
+        body = {**MANIFEST, "app": {**MANIFEST["app"], "origin": origin}}
+        response = publish(client, body)
+        assert response.status_code == 422, (origin, response.text)
+        assert response.json()["error"]["code"] == "INVALID_ORIGIN"
+
+
+def test_first_draft_plugin_database_is_repaired_on_startup(settings, tmp_path):
+    import json
+    import sqlite3
+
+    database = tmp_path / "desktop.sqlite"
+    db = sqlite3.connect(database)
+    db.executescript(
+        """
+        CREATE TABLE apps(id TEXT PRIMARY KEY,definition TEXT);
+        CREATE TABLE layouts(owner TEXT PRIMARY KEY,layout TEXT);
+        CREATE TABLE preferences(owner TEXT PRIMARY KEY,definition TEXT);
+        CREATE TABLE app_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,target TEXT,at REAL);
+        CREATE TABLE plugins(id TEXT PRIMARY KEY,version TEXT NOT NULL,manifest TEXT NOT NULL,
+          published_by TEXT NOT NULL,published_at REAL NOT NULL,updated_at REAL NOT NULL);
+        CREATE TABLE plugin_installs(owner TEXT NOT NULL,plugin_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,installed_version TEXT NOT NULL,installed_at REAL NOT NULL,
+          PRIMARY KEY(owner,plugin_id));
+        CREATE TABLE plugin_audit(id TEXT PRIMARY KEY,actor TEXT NOT NULL,event TEXT NOT NULL,
+          plugin_id TEXT NOT NULL,at REAL NOT NULL);
+        """
+    )
+    db.execute(
+        "INSERT INTO plugins VALUES(?,?,?,?,?,?)",
+        ("hello-plugin", "1.0.0", json.dumps(MANIFEST), "admin", 1.0, 1.0),
+    )
+    db.execute(
+        "INSERT INTO plugin_installs VALUES(?,?,?,?,?)",
+        ("alice", "hello-plugin", 1, "1.0.0", 1.0),
+    )
+    db.execute(
+        "INSERT INTO plugin_installs VALUES(?,?,?,?,?)",
+        ("alice", "removed-plugin", 1, "1.0.0", 1.0),
+    )
+    db.commit()
+    db.close()
+
+    client = TestClient(create_app("desktop-web", desktop_settings(settings)))
+    item = client.get("/api/v1/plugins", headers=auth("admin")).json()["data"][0]
+    assert item["id"] == "hello-plugin" and item["revision"] == 1
+    assert item["app"]["id"] == "hello-app"
+    assert client.get("/api/v1/apps/hello-app", headers=auth()).status_code == 200
+    leaked = sqlite3.connect(database).execute(
+        "SELECT plugin_id FROM plugin_installs WHERE plugin_id='removed-plugin'"
+    ).fetchall()
+    assert leaked == []

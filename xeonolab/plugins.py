@@ -43,6 +43,7 @@ RESERVED_APP_IDS = {
     "settings",
     "system",
     "work",
+    "xelibrary",
 }
 
 
@@ -148,6 +149,26 @@ def _install_row(db, owner, plugin_id):
     ).fetchone()
 
 
+def installed_app_ids(db):
+    """App ids still projected by accepted installation snapshots.
+
+    Catalogue validation reserves an id while an account that installed the old
+    manifest has not reinstalled or uninstalled: that account continues to see
+    the snapshotted app, so another plugin (or an admin app) must not reuse it.
+    Returns ``{app_id: {plugin_id, ...}}``.
+    """
+    reserved = {}
+    for row in db.execute("SELECT plugin_id, manifest FROM plugin_installs"):
+        try:
+            manifest = json.loads(row["manifest"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        app = manifest.get("app") if isinstance(manifest, dict) else None
+        if isinstance(app, dict) and isinstance(app.get("id"), str) and app["id"]:
+            reserved.setdefault(app["id"], set()).add(row["plugin_id"])
+    return reserved
+
+
 def _catalog_item(db, row, owner, scopes):
     manifest = _manifest(row)
     install = _install_row(db, owner, manifest.id)
@@ -158,6 +179,8 @@ def _catalog_item(db, row, owner, scopes):
         "published_at": row["published_at"],
         "updated_at": row["updated_at"],
         "installed": install is not None,
+        "installed_app": bool(install is not None and _installed_manifest(install).app is not None),
+        "installed_widget": bool(install is not None and _installed_manifest(install).widget is not None),
         "enabled": bool(install["enabled"]) if install is not None else False,
         "installed_version": install["installed_version"] if install is not None else None,
         "installed_at": install["installed_at"] if install is not None else None,
@@ -280,6 +303,13 @@ def install_plugins(app, path, check_origin):
         ).fetchone()
         if clash:
             raise APIError(409, "APP_ID_CONFLICT", "plugin app id conflicts with another plugin")
+        holders = installed_app_ids(db).get(app_id, set()) - {own_id}
+        if holders:
+            raise APIError(
+                409,
+                "APP_ID_CONFLICT",
+                "plugin app id is still installed by another plugin",
+            )
 
     def check_install_scope(manifest, actor):
         missing = [value for value in manifest.permissions if value not in actor.scopes]

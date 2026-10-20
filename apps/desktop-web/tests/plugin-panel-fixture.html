@@ -27,6 +27,7 @@ const enabled = new Map();
 const calls = [];
 window.__pluginFixture = {calls, installed, enabled};
 const project = plugin => ({...plugin, installed:installed.has(plugin.id), enabled:enabled.get(plugin.id) ?? false,
+  installed_app:installed.has(plugin.id) && Boolean(plugin.app), installed_widget:installed.has(plugin.id) && Boolean(plugin.widget),
   installed_version:installed.has(plugin.id) ? plugin.version : null, installed_at:installed.has(plugin.id) ? 0 : null,
   missing_scopes:[], update_available:false});
 const api = async (path, init={}) => {

@@ -36,6 +36,8 @@ type Plugin = {
   widget: PluginWidget | null;
   revision: number;
   installed: boolean;
+  installed_app: boolean;
+  installed_widget: boolean;
   enabled: boolean;
   installed_version: string | null;
   update_available: boolean;
@@ -119,9 +121,14 @@ export function Plugins({
   }
 
   async function uninstall(pluginId: string) {
-    await api(`/plugins/${pluginId}/install`, {method: 'DELETE'});
-    await forgetWidget(pluginId);
-    await refreshCatalog();
+    try {
+      await api(`/plugins/${pluginId}/install`, {method: 'DELETE'});
+    } finally {
+      // The server state already changed even if clearing the widget preference
+      // fails, so reload the catalogue rather than leaving a stale card behind.
+      await forgetWidget(pluginId).catch(() => undefined);
+      await refreshCatalog();
+    }
     setMessage('插件已从当前账户卸载');
   }
 
@@ -150,12 +157,15 @@ export function Plugins({
   }
 
   async function remove(plugin: Plugin) {
-    await api(`/plugins/${plugin.id}`, {
-      method: 'DELETE',
-      headers: {'If-Match': `"revision:${plugin.revision}"`},
-    });
-    await forgetWidget(plugin.id);
-    await refreshCatalog();
+    try {
+      await api(`/plugins/${plugin.id}`, {
+        method: 'DELETE',
+        headers: {'If-Match': `"revision:${plugin.revision}"`},
+      });
+    } finally {
+      await forgetWidget(plugin.id).catch(() => undefined);
+      await refreshCatalog();
+    }
     setMessage('插件已从目录删除');
   }
 
@@ -218,7 +228,7 @@ export function Plugins({
                         />
                         启用
                       </label>
-                      {plugin.widget && (
+                      {(plugin.installed ? plugin.installed_widget ?? Boolean(plugin.widget) : Boolean(plugin.widget)) && (
                         <label className="plugin-check">
                           <input
                             type="checkbox"
