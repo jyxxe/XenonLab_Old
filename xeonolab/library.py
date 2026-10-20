@@ -103,6 +103,28 @@ def now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+SORT_CURSOR_PREFIX = "sort1."
+
+
+def encode_rows_sort_cursor(payload):
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return SORT_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_rows_sort_cursor(cursor):
+    if not cursor.startswith(SORT_CURSOR_PREFIX):
+        raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+    encoded = cursor[len(SORT_CURSOR_PREFIX) :]
+    try:
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        payload = json.loads(raw)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed") from None
+    if not isinstance(payload, dict):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+    return payload
+
+
 class Column(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]{0,63}$")
     type: str
@@ -776,22 +798,116 @@ def create_app(settings=None):
         limit: int = 100,
         cursor: str = "",
         include_deleted: bool = False,
+        sort_by: str | None = Query(default=None, description="Optional schema or system field for table-wide ordering."),
+        direction: str | None = Query(default=None, description="Sort direction: asc or desc; defaults to asc when sort_by is set."),
         actor=Depends(scope("xelibrary:read")),
     ):
+        """List visible rows; sorted cursors are bound to the table, ordering, and deleted-row filter."""
         table, permits = authorize_request(actor, tid, "read")
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
         with table_connect(tid) as db:
-            rows = [
-                decode(r)
-                for r in db.execute(
-                    "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id",
-                    (include_deleted, cursor),
-                )
-                if permits("read", r["_row_id"])
-            ][: limit + 1]
+            if sort_by is None:
+                if direction is not None:
+                    raise APIError(422, "INVALID_SORT", "direction requires sort_by")
+                if cursor.startswith(SORT_CURSOR_PREFIX):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+                query = "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id"
+                raw_rows = db.execute(query, (include_deleted, cursor))
+                rows = []
+                for raw in raw_rows:
+                    if permits("read", raw["_row_id"]):
+                        rows.append(decode(raw))
+                        if len(rows) > limit:
+                            break
+                page = rows[:limit]
+                next_cursor = page[-1]["_row_id"] if len(rows) > limit else None
+                return response(request, page, next_cursor=next_cursor)
+
+            direction = "asc" if direction is None else direction
+            if direction not in {"asc", "desc"}:
+                raise APIError(422, "INVALID_SORT", "direction must be asc or desc")
+            if not sort_by:
+                raise APIError(422, "INVALID_SORT", "sort_by must be a non-empty field name")
+
+            system_sort_expressions = {
+                "_row_id": "_row_id",
+                "_revision": "_revision",
+                "_created_at": "_created_at",
+                "_updated_at": "_updated_at",
+                "_deleted_at": "_deleted_at",
+            }
+            if sort_by in system_sort_expressions:
+                sort_expression = system_sort_expressions[sort_by]
+                sort_parameters = []
+            else:
+                if not any(column["name"] == sort_by for column in columns(db)):
+                    raise APIError(422, "INVALID_SORT", "sort_by must name a schema or supported system field")
+                # Schema field names are constrained by Column.name. Bind the JSON path
+                # as data as well, so it can never become SQL syntax.
+                sort_expression = "json_extract(values_json, ?)"
+                sort_parameters = ['$.' + json.dumps(sort_by, ensure_ascii=False)]
+
+            sort_cursor = None
+            if cursor:
+                sort_cursor = decode_rows_sort_cursor(cursor)
+                expected = {
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                }
+                if any(sort_cursor.get(key) != value for key, value in expected.items()):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested table, sort, or filters")
+                after_row_id = sort_cursor.get("after_row_id")
+                after_value = sort_cursor.get("after_value")
+                if not isinstance(after_row_id, str) or not after_row_id or not (
+                    after_value is None or type(after_value) in {int, float, str}
+                ):
+                    raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+
+            query = f"SELECT * FROM (SELECT data.*, {sort_expression} AS __sort_value FROM data) "
+            query += "WHERE (? OR _deleted_at IS NULL)"
+            parameters = [*sort_parameters, include_deleted]
+            if sort_cursor:
+                after_value = sort_cursor["after_value"]
+                after_row_id = sort_cursor["after_row_id"]
+                if after_value is None:
+                    query += " AND __sort_value IS NULL AND _row_id>?"
+                    parameters.append(after_row_id)
+                else:
+                    operator = ">" if direction == "asc" else "<"
+                    query += f" AND (__sort_value {operator} ? OR (__sort_value = ? AND _row_id>?)"
+                    parameters.extend((after_value, after_value, after_row_id))
+                    # SQLite puts NULL first for ASC and last for DESC. Only the
+                    # latter can still appear after a non-null cursor value.
+                    if direction == "desc":
+                        query += " OR __sort_value IS NULL"
+                    query += ")"
+            query += f" ORDER BY __sort_value {direction.upper()}, _row_id ASC"
+            rows = []
+            for raw in db.execute(query, parameters):
+                if permits("read", raw["_row_id"]):
+                    rows.append((decode(raw), raw["__sort_value"]))
+                    if len(rows) > limit:
+                        break
+
+            page = [row for row, _ in rows[:limit]]
+            next_cursor = None
+            if len(rows) > limit:
+                last_row, last_value = rows[limit - 1]
+                next_cursor = encode_rows_sort_cursor({
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                    "after_value": last_value,
+                    "after_row_id": last_row["_row_id"],
+                })
         return response(
-            request, rows[:limit], next_cursor=rows[limit - 1]["_row_id"] if len(rows) > limit else None
+            request, page, next_cursor=next_cursor
         )
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}")
