@@ -39,6 +39,7 @@ export type UserPreferences = {
   wallpaper_dim?: number;
   timezone: string;
   widgets: WidgetId[];
+  plugin_widgets: string[];
   shortcut_apps: string[];
   custom_wallpaper_available?: boolean;
   notes?: string;
@@ -60,6 +61,25 @@ export type RegistryApp = {
   permissions?: string[];
   sandbox?: Sandbox;
   revision?: number;
+  plugin_id?: string;
+  plugin_version?: string;
+  plugin_name?: string;
+  description?: string;
+};
+
+/** Installed widget declaration exposed by /users/me/plugin-widgets. The
+ * widget runs as a sandboxed cross-origin iframe; no bearer token is passed. */
+export type PluginWidget = {
+  plugin_id: string;
+  plugin_name: string;
+  plugin_version: string;
+  id: string;
+  title: string;
+  origin: string;
+  entry: string;
+  icon: string;
+  height: number;
+  permissions: string[];
 };
 
 /** `askAI` carries an editable draft composed by XeLibrary's selection
@@ -82,6 +102,7 @@ export type DesktopApp = {
   dock: boolean;
   description?: string;
   menu?: AppMenuEntry[];
+  plugin_id?: string;
   component?: React.ComponentType<AppViewProps>;
 };
 

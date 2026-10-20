@@ -1,7 +1,8 @@
 import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {ErrorState, Spinner, useToast} from '../design-system/primitives';
-import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
+import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget, PluginWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
 import {customWallpaperStyle} from '../wallpaper.js';
+import {selectedPluginWidgets} from '../plugin-widgets.js';
 import {mergeApps} from './apps';
 import {CommandPalette, type Command, type CommandProvider} from './CommandPalette';
 import {Dock, type DockSize} from './Dock';
@@ -26,7 +27,7 @@ import {
   maximizedRect,
 } from './window-manager.js';
 import type {DesktopBounds, HalfScreenPlacement, HalfScreenSide} from './window-manager.js';
-import type {API, APIPage, APIRaw, AppIntent, DesktopApp, PreferenceApplyOptions, RegistryApp, UserPreferences, WindowState} from './types';
+import type {API, APIPage, APIRaw, AppIntent, DesktopApp, PluginWidget as PluginWidgetInfo, PreferenceApplyOptions, RegistryApp, UserPreferences, WindowState} from './types';
 
 const RECENT_KEY = 'xeonolab.recent-apps';
 
@@ -52,6 +53,7 @@ const defaultPreferences: UserPreferences = {
   wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
+  plugin_widgets: [],
   shortcut_apps: [],
   notes: '',
   custom_wallpaper_available: false,
@@ -84,6 +86,7 @@ export function DesktopShell({
 }) {
   const {push} = useToast();
   const [apps, setApps] = useState<DesktopApp[]>([]);
+  const [pluginWidgets, setPluginWidgets] = useState<PluginWidgetInfo[]>([]);
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [dockIds, setDockIds] = useState<string[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
@@ -153,11 +156,19 @@ export function DesktopShell({
   const customWallpaper = useMemo(() => customWallpaperStyle(preferences, wallpaperImageUrl), [preferences, wallpaperImageUrl]);
   const knowledgeSearchAvailable = useMemo(() => apps.some(app => app.id === 'knowledge') && accountScopes.includes('xelibrary:query'), [apps, accountScopes]);
   const workAvailable = useMemo(() => apps.some(app => app.id === 'issues'), [apps]);
+  const shownPluginWidgets = useMemo(
+    () => selectedPluginWidgets(preferences.plugin_widgets || [], pluginWidgets),
+    [preferences.plugin_widgets, pluginWidgets],
+  );
 
   const connect = useCallback(async () => {
     setLoadError('');
     try {
-      const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
+      const [me, registry, widgets] = await Promise.all([
+        api('/users/me'),
+        api('/apps'),
+        api('/users/me/plugin-widgets').catch(() => [] as PluginWidgetInfo[]),
+      ]);
       const [layout, stored] = await Promise.all([api('/users/me/layout'), api('/users/me/preferences')]);
       if (currentAPI.current !== api || !preferenceLifetime.current) return;
       const available = mergeApps(registry as RegistryApp[], me.scopes || []);
@@ -174,6 +185,7 @@ export function DesktopShell({
       const storedDock = Array.isArray(migratedLayout.dock) ? migratedLayout.dock.filter((id: string) => known(id)) : [];
       const nextDock = migratedLayout.dock_initialized || storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
       setApps(available);
+      setPluginWidgets(Array.isArray(widgets) ? widgets as PluginWidgetInfo[] : []);
       setAccountScopes(Array.isArray(me.scopes) ? me.scopes : []);
       setDockIds(nextDock);
       setPreferences(prefs);
@@ -319,10 +331,15 @@ export function DesktopShell({
   );
 
   const refreshApps = useCallback(async () => {
-    const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
+    const [me, registry, widgets] = await Promise.all([
+      api('/users/me'),
+      api('/apps'),
+      api('/users/me/plugin-widgets').catch(() => [] as PluginWidgetInfo[]),
+    ]);
     const available = mergeApps(registry, me.scopes || []);
     const known = new Set(available.map(app => app.id));
     setApps(available);
+    setPluginWidgets(Array.isArray(widgets) ? widgets as PluginWidgetInfo[] : []);
     editWindows(current => current.filter(win => known.has(win.app_id)));
     setDockIds(current => current.filter(id => known.has(id)));
   }, [api, editWindows]);
@@ -645,7 +662,7 @@ export function DesktopShell({
   }
 
   return (
-    <div className="desktop ds-compact" data-maximized-active={maximizedActive ? 'true' : undefined} data-has-widgets={(preferences.widgets || []).length ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
+    <div className="desktop ds-compact" data-maximized-active={maximizedActive ? 'true' : undefined} data-has-widgets={((preferences.widgets || []).length > 0 || shownPluginWidgets.length > 0) ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
       backgroundColor: customWallpaper.backgroundColor,
       backgroundImage: customWallpaper.backgroundImage,
       backgroundSize: customWallpaper.backgroundSize,
@@ -741,7 +758,7 @@ export function DesktopShell({
         })}
       </div>
 
-      {(preferences.widgets || []).length > 0 && (
+      {((preferences.widgets || []).length > 0 || shownPluginWidgets.length > 0) && (
         <div className="widgets">
           {(preferences.widgets || []).includes('clock') && <ClockWidget timezone={preferences.timezone} />}
           {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
@@ -750,6 +767,7 @@ export function DesktopShell({
           {(preferences.widgets || []).includes('work') && <WorkWidget apiPage={apiPage} allowed={workAvailable} onOpen={() => openApp('issues')} />}
           {(preferences.widgets || []).includes('search') && <SearchWidget available={knowledgeSearchAvailable} onSearch={query => openApp('knowledge', {action: 'search', query})} />}
           {(preferences.widgets || []).includes('notes') && <NotesWidget notes={preferences.notes || ''} onSave={saveNotes} />}
+          {shownPluginWidgets.map(widget => <PluginWidget key={widget.plugin_id} widget={widget} />)}
         </div>
       )}
 

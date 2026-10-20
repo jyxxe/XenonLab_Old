@@ -2,7 +2,7 @@ import {Icon} from './design-system/Icon';
 import React,{useEffect,useRef,useState} from 'react';
 import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
 import {forgejoIssueUrl} from './shell/forgejo-links.js';
-import type {DesktopApp} from './shell/types';
+import type {DesktopApp, PluginWidget} from './shell/types';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{counts?:Record<string,number>;next_cursor?:string|null}}>;
 type WorkItem={id:string;status:string;claim_active:boolean};
 type Job={job_id:string;status:string};
@@ -147,4 +147,20 @@ export function StatusWidget({apiPage,onOpen}:{apiPage:APIPage;onOpen:()=>void})
     {expired_>0&&<small>{workTruncated?'至少 ':''}{expired_} 项领取已过期，可在任务中心重领</small>}
     <small>点击打开系统面板 →</small>
   </button>;
+}
+
+/** Third-party dashboard widget. It is always a cross-origin sandboxed iframe:
+ * the plugin never runs in the desktop origin and receives no session token. */
+export function PluginWidget({widget}:{widget:PluginWidget}){
+  let src='';
+  try{src=new URL(widget.entry||'/',widget.origin).href}catch{src=''}
+  if(!src)return <section className="widget widget-plugin" aria-label={`${widget.title}（配置无效）`}>
+    <header><strong>{widget.title}</strong></header><small>组件入口无效，请在设置中重新安装插件。</small>
+  </section>;
+  return <section className="widget widget-plugin" aria-label={widget.title} style={{height:widget.height}}>
+    <header><strong><Icon value={widget.icon} size={16} /> {widget.title}</strong>
+      <button type="button" className="widget-link" onClick={()=>window.open(src,'_blank','noopener')} title="在浏览器中打开组件">↗</button>
+    </header>
+    <iframe title={widget.title} src={src} sandbox="allow-scripts allow-same-origin allow-forms" referrerPolicy="no-referrer" loading="lazy" />
+  </section>;
 }
