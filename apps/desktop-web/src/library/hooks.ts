@@ -8,7 +8,8 @@ export const SEARCH_LIMIT = 25;
 export const DEFAULT_QUERY = 'FROM "/**" LIMIT 100';
 
 export function useScopes(api: API, authEpoch = 0) {
-  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean; error?: unknown}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
   const current = identity.epoch === authEpoch ? identity : {epoch: authEpoch, scopes: [], subject: null, loaded: false};
   useEffect(() => {
     let active = true;
@@ -19,12 +20,16 @@ export function useScopes(api: API, authEpoch = 0) {
           setIdentity({epoch: authEpoch, scopes: me.scopes || [], subject: typeof me.subject === 'string' && me.subject.trim() ? me.subject : null, loaded: true});
         }
       })
-      .catch(() => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true}));
+      .catch(error => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true, error}));
     return () => {
       active = false;
     };
-  }, [api, authEpoch]);
-  return current;
+  }, [api, authEpoch, reloadGeneration]);
+  const reload = useCallback(() => {
+    setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+    setReloadGeneration(value => value + 1);
+  }, [authEpoch]);
+  return {...current, reload};
 }
 
 export function useCatalogue(apiPage: APIPage) {

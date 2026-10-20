@@ -56,7 +56,7 @@ test('existing attachment picker actual component discovery, fencing and real lo
   });
   await t.test('LibraryApp Inspector uses auth epoch fencing with unchanged API helper',async()=>{
    const page=await open('library=1');try{
-    await page.locator('button.library-tree-table').click();await page.locator('tr[data-row-id="target"]').click();await page.evaluate(()=>window.__picker.hold=true);await openPicker(page);await expect.poll(()=>page.evaluate(()=>window.__picker.pending.length)).toBe(1);await page.evaluate(()=>{window.__picker.hold=false;window.__picker.switch({epoch:1})});await expect(dialog(page)).toHaveCount(0);await openPicker(page);await expect(list(page)).toHaveCount(25);await page.evaluate(()=>window.__picker.pending.shift().resolve());await expect(list(page)).toHaveCount(25);assert.ok((await calls(page)).every(call=>call.method==='GET'));
+    await page.locator('button.library-tree-table').click();await page.locator('tr[data-row-id="target"]').click();await page.evaluate(()=>window.__picker.hold=true);await openPicker(page);await expect.poll(()=>page.evaluate(()=>window.__picker.pending.length)).toBe(1);await page.evaluate(()=>{window.__picker.hold=false;window.__picker.switch({epoch:1})});await expect(dialog(page)).toHaveCount(0);await page.locator('button.library-tree-table').click();await page.locator('tr[data-row-id="target"]').click();await openPicker(page);await expect(list(page)).toHaveCount(25);await page.evaluate(()=>window.__picker.pending.shift().resolve());await expect(list(page)).toHaveCount(25);assert.ok((await calls(page)).every(call=>call.method==='GET'));
     report.checks.push('Real LibraryApp→Inspector→Attachments same-helper authEpoch invalidates pending discovery');
    }finally{await page.close()}
   });
