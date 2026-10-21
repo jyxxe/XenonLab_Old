@@ -256,6 +256,8 @@ test('searchResultSummary distinguishes the requested maximum from the returned 
   assert.equal(searchResultSummary(50, 0), null, 'an empty result set keeps its dedicated empty state');
   assert.equal(searchResultSummary(Number.NaN, 5), null);
   assert.equal(searchResultSummary(50, Number.NaN), null);
+});
+
 test('column resize shares limits and keyboard steps without treating grid keys as resize', () => {
   assert.equal(clampColumnWidth(40), 80);
   assert.equal(clampColumnWidth(600), 520);
