@@ -135,6 +135,21 @@ test('Shift-click selects the loaded sorted filtered view and excludes hidden ro
     await expect(count(1)).toBeVisible();
     assert.deepEqual(await selected(),[desc[2]]);
 
+    // A selected row hidden by the current filter is never shared with AI.
+    await filter.fill('');
+    await row(hidden).click();
+    await row(desc[2]).click({modifiers:['Control']});
+    await expect(count(2)).toBeVisible();
+    await filter.fill('keep-');
+    await page.getByRole('button',{name:'Ask AI about selection',exact:true}).click();
+    await expect(draft).toHaveValue(/选中记录：1 行/);
+    const filteredDraft=await draft.inputValue();
+    assert.equal(filteredDraft.includes('hide-'),false,'filtered-out selection is excluded from the AI draft');
+    assert.equal(filteredDraft.includes('keep-'),true,'visible selection remains in the AI draft');
+    await expect(page.locator('.library-ask-meta')).toContainText('1 行');
+    await page.getByRole('button',{name:'取消',exact:true}).click();
+    await expect(count(1)).toBeVisible();
+
     // Existing modifiers, checkbox toggles and keyboard selection keep their
     // established behavior; this fix changes only pointer range ordering.
     await row(desc[0]).click();
@@ -163,9 +178,12 @@ test('Shift-click selects the loaded sorted filtered view and excludes hidden ro
     // Load the second real API page before selecting a range across virtual
     // rows. Only mounted rows are clicked; the hidden middle is still selected.
     await open('virtual loaded rows',virtual.rows[0]._row_id);
+    // Table-wide sorting resets the loaded page, so request the sort first and
+    // only then load the second sorted page before selecting across both.
+    await titleSort.click();
+    await expect(page.locator('.library-table-count')).toContainText('100');
     await page.getByRole('button',{name:'加载更多记录',exact:true}).click();
     await expect(page.locator('.library-table-count')).toContainText('120');
-    await titleSort.click();
     await filter.fill('keep-');
     const virtualIds=virtual.rows.filter(row=>row.values.title.startsWith('keep-')).sort((a,b)=>a.values.title.localeCompare(b.values.title)).map(row=>row._row_id);
     await expect(row(virtualIds[0])).toBeVisible();

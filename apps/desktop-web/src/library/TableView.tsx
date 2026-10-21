@@ -229,7 +229,7 @@ export function TableView({
   // unselected row upgrades it to that row first so the draft always matches
   // what the user is looking at.
   function rowsForAI(row: Row): Row[] {
-    if (selection.has(row._row_id)) return rows.filter(item => selection.has(item._row_id));
+    if (selection.has(row._row_id)) return selectedVisibleRows;
     return [row];
   }
 
@@ -280,7 +280,7 @@ export function TableView({
           <>
             <Badge tone="accent">已选 {selection.size} 行</Badge>
             <Button size="sm" loading={copyBusy} disabled={!selectedVisibleRows.length} onClick={() => void copySelected()}>复制已选记录为 TSV（{selectedVisibleRows.length} 行）</Button>
-            <Button size="sm" variant="ghost" onClick={() => onAskAI(rows.filter(item => selection.has(item._row_id)))}>Ask AI about selection</Button>
+            <Button size="sm" variant="ghost" onClick={() => onAskAI(selectedVisibleRows)}>Ask AI about selection</Button>
             <Button size="sm" variant="ghost" onClick={() => onSelectionChange(new Set())}>清除选择</Button>
           </>
         )}

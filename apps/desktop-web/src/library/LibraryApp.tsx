@@ -15,7 +15,7 @@ import {NewTableDialog} from './NewTableDialog';
 import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {createRequestLifetime} from './request-lifetime.js';
-import {ancestorPaths, changedFields, classifySchemaChange, describeError, rowSelectionRange} from './logic.js';
+import {ancestorPaths, changedFields, classifySchemaChange, describeError, filterRows, rowSelectionRange, sortRows} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
 type LibraryAppProps = {
@@ -425,10 +425,14 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   // never hardcodes a chat origin. When no chat app exists the draft can still
   // be composed and copied.
   const chatApp = (apps || []).find(app => app.id === 'chat' && app.kind === 'iframe') || null;
-  const selectedRows = useMemo(
-    () => (selection.size ? session.rows.filter(row => selection.has(row._row_id)) : activeRowId ? session.rows.filter(row => row._row_id === activeRowId) : []),
-    [selection, activeRowId, session.rows],
-  );
+  // Ask-AI must only share rows that remain visible under the current filter and
+  // sort; a selected row hidden by filtering is outside what the user is looking at.
+  const selectedRows = useMemo(() => {
+    const filtered = filterRows(session.rows, filter);
+    const visible = session.sort ? sortRows(filtered, session.sort.key, session.sort.direction) : filtered;
+    if (selection.size) return visible.filter(row => selection.has(row._row_id));
+    return activeRowId ? visible.filter(row => row._row_id === activeRowId) : [];
+  }, [selection, activeRowId, session.rows, session.sort, filter]);
 
   // Modal passive cleanup restores its source focus before passive effects run.
   // Deliver only after that cleanup so source restoration cannot raise Library
