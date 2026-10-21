@@ -248,7 +248,9 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 
 ### Issue #94 修复（zcode 本地交付）
 
-分支 `zcode/issue-94-edge-headers`（基于 `8d960f9`）：公网边缘（`cloudflare-origin.caddy` 站点块）补齐与 LAN `(xeonolab-desktop)` snippet 一致的安全头——`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，并按 Issue 建议的灰度值在两侧同时加 `Strict-Transport-Security "max-age=300"`（公网源站为 HTTP，经 Cloudflare HTTPS 边缘下发后浏览器按 HTTPS 响应生效；max-age 短窗灰度，可后续调大）。新增契约测试 `tests/test_edge_security_headers.py`：按大括号作用域提取两个文件的桌面/公网站点块，断言必需头齐全且两侧 header 集合完全一致（防再漂移；library.xenon.lan 的 frame-ancestors CSP 属该站点特有，不参与比对）。全部 383 项测试与 Ruff 通过。CSP 的完整方案（iframe 应用白名单等）需单独评估，本 PR 不含。
+公网边缘（`cloudflare-origin.caddy` 站点块）补齐与 LAN `(xeonolab-desktop)` snippet 一致的安全头——`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，并按 Issue 建议的灰度值在两侧同时加 `Strict-Transport-Security "max-age=300"`（公网源站为 HTTP，经 Cloudflare HTTPS 边缘下发后浏览器按 HTTPS 响应生效；max-age 短窗灰度，可后续调大）。
+
+首个增量（PR #106）用共享 `security-headers.caddy` snippet，但 VM101 的激活路径只安装 `infra/network/cloudflare-origin.caddy`，不安装被 import 的兄弟文件与 `xeonolab.caddy`；2026-10-22 的部署因此在 Caddy reload 时报 `File to import not found: security-headers.caddy` 并在激活后自动回滚（生产保持上一版本，未受影响）。随后修订为部署兼容方案：两个文件均内联同样的三条头（不再新增/import 文件），`tests/test_edge_security_headers.py` 改为按大括号作用域提取两个站点块，断言必需头齐全、值精确、两侧集合一致，且禁止 import 激活清单之外的文件。VM101 的 `xeonolab.caddy` 仍为运维手工管理文件（激活不覆盖），由操作者按仓库内容同步。CSP 的完整方案（iframe 应用白名单等）需单独评估，不在本增量内。
 
 ### Issue #116 桌面自定义能力（本地，未发布）
 
