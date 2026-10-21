@@ -108,6 +108,20 @@ class CDP {
   }
 }
 
+function parseTSV(text) {
+  const rows=[]; let row=[]; let cell=''; let quoted=false;
+  for (let i=0;i<text.length;i++) {
+    const char=text[i];
+    if (char==='"') {
+      if (quoted && text[i+1]==='"') {cell+='"';i++;}
+      else quoted=!quoted;
+    } else if (!quoted && char==='\t') {row.push(cell);cell='';}
+    else if (!quoted && char==='\r' && text[i+1]==='\n') {row.push(cell);rows.push(row);row=[];cell='';i++;}
+    else cell+=char;
+  }
+  row.push(cell);rows.push(row);return rows;
+}
+
 const setValue = `(selector, value) => {const element=document.querySelector(selector);if(!element)return false;const proto=element.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:element.tagName==='SELECT'?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));return true}`;
 
 test('XeLibrary application acceptance: navigation, table, inspector, search, query, theorems', async t => {
@@ -165,6 +179,14 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     assert.ok(sidebarState.tables.some(item => item.includes('uniform-convergence')), 'table appears in the path tree');
     assert.ok(sidebarState.nodes >= 2, 'path nodes render');
 
+    await cdp.evaluate(`(() => {
+      const rows=window.libraryFixture.state.rows;
+      rows[0].values.title='TSV Alpha'; rows[1].values.title='TSV Beta';
+      rows[0].values.body="tab\\tCR\\rLF\\n\\"quote\\"";
+      window.tsvCopies=[]; window.tsvFail=false;
+      Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{if(window.tsvFail)throw new Error('fixture clipboard denied');window.tsvCopies.push(text)}}});
+    })()`);
+
     // Open the table; verify cursor pagination + virtualised rendering.
     await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr'))"), 'table rows');
@@ -178,6 +200,90 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     assert.match(tableState.loaded, /100 行已加载/, 'deleted rows stay hidden by default');
     assert.ok(tableState.columns.some(label => label.includes('title')), `schema-aware columns render: ${JSON.stringify(tableState.columns)}`);
     await capture('xelibrary-table-dark-1440x900');
+    const copySelection = () => cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].find(button=>button.innerText.includes('复制已选记录为 TSV')).click()");
+    const selectRow = id => cdp.evaluate(`document.querySelector('input[aria-label="选择记录 ${id}"]').click()`);
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].some(button=>button.innerText.includes('复制已选记录为 TSV'))"), false, 'no copy action without selection');
+    const callsBeforeCopy = await cdp.evaluate('window.libraryFixture.calls.length');
+    await selectRow('row-001');
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===1'), 'single-row clipboard write');
+    assert.deepEqual(parseTSV(await cdp.evaluate('window.tsvCopies[0]')).map(row=>row[0]), ['Row ID','row-001']);
+    await selectRow('row-002');
+    assert.match(await cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].find(button=>button.innerText.includes('复制已选记录为 TSV')).innerText"), /2 行/);
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===2'), 'multi-row clipboard write');
+    const copied = parseTSV(await cdp.evaluate('window.tsvCopies[1]'));
+    assert.deepEqual(copied[0], ['Row ID','更新时间','title','body','type','confidence','files','状态']);
+    assert.deepEqual(copied.slice(1).map(row=>row[0]), ['row-001','row-002']);
+    assert.equal(copied[1][3], "tab\tCR\rLF\n\"quote\"");
+    assert.deepEqual(JSON.parse(copied[1][6]), [{attachment_id:'att-1',filename:'proof.pdf'}]);
+    assert.equal(copied[2][5], '', 'null cell remains empty');
+    assert.equal(copied[1][7], '附件 r3');
+    assert.match(await cdp.evaluate("document.querySelector('.library-copy-boundary').innerText"), /仅复制已加载且当前筛选可见/);
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsBeforeCopy, 'copy does not fetch page 2 or any API');
+    await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path.includes('sort_by=title')&&call.path.includes('direction=asc'))"), 'ascending table-wide sort');
+    await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path.includes('sort_by=title')&&call.path.includes('direction=desc'))"), 'descending table-wide sort');
+    // Changing the table sort intentionally clears the selection, so the copy
+    // scenario selects its rows again after the ordering settles.
+    await selectRow('row-001');
+    await selectRow('row-002');
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','TSV')`);
+    // Table-wide sorting legitimately reloads the first sorted page; take the
+    // network baseline after those requests so the assertion below still proves
+    // copying and filtering never fetch another page.
+    const callsAfterSort = await cdp.evaluate('window.libraryFixture.calls.length');
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===3'), 'filtered descending copy');
+    assert.deepEqual(parseTSV(await cdp.evaluate('window.tsvCopies[2]')).slice(1).map(row=>row[0]), ['row-002','row-001']);
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','TSV Beta')`);
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===4'), 'filtered selected copy');
+    assert.deepEqual(parseTSV(await cdp.evaluate('window.tsvCopies[3]')).slice(1).map(row=>row[0]), ['row-002'], 'filtered-out selected row excluded');
+    await cdp.evaluate('window.tsvFail=true');
+    await copySelection();
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-copy-error')?.innerText.includes('选择已保留')"), 'clipboard permission failure feedback');
+    assert.equal(await cdp.evaluate("document.querySelector('.library-table-toolbar .ds-badge').innerText"), '已选 2 行');
+    await capture('issue143-clipboard-failure');
+    await cdp.evaluate('window.tsvFail=false');
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===5'), 'retry succeeds without changing selection');
+    await waitFor(() => cdp.evaluate("[...document.querySelectorAll('[role=status]')].some(element=>element.innerText==='已复制 1 行为 TSV。')"), 'copy success feedback');
+    await capture('issue143-copy-success');
+    await cdp.evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})");
+    await copySelection();
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-copy-error'))"), 'unavailable clipboard has recoverable feedback');
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsAfterSort, 'filtering, retry and clipboard failures do not fetch unloaded rows');
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','no match')`);
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].find(button=>button.innerText.includes('复制已选记录为 TSV')).disabled"), true, 'no currently visible selected row disables copying');
+
+    // Use Chrome's real Clipboard API on this loopback origin after removing the mock.
+    await cdp.call('Browser.grantPermissions', {origin:`http://127.0.0.1:${portNumber}`, permissions:['clipboardReadWrite','clipboardSanitizedWrite']});
+    await cdp.call('Page.bringToFront');
+    await cdp.evaluate('delete navigator.clipboard');
+    assert.equal(await cdp.evaluate("Object.hasOwn(navigator,'clipboard')"), false, 'restored native Navigator clipboard getter');
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','TSV')`);
+    await copySelection();
+    await waitFor(() => cdp.evaluate("[...document.querySelectorAll('[role=status]')].some(element=>element.innerText==='已复制 2 行为 TSV。')"), 'native Clipboard API write succeeded');
+    const nativeText = await cdp.evaluate('navigator.clipboard.readText()');
+    const nativeRows = parseTSV(nativeText);
+    assert.deepEqual(nativeRows[0], copied[0]);
+    assert.deepEqual(nativeRows.slice(1).map(row=>row[0]), ['row-002','row-001']);
+    assert.deepEqual(nativeRows.slice(1), [copied[2],copied[1]], 'native clipboard read preserves two complete quoted TSV records');
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsAfterSort, 'native copy adds no API or pagination requests');
+    await capture('issue143-native-clipboard');
+    if (process.env.UI_VERIFICATION_DIR) {
+      await fs.mkdir(process.env.UI_VERIFICATION_DIR, {recursive:true});
+      await fs.writeFile(path.join(process.env.UI_VERIFICATION_DIR,'native-clipboard.json'), JSON.stringify({browser:chromePath,origin:`http://127.0.0.1:${portNumber}`,nativeNavigatorGetterRestored:true,permissions:['clipboardReadWrite','clipboardSanitizedWrite'],write:'Table View copy action',read:'navigator.clipboard.readText()',payload:nativeText,parsedRows:nativeRows,data:'synthetic local fixture',spreadsheetApplicationTested:false},null,2)+'\n');
+    }
+
+    // Reset the synthetic page before continuing the existing library suite.
+    await cdp.call('Page.navigate', {url: `http://127.0.0.1:${portNumber}/tests/library-fixture.html`});
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.knowledge-sidebar .library-tree-table'))"), 'reset fixture sidebar');
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr'))"), 'reset table rows');
+
 
     // Sorting resets the page, requests the server's full-table order, and
     // clears row state that belonged to the previous loaded page.

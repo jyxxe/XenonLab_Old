@@ -4,6 +4,7 @@ import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ContextMenu, EmptyState, ErrorState, Input, Skeleton, StatusDot, type MenuItem} from '../design-system/primitives';
 import {describeError, filterRows, formatNumber, relativeTime, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
 import type {Column, Row, Table} from './types';
+import {serializeTSV} from './tsv.js';
 
 const ROW_HEIGHT = 34;
 const SYSTEM_COLUMNS: Array<{name: string; label: string}> = [
@@ -67,6 +68,8 @@ export function TableView({
   onAskAI: (rows: Row[]) => void;
   canWrite: boolean;
 }) {
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyMessage, setCopyMessage] = useState<{error: boolean; text: string} | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewportHeight, setViewportHeight] = useState(400);
   const [scrollTop, setScrollTop] = useState(0);
@@ -79,6 +82,27 @@ export function TableView({
     const filtered = filterRows(rows, filter);
     return sort ? sortRows(filtered, sort.key, sort.direction) : filtered;
   }, [rows, filter, sort]);
+
+  const selectedVisibleRows = visibleRows.filter(row => selection.has(row._row_id));
+
+  useEffect(() => setCopyMessage(null), [table.id, selection, filter, sort]);
+
+  async function copySelected() {
+    if (!selectedVisibleRows.length || copyBusy) return;
+    const selected = selectedVisibleRows;
+    setCopyBusy(true); setCopyMessage(null);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法写入剪贴板。');
+      const cells = selected.map(row => [
+        ...gridColumns.map(column => column.schema ? row.values?.[column.name] : row[column.name as keyof Row]),
+        [row._deleted_at ? '已删除' : '', rowHasAttachment(row, columns) ? '附件' : '', row._revision > 1 ? `r${row._revision}` : ''].filter(Boolean).join(' '),
+      ]);
+      await navigator.clipboard.writeText(serializeTSV([...gridColumns.map(column => column.label), '状态'], cells));
+      setCopyMessage({error: false, text: `已复制 ${selected.length} 行为 TSV。`});
+    } catch {
+      setCopyMessage({error: true, text: '复制失败，请检查浏览器剪贴板权限后重试；选择已保留。'});
+    } finally { setCopyBusy(false); }
+  }
 
   const windowed = virtualWindow(scrollTop, viewportHeight, visibleRows.length, ROW_HEIGHT);
   const slice = visibleRows.slice(windowed.start, windowed.end);
@@ -225,11 +249,15 @@ export function TableView({
         {selection.size > 0 && (
           <>
             <Badge tone="accent">已选 {selection.size} 行</Badge>
+            <Button size="sm" loading={copyBusy} disabled={!selectedVisibleRows.length} onClick={() => void copySelected()}>复制已选记录为 TSV（{selectedVisibleRows.length} 行）</Button>
             <Button size="sm" variant="ghost" onClick={() => onAskAI(rows.filter(item => selection.has(item._row_id)))}>Ask AI about selection</Button>
             <Button size="sm" variant="ghost" onClick={() => onSelectionChange(new Set())}>清除选择</Button>
           </>
         )}
       </div>
+
+      {selection.size > 0 && <p className="muted library-copy-boundary">仅复制已加载且当前筛选可见的选中行，不加载后续分页。</p>}
+      {copyMessage && <p className={copyMessage.error ? 'library-copy-error' : 'muted'} role={copyMessage.error ? 'alert' : 'status'}>{copyMessage.text}</p>}
 
       {loading && !rows.length ? (
         <div className="library-table-skeleton" role="status" aria-label="正在加载记录">
