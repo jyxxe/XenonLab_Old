@@ -8,6 +8,10 @@ export function isExpiredWorkClaim(item: WorkStateItem): boolean {
   return item.status === 'claimed' && item.claim_active === false;
 }
 
+export function isBlockedWorkItem(item: WorkStateItem): boolean {
+  return item.status === 'blocked';
+}
+
 export function workDisplayStatus(item: WorkStateItem): string {
   return isExpiredWorkClaim(item) ? 'expired' : item.status;
 }
