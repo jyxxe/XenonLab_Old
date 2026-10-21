@@ -46,6 +46,7 @@ export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;
 export function indexStatusFromJobs(jobs?: Job[]): {state: string; detail: string; latest?: Job};
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];
+export function recentEntryPresentation(entry: {kind: string; id: string; title?: string}, list?: Array<{kind: string; id: string; title?: string}>): {title: string; identifier: string; label: string};
 export function toggleFavorite(list: any[], entry: any): any[];
 export function isFavorite(list: any[], entry: any): boolean;
 export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites'): string | null;

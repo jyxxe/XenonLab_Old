@@ -13,6 +13,7 @@ import {LibraryApp} from '../src/library/LibraryApp';
 
 type Call = {method: string; path: string; body: any};
 const calls: Call[] = [];
+const theoremTitle = (fallback: string) => new URLSearchParams(location.search).get('theoremTitle') ?? fallback;
 
 const COLUMNS = [
   {name: 'title', type: 'string', nullable: false, default_value: null},
@@ -211,16 +212,16 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   }
   if (clean === '/theorems') {
     return {data: [
-      {theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', confidence: {evidence_score: 0.5, source_score: 0.4, consistency_score: 0.6}, revision: 2, updated_at: '2026-09-25T00:00:00Z'},
-      {theorem_id: 'thm-2', path: '/theorems/analysis/uniqueness', title: '极限唯一性定理', statement_natural: '收敛序列的极限唯一。', formal_status: 'none', review_status: 'proposed', revision: 1, updated_at: '2026-09-26T00:00:00Z'},
+      {theorem_id: 'thm-1', path: '/theorems/analysis', title: theoremTitle('一致收敛定理'), statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', confidence: {evidence_score: 0.5, source_score: 0.4, consistency_score: 0.6}, revision: 2, updated_at: '2026-09-25T00:00:00Z'},
+      {theorem_id: 'thm-2', path: '/theorems/analysis/uniqueness', title: theoremTitle('极限唯一性定理'), statement_natural: '收敛序列的极限唯一。', formal_status: 'none', review_status: 'proposed', revision: 1, updated_at: '2026-09-26T00:00:00Z'},
     ], meta: {next_cursor: null}};
   }
   if (clean === '/theorems/thm-1') {
     if (state.delayTheoremId === 'thm-1') await new Promise(resolve => setTimeout(resolve, 450));
-    return {data: {theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', assumptions: ['f_n 连续'], proof_natural: '取 N 为一致收敛的阈值。', formal_status: 'none', review_status: 'proposed', confidence: {evidence_score: 0.5, source_score: 0.4, consistency_score: 0.6}, revision: 2, updated_at: '2026-09-25T00:00:00Z'}, meta: {}};
+    return {data: {theorem_id: 'thm-1', path: '/theorems/analysis', title: theoremTitle('一致收敛定理'), statement_natural: '一致收敛蕴含逐点收敛。', assumptions: ['f_n 连续'], proof_natural: '取 N 为一致收敛的阈值。', formal_status: 'none', review_status: 'proposed', confidence: {evidence_score: 0.5, source_score: 0.4, consistency_score: 0.6}, revision: 2, updated_at: '2026-09-25T00:00:00Z'}, meta: {}};
   }
   if (clean === '/theorems/thm-2') {
-    return {data: {theorem_id: 'thm-2', path: '/theorems/analysis/uniqueness', title: '极限唯一性定理', statement_natural: '收敛序列的极限唯一。', formal_status: 'none', review_status: 'proposed', revision: 1, updated_at: '2026-09-26T00:00:00Z'}, meta: {}};
+    return {data: {theorem_id: 'thm-2', path: '/theorems/analysis/uniqueness', title: theoremTitle('极限唯一性定理'), statement_natural: '收敛序列的极限唯一。', formal_status: 'none', review_status: 'proposed', revision: 1, updated_at: '2026-09-26T00:00:00Z'}, meta: {}};
   }
   if (clean === '/theorems/thm-1/dependencies' || clean === '/theorems/thm-1/dependents') {
     if (state.denyTheoremRelations) throw new APIRequestError('theorem relation permission denied', 403, 'XL_FORBIDDEN');
@@ -239,7 +240,7 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     return {data: {evidence_refs: [], revision: 1}, meta: {}};
   }
   if (clean === '/theorems/search') {
-    return {data: [{theorem_id: 'thm-1', path: '/theorems/analysis', title: '一致收敛定理', statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', revision: 2}], meta: {partial: false}};
+    return {data: [{theorem_id: 'thm-1', path: '/theorems/analysis', title: theoremTitle('一致收敛定理'), statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', revision: 2}], meta: {partial: false}};
   }
   if (clean === '/index/reindex') {
     if (state.reindexFailure) throw new APIRequestError('embedding worker unreachable', 503, 'EMBEDDING_UNAVAILABLE', {requestId: state.reindexFailure === 'correlated' ? 'req-reindex-failed' : undefined});
