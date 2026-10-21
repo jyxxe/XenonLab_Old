@@ -11,15 +11,16 @@ await fs.mkdir(evidence, {recursive:true});
 const appRoot = path.join(repoRoot, 'apps/desktop-web');
 const {createServer} = await import(pathToFileURL(path.join(appRoot, 'node_modules/vite/dist/node/index.js')));
 const {chromium} = await import(pathToFileURL(path.join(appRoot, 'node_modules/@playwright/test/index.mjs')));
-const needle = "{table_id: 't1', row_id: 'row-001', row_revision: 3, path: '/数学/分析', score: 0.87, score_type: 'd100m_cosine', snippet: '一致收敛定义：如果 fn 一致收敛于 f…', approximate: true, indexed_revision: 2},";
-const manyHits = `...Array.from({length: 25}, (_, index) => ({table_id: (window as any).__unknownTable ? 'unknown' : 't1', row_id: 'row-' + String(index + 1).padStart(3, '0'), row_revision: index === 0 ? 3 : 1, path: '/数学/分析', score: 0.87 - index * 0.01, score_type: 'd100m_cosine', snippet: 'Synthetic result ' + String(index + 1).padStart(2, '0') + ': 一致收敛分析记录内容，用于搜索结果返回路径验收。', approximate: true, indexed_revision: index === 0 ? 2 : 1}))`;
 test('search return restores only the originating result generation', async () => {
 let transformed = false;
 const fixturePlugin = {name: 'round10-many-search-hits', enforce: 'pre', transform(code, id) {
   if (!id.split('?')[0].endsWith('/tests/library-fixture.tsx')) return null;
-  if (!code.includes(needle)) throw new Error('Synthetic semantic-hit fixture anchor changed; refusing an unverified rewrite');
+  if (!code.includes("if (clean === '/search/semantic') {") || !code.includes("const clean = url.pathname;")) {
+    throw new Error('Synthetic search fixture anchor changed; refusing an unverified rewrite');
+  }
   transformed = true;
-  return code.replace(needle, manyHits).replace('const clean = url.pathname;', `const clean = url.pathname;
+  return code
+    .replace('const clean = url.pathname;', `const clean = url.pathname;
 if (clean === '/tables/unknown') throw new APIRequestError('unknown synthetic table', 404, 'TABLE_NOT_FOUND');
 if (clean === '/tables/t1/rows/row-025' && (window as any).__holdSource) {
   (window as any).__sourceStarted=true; (window as any).__sourceCompleted=false;
@@ -28,8 +29,11 @@ if (clean === '/tables/t1/rows/row-025' && (window as any).__holdSource) {
 }
 if (clean === '/tables/t1/rows/row-025' && (window as any).__failSource) throw new APIRequestError('synthetic missing source', 404, 'ROW_NOT_FOUND');
 if (clean === '/search/semantic' && (window as any).__failSearch) throw new APIRequestError('synthetic search failure', 503, 'SEARCH_UNAVAILABLE');
-if (clean === '/search/semantic' && body.query === 'empty') return {data: [], meta: {}};
-`);
+`)
+    .replace("if (body.mode === 'quality') throw new APIRequestError('quality worker not configured', 503, 'QWEN_UNAVAILABLE');",
+      "if (body.mode === 'quality') throw new APIRequestError('quality worker not configured', 503, 'QWEN_UNAVAILABLE');\n    if (body.query === 'empty') return {data: [], meta: {}};")
+    .replace("table_id: 't1', row_id: `row-${String(index + 1).padStart(3, '0')}`",
+      "table_id: (window as any).__unknownTable ? 'unknown' : 't1', row_id: `row-${String(index + 1).padStart(3, '0')}`");
 }};
 const server = await createServer({root: appRoot, plugins: [fixturePlugin], server: {host: '127.0.0.1', port: 0, strictPort: false, watch: null}});
 let browser;
@@ -41,7 +45,7 @@ try {
   const page = await browser.newPage({viewport: {width: 1440, height: 900}});
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
-  await page.goto(`http://127.0.0.1:${port}/tests/library-fixture.html`);
+  await page.goto(`http://127.0.0.1:${port}/tests/library-fixture.html?searchPool=25`);
   await page.locator('.knowledge-sidebar .library-nav button').filter({hasText: '搜索'}).click();
   await page.getByRole('searchbox', {name: '搜索 XeLibrary'}).fill('一致收敛');
   await page.getByRole('button',{name:'过滤条件',exact:true}).click();
