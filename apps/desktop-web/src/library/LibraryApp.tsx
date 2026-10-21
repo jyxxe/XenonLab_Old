@@ -218,6 +218,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   }
 
   function activateLoadedRow(rowId: string) {
+    ++rowNavigation.current;
     setActiveRowId(rowId);
     setInspectorOpen(true);
     setInspectorTab('overview');
