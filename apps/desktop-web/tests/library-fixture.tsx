@@ -55,6 +55,7 @@ const state = {
   chatKind: 'iframe' as 'iframe' | 'native',
   openedApp: '',
   notices: [] as string[],
+  searchPool: Number(new URLSearchParams(location.search).get('searchPool') || 0) || 0,
 };
 
 async function route(path: string, init: RequestInit = {}): Promise<{data: any; meta: Record<string, any>}> {
@@ -175,11 +176,18 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     return {data: {resource_type: 'table', resource_id: 't1', explicit: clean.startsWith('/acl/path/') ? false : true, grants: clean.startsWith('/acl/path/') ? {} : {'role:reader': ['read']}, revision: 1}, meta: {}};
   }
   if (clean === '/search/semantic') {
+    if (state.delaySearch) await new Promise(resolve => setTimeout(resolve, state.delaySearch));
     if (body.mode === 'quality') throw new APIRequestError('quality worker not configured', 503, 'QWEN_UNAVAILABLE');
+    const hit = (index: number) => ({
+      table_id: 't1', row_id: `row-${String(index + 1).padStart(3, '0')}`, row_revision: 3, path: '/数学/分析',
+      score: Number((0.87 - index * 0.001).toFixed(3)), score_type: 'd100m_cosine',
+      snippet: `一致收敛定义：如果 fn 一致收敛于 f…（${index + 1}）`, approximate: true, indexed_revision: 2,
+    });
+    const data = state.searchPool > 0
+      ? Array.from({length: Math.min(body.limit, state.searchPool)}, (_, index) => hit(index))
+      : [hit(0)];
     return {
-      data: [
-        {table_id: 't1', row_id: 'row-001', row_revision: 3, path: '/数学/分析', score: 0.87, score_type: 'd100m_cosine', snippet: '一致收敛定义：如果 fn 一致收敛于 f…', approximate: true, indexed_revision: 2},
-      ],
+      data,
       meta: {partial: true, missing_embeddings: 2341, index_backend: 'qdrant_fast_text', model_revision: 'd100m-1'},
     };
   }

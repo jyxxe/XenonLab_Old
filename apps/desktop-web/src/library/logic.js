@@ -239,6 +239,15 @@ export function parseFieldFilters(text) {
   return {filters, errors};
 }
 
+/** Choices offered for the search `limit` field; the API contract caps at 100. */
+export const SEARCH_LIMIT_OPTIONS = [25, 50, 100];
+
+export function searchResultSummary(limit, hitCount) {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) return null;
+  if (typeof hitCount !== 'number' || !Number.isFinite(hitCount) || hitCount < 1) return null;
+  return `最多 ${limit} 条 · 返回 ${hitCount} 条`;
+}
+
 export function searchWarnings(meta = {}) {
   const warnings = [];
   if (meta.missing_embeddings) {

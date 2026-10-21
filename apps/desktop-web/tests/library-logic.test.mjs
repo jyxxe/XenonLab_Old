@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  SEARCH_LIMIT_OPTIONS,
+  searchResultSummary,
   ancestorPaths,
   clampColumnWidth,
   keyboardColumnWidth,
@@ -241,6 +243,19 @@ test('filtered path matches reveal descendants and support transient explicit co
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered, collapsed)).filter(item => item.kind === 'table'), []);
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id).sort(), ['a', 'b']);
   assert.deepEqual([...collapsed], ['/数学']);
+});
+
+test('search limit options stay aligned with the API contract and default', () => {
+  assert.deepEqual(SEARCH_LIMIT_OPTIONS, [25, 50, 100]);
+});
+
+test('searchResultSummary distinguishes the requested maximum from the returned count', () => {
+  assert.equal(searchResultSummary(50, 50), '最多 50 条 · 返回 50 条');
+  assert.equal(searchResultSummary(100, 60), '最多 100 条 · 返回 60 条');
+  assert.equal(searchResultSummary(null, 60), null, 'no summary before a result set exists');
+  assert.equal(searchResultSummary(50, 0), null, 'an empty result set keeps its dedicated empty state');
+  assert.equal(searchResultSummary(Number.NaN, 5), null);
+  assert.equal(searchResultSummary(50, Number.NaN), null);
 });
 
 test('column resize shares limits and keyboard steps without treating grid keys as resize', () => {
