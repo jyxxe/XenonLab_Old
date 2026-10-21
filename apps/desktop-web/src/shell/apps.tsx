@@ -8,6 +8,8 @@ import {Embedding} from '../Embedding';
 import {Development} from './Development';
 import {Issues} from './Issues';
 import {isRetiredRegistryAppId} from './window-manager.js';
+import {isLanOrigin} from './lan-origin.js';
+import {HarnessLaunch} from '../HarnessLaunch';
 import type {DesktopApp, RegistryApp} from './types';
 
 const chatOrigin =
@@ -23,7 +25,7 @@ export {forgejoBase} from './forgejo-links.js';
 
 /** Built-in native apps. The backend registry only manages external (iframe) apps. */
 export function builtinApps(): DesktopApp[] {
-  return [
+  const apps: DesktopApp[] = [
     {
       id: 'knowledge',
       title: '知识库',
@@ -128,6 +130,26 @@ export function builtinApps(): DesktopApp[] {
       component: Settings as React.ComponentType<any>,
     },
   ];
+  // Maintenance shortcut for the DeepSeek Harness Web UI. Only offered when the
+  // desktop itself is loaded from the lab LAN; the token-bearing redirect is
+  // served by the LAN ingress and never stored in the app registry.
+  if (isLanOrigin(globalThis.location?.hostname)) {
+    apps.push({
+      id: 'harness',
+      title: 'DeepSeek Harness',
+      icon: '⌘',
+      kind: 'native',
+      permissions: [],
+      defaultSize: [760, 520],
+      minSize: [520, 380],
+      singleton: true,
+      dock: false,
+      description: '仅内网：打开 DeepSeek Harness 维护终端',
+      menu: [{id: 'open', label: '打开 DeepSeek Harness', action: 'external'}],
+      component: HarnessLaunch as React.ComponentType<any>,
+    });
+  }
+  return apps;
 }
 
 export function toDesktopApp(entry: RegistryApp): DesktopApp {

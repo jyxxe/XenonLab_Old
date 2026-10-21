@@ -4,5 +4,8 @@ table inet devagent_web {
         tcp dport 4096 iifname "lo" accept
         ip saddr 192.168.0.0/24 ip daddr 192.168.0.111 tcp dport 4096 accept
         tcp dport 4096 counter reject
+        tcp dport 4097 iifname "lo" accept
+        ip saddr 192.168.0.0/24 ip daddr 192.168.0.111 tcp dport 4097 accept
+        tcp dport 4097 counter reject
     }
 }
