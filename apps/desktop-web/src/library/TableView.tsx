@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import {stringifyExactJSON} from './json.js';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ContextMenu, EmptyState, ErrorState, Input, Skeleton, StatusDot, type MenuItem} from '../design-system/primitives';
@@ -95,7 +96,7 @@ export function TableView({
   useEffect(() => {
     setScrollTop(0);
     scrollRef.current?.scrollTo({top: 0});
-  }, [table.id, filter]);
+  }, [table.id, filter, sort?.key, sort?.direction]);
 
   // Opening a row from search, recents or the inspector scrolls it into view so the
   // active row is always rendered, even when it sits outside the current window.
@@ -297,7 +298,7 @@ export function TableView({
                         title={`按 ${column.label} 排序`}
                       >
                         {column.label}
-                        {sort?.key === column.name ? <span aria-hidden="true">{sort.direction === 'asc' ? ' ↑' : ' ↓'}</span> : null}
+                        {sort?.key === column.name ? <span aria-hidden="true"><Icon value={sort.direction === 'asc' ? 'arrow-up' : 'arrow-down'} size={14} /></span> : null}
                       </button>
                       <span
                         className="library-th-resize"
@@ -359,7 +360,7 @@ export function TableView({
                     })}
                     <td className="library-td-status">
                       {row._deleted_at ? <Badge tone="danger">已删除</Badge> : null}
-                      {rowHasAttachment(row, columns) ? <Badge tone="accent" >🗎 附件</Badge> : null}
+                      {rowHasAttachment(row, columns) ? <Badge tone="accent"><Icon value="attachment" size={14} /> 附件</Badge> : null}
                       {row._revision > 1 ? <Badge>r{row._revision}</Badge> : null}
                     </td>
                   </tr>
