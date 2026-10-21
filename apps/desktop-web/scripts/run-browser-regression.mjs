@@ -28,6 +28,7 @@ const tests = [
   'tests/browser-acceptance-embedding-table.test.mjs',
   'tests/browser-acceptance-selection.test.mjs',
   'tests/browser-acceptance-int64.test.mjs',
+  'tests/browser-acceptance-app-drafts.test.mjs',
   'tests/browser-acceptance-attachment-picker.test.mjs',
   'tests/browser-acceptance-icons.test.mjs',
   'tests/browser-acceptance-notes-reset.test.mjs',
