@@ -40,7 +40,7 @@ try{
  async function open(p,name){await p.locator('.knowledge-sidebar .library-tree-table').filter({hasText:name}).click();await p.locator('.library-table-head h2').filter({hasText:name}).waitFor();}
  await page.goto(url);await page.locator('button[aria-label="刷新知识表目录"]').click();await open(page,'Snapshot A');await waitFor(async()=> (await page.locator('.library-table-toolbar').innerText()).includes('100'),'initial page100');
  await page.getByPlaceholder('筛选已加载记录（服务端过滤请使用查询控制台）').fill('Row000');
- const row=page.locator('.table-scroll tbody tr').filter({hasText:'Row000'});await row.locator('input[type=checkbox]').check();
+ const row=page.locator('.library-table tbody tr[data-row-id]').filter({hasText:'Row000'}).first();await row.locator('input[type=checkbox]').first().check();
  const control=page.getByRole('region',{name:'知识表快照'}); // section has no heading: explicit aria label gives region
  assert.ok((await control.innerText()).includes('不含附件文件'));
  const plan=hold();nextPlan=plan;const exportsBefore=events.filter(e=>e.path.endsWith('/export')).length;
