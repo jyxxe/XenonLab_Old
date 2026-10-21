@@ -689,7 +689,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
         />
       )}
 
-      <NewTableDialog open={dialog === 'new'} onClose={() => setDialog(null)} onCreate={createTable} />
+      <NewTableDialog open={dialog === 'new'} initialPath={view === 'library' && table ? table.path : '/知识'} onClose={() => setDialog(null)} onCreate={createTable} />
 
       {askAI && table && (
         <AskAIDialog
