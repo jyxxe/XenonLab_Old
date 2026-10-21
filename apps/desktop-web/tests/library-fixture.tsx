@@ -37,8 +37,15 @@ const ROWS = Array.from({length: 101}, (_, index) => ({
   },
 }));
 
+const fixtureParams = new URLSearchParams(location.search);
+
 const state = {
-  subject: new URLSearchParams(location.search).get('subject') === '__none__' ? '' : (new URLSearchParams(location.search).get('subject') || 'fixture-user'),
+  subject: fixtureParams.get('subject') === '__none__' ? '' : (fixtureParams.get('subject') || 'fixture-user'),
+  // Default fixture identity is fully authorized for every library feature;
+  // `?noTheoremRead=1` simulates an account without xelibrary:theorem:read.
+  scopes: (['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'xelibrary:theorem:read', 'dev:read'] as string[]).filter(
+    scope => !(fixtureParams.get('noTheoremRead') === '1' && scope === 'xelibrary:theorem:read'),
+  ),
   conflict: false,
   slow: false,
   denied: false,
@@ -66,7 +73,7 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   const clean = url.pathname;
 
   if (clean === '/users/me') {
-    return {data: {subject: state.subject || null, scopes: ['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'dev:read']}, meta: {}};
+    return {data: {subject: state.subject || null, scopes: state.scopes}, meta: {}};
   }
   if (clean === '/tables' && method === 'GET') {
     return {data: [
