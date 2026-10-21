@@ -31,6 +31,7 @@ const tests = [
   'tests/browser-acceptance-dashboard-task-entry.test.mjs',
   'tests/browser-acceptance-selection.test.mjs',
   'tests/browser-acceptance-int64.test.mjs',
+  'tests/browser-acceptance-system-audit.test.mjs',
   'tests/browser-acceptance-app-drafts.test.mjs',
   'tests/browser-acceptance-attachment-picker.test.mjs',
   'tests/browser-acceptance-icons.test.mjs',
