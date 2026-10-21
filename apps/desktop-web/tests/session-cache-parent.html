@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="UTF-8"><title>Synthetic session parent</title></head>
+<body>
+  <button id="switch">Switch child to synthetic B</button>
+  <iframe id="library" title="Synthetic local Library" src="https://library.xenon.lan/" style="width: 100%; height: 900px; border: 0"></iframe>
+  <script>
+    // Fixed dummy identity in an isolated loopback-only acceptance environment.
+    document.getElementById('switch').addEventListener('click', () => {
+      document.getElementById('library').contentWindow.postMessage(
+        {type: 'auth.session_changed', access_token: 'cycle5-user-b-synthetic'},
+        'https://library.xenon.lan'
+      );
+    });
+  </script>
+</body></html>

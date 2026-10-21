@@ -1,3 +1,5 @@
+import {Icon} from '../design-system/Icon';
+import {stringifyExactJSON} from './json.js';
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ContextMenu, EmptyState, ErrorState, Input, Skeleton, StatusDot, type MenuItem} from '../design-system/primitives';
 import {describeError, filterRows, formatNumber, relativeTime, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
@@ -14,7 +16,7 @@ export type SortState = {key: string; direction: 'asc' | 'desc'} | null;
 function cellText(row: Row, column: Column): string {
   const value = row.values?.[column.name];
   if (value === null || value === undefined) return '';
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'object') return stringifyExactJSON(value);
   return String(value);
 }
 
@@ -94,7 +96,7 @@ export function TableView({
   useEffect(() => {
     setScrollTop(0);
     scrollRef.current?.scrollTo({top: 0});
-  }, [table.id, filter]);
+  }, [table.id, filter, sort?.key, sort?.direction]);
 
   // Opening a row from search, recents or the inspector scrolls it into view so the
   // active row is always rendered, even when it sits outside the current window.
@@ -129,7 +131,7 @@ export function TableView({
         setWidths(current => {
           const updated = {...current, [name]: next};
           try {
-            localStorage.setItem(`xeonolab.library.columns.${table.id}`, JSON.stringify(updated));
+            localStorage.setItem(`xeonolab.library.columns.${table.id}`, stringifyExactJSON(updated));
           } catch {
             /* view preference only */
           }
@@ -184,7 +186,7 @@ export function TableView({
       {
         id: 'copy-row',
         label: '复制记录 JSON',
-        onSelect: () => void navigator.clipboard?.writeText(JSON.stringify(row.values, null, 2)),
+        onSelect: () => void navigator.clipboard?.writeText(stringifyExactJSON(row.values, 2)),
       },
       {separator: true},
       {
@@ -296,7 +298,7 @@ export function TableView({
                         title={`按 ${column.label} 排序`}
                       >
                         {column.label}
-                        {sort?.key === column.name ? <span aria-hidden="true">{sort.direction === 'asc' ? ' ↑' : ' ↓'}</span> : null}
+                        {sort?.key === column.name ? <span aria-hidden="true"><Icon value={sort.direction === 'asc' ? 'arrow-up' : 'arrow-down'} size={14} /></span> : null}
                       </button>
                       <span
                         className="library-th-resize"
@@ -358,7 +360,7 @@ export function TableView({
                     })}
                     <td className="library-td-status">
                       {row._deleted_at ? <Badge tone="danger">已删除</Badge> : null}
-                      {rowHasAttachment(row, columns) ? <Badge tone="accent" >🗎 附件</Badge> : null}
+                      {rowHasAttachment(row, columns) ? <Badge tone="accent"><Icon value="attachment" size={14} /> 附件</Badge> : null}
                       {row._revision > 1 ? <Badge>r{row._revision}</Badge> : null}
                     </td>
                   </tr>

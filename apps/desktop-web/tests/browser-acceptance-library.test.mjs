@@ -175,15 +175,30 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     }))()`);
     assert.ok(tableState.rendered >= 8, 'rows rendered');
     assert.ok(tableState.rendered <= 60, `virtualised rendering keeps the DOM small (${tableState.rendered})`);
-    assert.match(tableState.loaded, /99 行已加载/, 'deleted rows stay hidden by default');
+    assert.match(tableState.loaded, /100 行已加载/, 'deleted rows stay hidden by default');
     assert.ok(tableState.columns.some(label => label.includes('title')), `schema-aware columns render: ${JSON.stringify(tableState.columns)}`);
     await capture('xelibrary-table-dark-1440x900');
 
-    // Sort and filter stay client-side over loaded rows.
+    // Sorting resets the page, requests the server's full-table order, and
+    // clears row state that belonged to the previous loaded page.
+    await cdp.evaluate("document.querySelector('.table-scroll tbody tr').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr[aria-selected=\"true\"]'))"), 'selected row before sort');
     await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
-    await sleep(100);
-    const sortedFirst = await cdp.evaluate("document.querySelector('.table-scroll tbody tr td:nth-child(2)')?.innerText");
-    assert.ok(sortedFirst, 'sorted first row has a title cell');
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title'))"), 'global sort request');
+    const sortedState = await cdp.evaluate(`(() => {
+      const call = window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title')).at(-1);
+      const params = new URLSearchParams(call.path.split('?')[1]);
+      return {rowId: document.querySelector('.table-scroll tbody tr td:nth-child(2)')?.innerText, direction: params.get('direction'), selected: [...document.querySelectorAll('.table-scroll tbody tr[aria-selected="true"]')].length, active: Boolean(document.querySelector('.table-scroll tbody tr.is-active-row'))};
+    })()`);
+    assert.equal(sortedState.rowId, 'row-101', 'the unique minimum on a later page becomes the first global result');
+    assert.equal(sortedState.direction, 'asc', 'the first click requests ascending order');
+    assert.equal(sortedState.selected, 0, 'sorting clears selection from the previous page');
+    assert.equal(sortedState.active, false, 'sorting clears the previous active row');
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-footer button')].find(button=>button.innerText.includes('加载更多')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title')).length>=2"), 'sorted cursor request');
+    const nextSortParams = await cdp.evaluate(`(() => {const params=new URLSearchParams(window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title')).at(-1).path.split('?')[1]);return {direction:params.get('direction'),cursor:params.get('cursor')}})()`);
+    assert.equal(nextSortParams.direction, 'asc', 'loading the next page retains the sort direction');
+    assert.ok(nextSortParams.cursor, 'loading the next page uses the server cursor');
 
     // Select a row: inspector opens, attachment panel is visible.
     await cdp.evaluate("document.querySelector('.table-scroll tbody tr').click()");
@@ -227,6 +242,25 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await cdp.evaluate('window.libraryFixture.state.conflict=false');
     await cdp.evaluate("[...document.querySelectorAll('.inspector-conflict button')].find(button=>button.innerText.includes('重新加载')).click()");
     await waitFor(() => cdp.evaluate("!document.querySelector('.inspector-conflict')"), 'conflict cleared after reload');
+
+    // Deleting from a sorted table refreshes with deleted rows included. The
+    // next cursor request must keep that filter, or the server rejects it.
+    await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('字段')).click()");
+    await cdp.evaluate("[...document.querySelectorAll('.inspector-fields button')].find(button=>button.innerText.includes('软删除记录')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.method==='DELETE'&&call.path==='/tables/t1/rows/row-101')"), 'sorted row soft delete');
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('include_deleted=true')&&call.path.includes('sort_by=title'))"), 'refresh including deleted rows retains sorting');
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-footer button')].find(button=>button.innerText.includes('加载更多')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>{if(call.method!=='GET'||!call.path.includes('/tables/t1/rows?'))return false;const params=new URLSearchParams(call.path.split('?')[1]);return params.has('cursor')&&params.get('include_deleted')==='true'&&params.get('sort_by')==='title'})"), 'sorted cursor retains deleted-row filter');
+    const refreshedCursorParams = await cdp.evaluate("(()=>{const call=window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')).at(-1);const params=new URLSearchParams(call.path.split('?')[1]);return {includeDeleted:params.get('include_deleted'),direction:params.get('direction')}})()");
+    assert.equal(refreshedCursorParams.includeDeleted, 'true', 'refresh state is carried into the next page request');
+    assert.equal(refreshedCursorParams.direction, 'asc', 'refresh preserves the current sort direction');
+
+    // Reopen in the default view so the remaining inspector checks use the
+    // attachment-bearing first fixture row.
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('notes')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.table-scroll tbody tr')?.dataset.rowId==='t2-row-1'"), 'switch to another table');
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.table-scroll tbody tr')?.dataset.rowId==='row-001'"), 'return to default row order');
 
     // Ask-AI selection extension point: composed draft, bounded and editable,
     // delivered through the shell intent channel only on explicit confirm.

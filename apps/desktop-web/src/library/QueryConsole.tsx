@@ -1,3 +1,4 @@
+import {stringifyExactJSON} from './json.js';
 import React, {useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Skeleton, Textarea} from '../design-system/primitives';
 import {describeError, formatNumber, withQueryPagination} from './logic.js';
@@ -140,7 +141,7 @@ export function QueryConsole({
           <div><dt>路径</dt><dd className="mono">{plan.path}</dd></div>
           <div><dt>LIMIT</dt><dd>{plan.limit}</dd></div>
           <div><dt>OFFSET</dt><dd>{plan.offset}</dd></div>
-          <div><dt>ORDER BY</dt><dd>{plan.order_by ? JSON.stringify(plan.order_by) : '无'}{plan.descending ? ' DESC' : ''}</dd></div>
+          <div><dt>ORDER BY</dt><dd>{plan.order_by ? stringifyExactJSON(plan.order_by) : '无'}{plan.descending ? ' DESC' : ''}</dd></div>
           <div><dt>执行器</dt><dd>{plan.execution}</dd></div>
         </dl>
       )}
@@ -165,7 +166,7 @@ export function QueryConsole({
                     <td>{item.path}</td>
                     <td className="mono">{String(item._row_id).slice(0, 10)}…</td>
                     <td>r{item._revision}</td>
-                    <td title={JSON.stringify(item.values)}>{JSON.stringify(item.values).slice(0, 160)}</td>
+                    <td title={stringifyExactJSON(item.values)}>{stringifyExactJSON(item.values).slice(0, 160)}</td>
                     <td><Button size="sm" variant="ghost" onClick={() => onOpenRow(item.table_id, item._row_id)}>定位</Button></td>
                   </tr>
                 ))}

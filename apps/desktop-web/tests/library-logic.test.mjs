@@ -8,6 +8,7 @@ import {
   describeError,
   filterRows,
   filterTree,
+  filteredTreeExpansion,
   flattenTree,
   formatBytes,
   indexStatusFromJobs,
@@ -189,4 +190,23 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
   assert.equal(withQueryPagination('FROM "/**"', 100, 20), 'FROM "/**" LIMIT 100 OFFSET 20');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(-1), '—');
+});
+
+
+test('filtered tree reveals matching deep tables without changing saved expansion', () => {
+  const tree = buildPathTree(tables);
+  const saved = new Set(['/计算机']);
+  const filtered = filterTree(tree, '  ANALYSIS  ');
+  assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id), ['a']);
+  assert.deepEqual([...saved], ['/计算机']);
+  assert.ok(!flattenTree(tree, saved).some(item => item.kind === 'table' && item.table.id === 'a'));
+  assert.deepEqual([...filteredTreeExpansion(filterTree(tree, 'missing'))], []);
+});
+
+test('filtered path matches reveal descendants and support transient explicit collapse', () => {
+  const filtered = filterTree(buildPathTree(tables), '/数学');
+  const collapsed = new Set(['/数学']);
+  assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered, collapsed)).filter(item => item.kind === 'table'), []);
+  assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id).sort(), ['a', 'b']);
+  assert.deepEqual([...collapsed], ['/数学']);
 });
