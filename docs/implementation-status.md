@@ -249,3 +249,17 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #94 修复（zcode 本地交付）
 
 分支 `zcode/issue-94-edge-headers`（基于 `8d960f9`）：公网边缘（`cloudflare-origin.caddy` 站点块）补齐与 LAN `(xeonolab-desktop)` snippet 一致的安全头——`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，并按 Issue 建议的灰度值在两侧同时加 `Strict-Transport-Security "max-age=300"`（公网源站为 HTTP，经 Cloudflare HTTPS 边缘下发后浏览器按 HTTPS 响应生效；max-age 短窗灰度，可后续调大）。新增契约测试 `tests/test_edge_security_headers.py`：按大括号作用域提取两个文件的桌面/公网站点块，断言必需头齐全且两侧 header 集合完全一致（防再漂移；library.xenon.lan 的 frame-ancestors CSP 属该站点特有，不参与比对）。全部 383 项测试与 Ruff 通过。CSP 的完整方案（iframe 应用白名单等）需单独评估，本 PR 不含。
+
+### Issue #116 桌面自定义能力（本地，未发布）
+
+本地分支新增单账户自定义壁纸：`desktop:read` scope 下由 API 使用认证主体隔离，服务端限制 5 MiB/1600 万像素/单帧，解码验证 JPEG、PNG、WebP 后重新编码为 WebP，客户端路径和 MIME 不作为信任依据；API 提供读取、上传和重置。保留账户图片之外的纯色/渐变配置与压暗层，将图片数据留在受限资产 API、不写入偏好 JSON，并兼容旧版 `wallpaper=custom` 图片偏好。桌面组件包含时钟、系统状态、时区日历、按授权 registry 过滤的应用快捷入口、按当前权限显示的工作队列和 XeLibrary 搜索，以及账户偏好中的快速便签。便签显示保存状态并在失焦、pagehide 和组件卸载时尝试 flush；移动组件条适配 390 px 并可用键盘访问。验证覆盖账号隔离、重启持久化、旧偏好兼容、无效/超限图片、背景压暗叠放、工作项状态筛选、权限收缩、便签 pagehide 保存与键盘可用性。
+
+本地全量后端 398 项、前端 48 项、浏览器合成验收、TypeScript/Vite build、目标 Ruff 与 OpenAPI 导出通过。后续加固在 `xeonolab/wallpaper_backup.py` 提供有界图片处理及本地桌面+壁纸备份/校验/隔离恢复：重编码输出受 5 MiB 限制；壁纸上传、替换、删除和快照使用同一个数据根文件锁，SQLite Backup API 快照后按快照中的不可变 UUID 复制文件，并校验元数据、哈希和实际 WebP 解码；备份默认总数据预算 512 MiB、1,000 个资产、预留 64 MiB 空间，可由 CLI 调整；空间预检不是并发写入下的绝对保证。每个服务进程两个图片处理中槽位，超容量返回 429（多进程部署的上限按进程数相乘），取消请求会等待受限线程真正结束后清理并释放槽位。`tests/test_wallpaper_backup.py` 覆盖 Alice/Bob 恢复、错 owner/缺文件拒绝、替换并发快照、事件循环响应、容量拒绝和编码失败清理。未部署或做真实登录生产验收。此 helper 仅涵盖 `desktop.sqlite` 与自定义壁纸，不代表账户/会话数据或平台管理秘密的全局备份；生产仍需独立存储、保留/监控和端到端恢复演练。旧版本不兼容 `wallpaper=custom`，回滚必须恢复匹配的旧桌面快照；操作步骤见 `docs/runbooks/desktop-wallpaper-backup-restore.md`。
+
+### Issue #85 修复（zcode 本地交付）
+
+分支 `zcode/issue-85-issues-toolbar`（基于 `754ff27`）：`.ds-tabs` 的 `flex-shrink:0` 使任务页状态筛选条在 390px 视口撑宽 `.issues-app`（实测 scrollWidth 523 > clientWidth 380）并裁切筛选选项。修复限定在 `.issues-toolbar` 作用域：`ds-tabs` 允许 `flex-wrap:wrap;flex-shrink:1;min-width:0`，表格保留自身横向滚动。新增 390×844 合成 fixture 与浏览器验收（app/toolbar 无横向溢出、每个筛选选项完整落在视口内、截图 `runtime/acceptance-artifacts/issue-85-issues-toolbar-390x844.png`）。全前端 45 项测试与构建通过。
+
+### Issue #96 修复（zcode 本地交付）
+
+分支 `zcode/issue-96-blocked-claim`（基于 `754ff27`）：blocked 状态的 work 项不再渲染必然 409 的「领取」按钮，操作列改为「来源冲突 · 不可领取」提示（`work-state.ts` 新增 `isBlockedWorkItem`）；work 浏览器验收新增 blocked 行无按钮断言。全前端 45 项测试与构建通过。

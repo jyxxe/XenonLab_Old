@@ -4,7 +4,50 @@ The maintainer runs on VM111, `192.168.0.111`, Ubuntu Server, 4 vCPU and 10 GB
 RAM. It uses the independent `devagent` Unix user, with home `/var/lib/devagent`.
 The existing `xeonolab@dev-agent` work/webhook API remains separate.
 
-Runtime is the verified official OpenCode v1.18.34 Linux x64 baseline release,
+## Current runtime — DeepSeek Harness Web (since 2026-10-21)
+
+At the operator's request the interactive DevAgent runtime on VM111 was
+replaced by DeepSeek Harness (DSH). The protected release path (`devctl`,
+validator, Deploy Gateway) is unchanged; only the interactive/Web runtime and
+the automatic watcher changed.
+
+- Service: `devagent-harness-web.service` (systemd, `User=devagent`,
+  `HOME=/var/lib/devagent`, `DSH_HOME=/var/lib/devagent/.dsh`) runs
+  `dsh --profile harness --host 192.168.0.111 --port 4096 --no-open`.
+  It is enabled and active; unauthenticated requests receive HTTP 401.
+- Profile: `/var/lib/devagent/.dsh/profiles/harness` (custom profile created
+  from the shipped `web` template) with `cordis.patch.yml` setting provider
+  `opencode-go` (env `OPENCODE_GO_API_KEY`) and model
+  `deepseek-v4.1-flash` / `reasoningEffort: max`.
+- Credentials: root-owned `/etc/devagent/harness.env` (0600) is injected via
+  `EnvironmentFile`. Read the current login URL with
+  `sudo journalctl -u devagent-harness-web.service | grep -o 'token=[A-Za-z0-9_-]*' | tail -1`.
+  The listener stays LAN-only (`devagent-web-firewall.service` still enforces
+  port 4096 for `192.168.0.0/24`); no Cloudflare/Caddy route is added.
+- Binary: `/usr/local/bin/dsh` is a wrapper executing the pinned
+  `@deepseek-ai/dsh` package under `/opt/dsh` with the system Node runtime.
+- Verification (2026-10-21): a headless DSH probe returned `DSH_OK` against the
+  configured model; the Web UI completed a chat turn end-to-end (`DSH_OK`,
+  ~9.9K tokens, 106 tok/s); an unauthenticated request to
+  `http://192.168.0.111:4096/` returned 401.
+- OpenCode units are retained for rollback but stopped and disabled:
+  `devagent-web.service`, `devagent-watch.timer`, `devagent-reconcile.timer`.
+  The OpenCode CLI/TUI helpers remain installed but do not auto-start.
+- Maintenance loop: automatic watch/reconcile is disabled, so PR/Issue
+  reconciliation is driven by the interactive DSH session. If a later
+  `devctl merge` reports `finish the previous publication before merging
+  another PR`, the publication row was not reconciled by a watcher; run
+  `sudo -u devagent /usr/local/libexec/devagent-controller --collect-only`
+  (collection only, no model call) and retry the merge.
+- Rollback: `systemctl disable --now devagent-harness-web.service`, then
+  `systemctl enable --now devagent-web.service devagent-watch.timer
+  devagent-reconcile.timer`. The harness profile, `/opt/dsh` and
+  `/etc/devagent/harness.env` can be removed afterwards. Never run the DSH Web
+  service and the OpenCode web service on port 4096 at the same time.
+
+Historical OpenCode baseline (superseded by the runtime section above on
+2026-10-21): runtime was the verified official OpenCode v1.18.34 Linux x64
+release,
 SHA256 `24b0d458d21ef548b2752166303defcf7f4945b049fb4876ab78dfaf86d81b27`.
 Default model is `opencode-go/deepseek-v4.1-flash`. Two actual independent
 OpenCode Go sessions have passed repository/Issue reads and a document
@@ -17,15 +60,18 @@ Use existing management SSH, then `sudo -iu devagent`. Run `devagent` for an
 interactive TUI, or `devagent-msg "检查 PR #123"` for an independent manual
 session. An actual SSH PTY opened the Maintainer / DeepSeek V4.1 Flash TUI and exited cleanly. No wrapper uses `--continue`. Automatic and manual work share a kernel
 `flock` protecting the checkout. The runtime uses ephemeral CLI sessions; a
-persistent public OpenCode server is unnecessary. At the user's request,
-`devagent-web.service` serves the native Web UI without a password at
-`http://192.168.0.111:4096`. It binds only the VM's LAN address; a separate atomic
-nft filter accepts loopback/LAN `192.168.0.0/24` and rejects all other sources.
-No Cloudflare/Caddy route is added. Its default working directory is the
-independent `devagent/web-manual` worktree `/var/lib/devagent/web-checkout`;
-the shared OpenCode session store lets the operator inspect existing CLI sessions.
-The Web service does not hold the automatic checkout lock. Do not manually
-switch a Web editing session to the automatic checkout while a cycle is active.
+persistent public OpenCode server is unnecessary. Historically, at the user's
+request, `devagent-web.service` served the native Web UI without a password at
+`http://192.168.0.111:4096`; that unit is now disabled and the DSH Web service
+owns port 4096 (see the current runtime section above). The firewall rule still
+binds port 4096 to the VM's LAN address; a separate atomic nft filter accepts
+loopback/LAN `192.168.0.0/24` and rejects all other sources. No Cloudflare/Caddy
+route is added. If the OpenCode Web unit is ever re-enabled for rollback, its
+default working directory is the independent `devagent/web-manual` worktree
+`/var/lib/devagent/web-checkout`; the shared OpenCode session store lets the
+operator inspect existing CLI sessions. The Web service does not hold the
+automatic checkout lock. Do not manually switch a Web editing session to the
+automatic checkout while a cycle is active.
 
 Before the first service-mode run, create a root-owned
 `/etc/devagent/opencode/.gitignore` containing OpenCode startup exclusions
@@ -36,19 +82,27 @@ startup initially failed without this file, unlike manual mode.
 Installed CLI commands are root-owned symlinks to
 `/usr/local/libexec/devagent-controller`. Policies live in `/etc/devagent`.
 The controller disables project configuration and external plugins, and supplies
-the installed policy as inline configuration. Explicit manual tasks have 48 steps; automatic coordination tasks have at most
-24 for PR review and 12 for other events, disable the editing tool and development/Git write commands, and route code
+the installed policy as inline configuration. Automatic, manual and Web tasks have no
+model-step cap. Automatic coordination disables the editing tool and development/Git write commands, and routes code
 fixes to other Agents through Issues. Automatic review, guarded merge and protected
 deployment are enabled. Preflight submission and deployment completion use separate
 events so the model does not spend steps polling. Routine coding is not delegated
 back to OpenCode Go. Repository and Issue text remain untrusted data. Blocking questions and
 evidence belong in the relevant Issue/PR, after inspecting existing tools.
 
+OpenCode's `steps` and legacy `maxSteps` settings are omitted. The controller strips
+old agent caps from its inline policy and does not fail a normally completed model
+turn because of its iteration count. Iterations remain counted in the audit. The
+monthly budget, task timeout, systemd resource limits and publication gates remain
+enforced. An already running CLI task retains the policy loaded when it started;
+subsequent tasks use the updated policy. Reload the Web service to apply its policy.
+
 ## Event loop and budget
 
-`devagent-watch.timer` is configured for approximately two-minute incremental
-checks; `devagent-reconcile.timer` performs full reconciliation every thirty
-minutes. Both units use 2 CPU cores and at most 6 GB RAM. SQLite fingerprints
+`devagent-watch.timer` was configured for approximately two-minute incremental
+checks; `devagent-reconcile.timer` performed full reconciliation every thirty
+minutes (both timers are disabled since 2026-10-21; see the current runtime
+section). Both units use 2 CPU cores and at most 6 GB RAM. SQLite fingerprints
 track PR heads, reviews/comments, merge state and CI, plus Issues assigned to
 the maintainer or labelled `devagent`. Own comments and the embedded repository
 timestamp in Forgejo combined-status responses do not trigger a model call.
@@ -139,6 +193,10 @@ blocked (#87); changed lockfiles still require a reachable dependency source.
 
 ## Handoff status — 2026-10-01 UTC
 
+Historical record: the Web runtime and timers described in this section were
+replaced on 2026-10-21 by the DeepSeek Harness service (see the current runtime
+section above). The protected publication path and VM inventory are unchanged.
+
 The DevAgent V1 runtime is deployed on VM111. Production commit
 `4372e9ea43e4150a858bb73c52635ea5bc55830b`, release
 `04fbd36b-8a08-4c85-ab39-72bfe9d4b2c0`, and deployment
@@ -150,8 +208,9 @@ OpenCode Web, and firewall returned active. OpenCode Web is intentionally
 passwordless and bound to `192.168.0.111:4096`; nftables permits the port only
 from `192.168.0.0/24`. The installed OpenCode version is 1.18.34.
 
-The two systemd timers are enabled: incremental watch every two minutes and
-full reconciliation every thirty minutes. Before enabling them, the current
+The two systemd timers were enabled at that time (incremental watch every two
+minutes and full reconciliation every thirty minutes); both are disabled since
+the 2026-10-21 runtime replacement. Before enabling them, the current
 Forgejo state was recorded with a model-free baseline. The baseline and first
 timer run each reported zero changes; the automatic queue had no pending work
 and no `model.started` audit event was recorded. The automatic prompt is
@@ -236,3 +295,74 @@ The root broker continues to run deterministic tests/builds, own production cred
 acquire the exclusive Deploy Gateway lease, stage fixed targets and verify/roll back.
 Trusted controller, installed policy and root receiver updates still require reviewed
 operator installation; application deployment cannot rewrite those privilege boundaries.
+
+### Operator abort after a failed preflight
+
+A deployment which failed entirely in `preflight` may be abandoned so a reviewed
+fix can pass the normal merge/deploy gates. Install the reviewed
+`publication_recovery.py` as `/usr/local/libexec/devagent-publication-recovery`
+(root-owned 0700), together with the reviewed controller, broker and VM106 staging
+receiver. This is an operator installation; an application rollout cannot install
+these files. Keep the previous installed files and their digests for rollback.
+
+The helper's default invocation prints an offline plan. The operator-only
+`--abort-preflight` mode reads a bounded JSON object from stdin with `number`,
+`head`, `commit`, `operation_id`, `baseline_commit`, `baseline_operation_id` and
+`reason`. These must identify the exact merged Forgejo PR and failed native job,
+and a preceding native deployment whose five targets and Gateway all passed.
+The helper uses the root-managed Forgejo TLS origin and checks the integration
+tip. It refuses active jobs, interrupted deployment recovery, any activation
+evidence, an existing attempt or a held Gateway lease.
+
+Under the broker operation lock, it acquires its own short lease for the already
+approved baseline release, checks the live immutable version and readiness of
+all five targets, and calls VM106's fixed read-only `publication-recovery` probe.
+That probe checks a consistent SQLite snapshot for unresolved deployments and
+the exact lease, and checks the running Gateway process's immutable working
+directory and HTTP readiness. Recovery I/O has short timeouts and a bounded
+deadline that reserves time to release its own lease. It rechecks native evidence
+and Forgejo before releasing the lease through the normal API and reading it back.
+
+Only after those checks does it issue a root-owned 0600 receipt at
+`/var/lib/devagent-privileged/publication-recoveries/OPERATION_ID.json`. Full
+evidence and lease states remain in the separate root-only attempt journal.
+The broker exposes only a validated read of that receipt. The watcher records
+`operator_aborted` while preserving the original failed operation; the merge gate
+revalidates the receipt's PR/head/commit/operation binding through the broker.
+This is an abandoned attempt, not a successful deployment. Repeating the original
+deployment request still returns its failed operation. The fix must use fresh
+CI, protected preflight, exact-head approval, a normal merge and a new deployment.
+
+An unknown acquire/release response, interrupted helper, expired lease or failed
+check produces no receipt and preserves the attempt journal. Do not delete that
+journal to retry. Inspect the exact recorded acknowledgement, epoch, holder and
+release, all native jobs, target versions and Gateway unresolved states. Release
+only a demonstrably owned lease through the normal API; an uncertain or foreign
+lease requires separate operator recovery. This helper does not recover staging,
+activation, rollback failures or interrupted deployments.
+
+## Validation worktree retention — 2026-10-21
+
+Each protected preflight creates `/var/lib/devagent/worktrees/validate-<task>`
+with a full dependency checkout. On 2026-10-21, 213 leftover worktrees reached
+32 GB and pushed the VM111 root filesystem to 81%; `hf_cache` evaluates the real
+`shutil.disk_usage`, so the 80/85/90 percent watermarks made nine unrelated
+`tests/test_hf_cache.py` cases fail and blocked every protected preflight
+(Issue #276). The tests now inject low pressure by default, and orphaned trees
+are pruned by `devagent-worktree-prune.timer` (`infra/devagent/`), which removes
+`validate-*` directories older than 48 hours as the `devagent` user.
+
+Install as root on VM111 after a reviewed release:
+
+```sh
+install -m 755 /opt/xeonolab/current/infra/devagent/prune-validation-worktrees.sh \
+  /usr/local/libexec/devagent-prune-worktrees
+install -m 644 /opt/xeonolab/current/infra/devagent/devagent-worktree-prune.service \
+  /opt/xeonolab/current/infra/devagent/devagent-worktree-prune.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now devagent-worktree-prune.timer
+systemctl start devagent-worktree-prune.service   # one manual run, check journal
+```
+
+The same `hf_cache` disk-pressure rule means the protected host must stay below
+80% root usage; check `df -h /` after large validation batches.

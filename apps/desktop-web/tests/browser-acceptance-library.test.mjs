@@ -108,6 +108,20 @@ class CDP {
   }
 }
 
+function parseTSV(text) {
+  const rows=[]; let row=[]; let cell=''; let quoted=false;
+  for (let i=0;i<text.length;i++) {
+    const char=text[i];
+    if (char==='"') {
+      if (quoted && text[i+1]==='"') {cell+='"';i++;}
+      else quoted=!quoted;
+    } else if (!quoted && char==='\t') {row.push(cell);cell='';}
+    else if (!quoted && char==='\r' && text[i+1]==='\n') {row.push(cell);rows.push(row);row=[];cell='';i++;}
+    else cell+=char;
+  }
+  row.push(cell);rows.push(row);return rows;
+}
+
 const setValue = `(selector, value) => {const element=document.querySelector(selector);if(!element)return false;const proto=element.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:element.tagName==='SELECT'?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));return true}`;
 
 test('XeLibrary application acceptance: navigation, table, inspector, search, query, theorems', async t => {
@@ -165,6 +179,14 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     assert.ok(sidebarState.tables.some(item => item.includes('uniform-convergence')), 'table appears in the path tree');
     assert.ok(sidebarState.nodes >= 2, 'path nodes render');
 
+    await cdp.evaluate(`(() => {
+      const rows=window.libraryFixture.state.rows;
+      rows[0].values.title='TSV Alpha'; rows[1].values.title='TSV Beta';
+      rows[0].values.body="tab\\tCR\\rLF\\n\\"quote\\"";
+      window.tsvCopies=[]; window.tsvFail=false;
+      Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{if(window.tsvFail)throw new Error('fixture clipboard denied');window.tsvCopies.push(text)}}});
+    })()`);
+
     // Open the table; verify cursor pagination + virtualised rendering.
     await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr'))"), 'table rows');
@@ -175,15 +197,114 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     }))()`);
     assert.ok(tableState.rendered >= 8, 'rows rendered');
     assert.ok(tableState.rendered <= 60, `virtualised rendering keeps the DOM small (${tableState.rendered})`);
-    assert.match(tableState.loaded, /99 行已加载/, 'deleted rows stay hidden by default');
+    assert.match(tableState.loaded, /100 行已加载/, 'deleted rows stay hidden by default');
     assert.ok(tableState.columns.some(label => label.includes('title')), `schema-aware columns render: ${JSON.stringify(tableState.columns)}`);
     await capture('xelibrary-table-dark-1440x900');
-
-    // Sort and filter stay client-side over loaded rows.
+    const copySelection = () => cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].find(button=>button.innerText.includes('复制已选记录为 TSV')).click()");
+    const selectRow = id => cdp.evaluate(`document.querySelector('input[aria-label="选择记录 ${id}"]').click()`);
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].some(button=>button.innerText.includes('复制已选记录为 TSV'))"), false, 'no copy action without selection');
+    const callsBeforeCopy = await cdp.evaluate('window.libraryFixture.calls.length');
+    await selectRow('row-001');
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===1'), 'single-row clipboard write');
+    assert.deepEqual(parseTSV(await cdp.evaluate('window.tsvCopies[0]')).map(row=>row[0]), ['Row ID','row-001']);
+    await selectRow('row-002');
+    assert.match(await cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].find(button=>button.innerText.includes('复制已选记录为 TSV')).innerText"), /2 行/);
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===2'), 'multi-row clipboard write');
+    const copied = parseTSV(await cdp.evaluate('window.tsvCopies[1]'));
+    assert.deepEqual(copied[0], ['Row ID','更新时间','title','body','type','confidence','files','状态']);
+    assert.deepEqual(copied.slice(1).map(row=>row[0]), ['row-001','row-002']);
+    assert.equal(copied[1][3], "tab\tCR\rLF\n\"quote\"");
+    assert.deepEqual(JSON.parse(copied[1][6]), [{attachment_id:'att-1',filename:'proof.pdf'}]);
+    assert.equal(copied[2][5], '', 'null cell remains empty');
+    assert.equal(copied[1][7], '附件 r3');
+    assert.match(await cdp.evaluate("document.querySelector('.library-copy-boundary').innerText"), /仅复制已加载且当前筛选可见/);
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsBeforeCopy, 'copy does not fetch page 2 or any API');
     await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
-    await sleep(100);
-    const sortedFirst = await cdp.evaluate("document.querySelector('.table-scroll tbody tr td:nth-child(2)')?.innerText");
-    assert.ok(sortedFirst, 'sorted first row has a title cell');
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path.includes('sort_by=title')&&call.path.includes('direction=asc'))"), 'ascending table-wide sort');
+    await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path.includes('sort_by=title')&&call.path.includes('direction=desc'))"), 'descending table-wide sort');
+    // Changing the table sort intentionally clears the selection, so the copy
+    // scenario selects its rows again after the ordering settles.
+    await selectRow('row-001');
+    await selectRow('row-002');
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','TSV')`);
+    // Table-wide sorting legitimately reloads the first sorted page; take the
+    // network baseline after those requests so the assertion below still proves
+    // copying and filtering never fetch another page.
+    const callsAfterSort = await cdp.evaluate('window.libraryFixture.calls.length');
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===3'), 'filtered descending copy');
+    assert.deepEqual(parseTSV(await cdp.evaluate('window.tsvCopies[2]')).slice(1).map(row=>row[0]), ['row-002','row-001']);
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','TSV Beta')`);
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===4'), 'filtered selected copy');
+    assert.deepEqual(parseTSV(await cdp.evaluate('window.tsvCopies[3]')).slice(1).map(row=>row[0]), ['row-002'], 'filtered-out selected row excluded');
+    await cdp.evaluate('window.tsvFail=true');
+    await copySelection();
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-copy-error')?.innerText.includes('选择已保留')"), 'clipboard permission failure feedback');
+    assert.equal(await cdp.evaluate("document.querySelector('.library-table-toolbar .ds-badge').innerText"), '已选 2 行');
+    await capture('issue143-clipboard-failure');
+    await cdp.evaluate('window.tsvFail=false');
+    await copySelection();
+    await waitFor(() => cdp.evaluate('window.tsvCopies.length===5'), 'retry succeeds without changing selection');
+    await waitFor(() => cdp.evaluate("[...document.querySelectorAll('[role=status]')].some(element=>element.innerText==='已复制 1 行为 TSV。')"), 'copy success feedback');
+    await capture('issue143-copy-success');
+    await cdp.evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})");
+    await copySelection();
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-copy-error'))"), 'unavailable clipboard has recoverable feedback');
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsAfterSort, 'filtering, retry and clipboard failures do not fetch unloaded rows');
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','no match')`);
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].find(button=>button.innerText.includes('复制已选记录为 TSV')).disabled"), true, 'no currently visible selected row disables copying');
+
+    // Use Chrome's real Clipboard API on this loopback origin after removing the mock.
+    await cdp.call('Browser.grantPermissions', {origin:`http://127.0.0.1:${portNumber}`, permissions:['clipboardReadWrite','clipboardSanitizedWrite']});
+    await cdp.call('Page.bringToFront');
+    await cdp.evaluate('delete navigator.clipboard');
+    assert.equal(await cdp.evaluate("Object.hasOwn(navigator,'clipboard')"), false, 'restored native Navigator clipboard getter');
+    await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','TSV')`);
+    await copySelection();
+    await waitFor(() => cdp.evaluate("[...document.querySelectorAll('[role=status]')].some(element=>element.innerText==='已复制 2 行为 TSV。')"), 'native Clipboard API write succeeded');
+    const nativeText = await cdp.evaluate('navigator.clipboard.readText()');
+    const nativeRows = parseTSV(nativeText);
+    assert.deepEqual(nativeRows[0], copied[0]);
+    assert.deepEqual(nativeRows.slice(1).map(row=>row[0]), ['row-002','row-001']);
+    assert.deepEqual(nativeRows.slice(1), [copied[2],copied[1]], 'native clipboard read preserves two complete quoted TSV records');
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsAfterSort, 'native copy adds no API or pagination requests');
+    await capture('issue143-native-clipboard');
+    if (process.env.UI_VERIFICATION_DIR) {
+      await fs.mkdir(process.env.UI_VERIFICATION_DIR, {recursive:true});
+      await fs.writeFile(path.join(process.env.UI_VERIFICATION_DIR,'native-clipboard.json'), JSON.stringify({browser:chromePath,origin:`http://127.0.0.1:${portNumber}`,nativeNavigatorGetterRestored:true,permissions:['clipboardReadWrite','clipboardSanitizedWrite'],write:'Table View copy action',read:'navigator.clipboard.readText()',payload:nativeText,parsedRows:nativeRows,data:'synthetic local fixture',spreadsheetApplicationTested:false},null,2)+'\n');
+    }
+
+    // Reset the synthetic page before continuing the existing library suite.
+    await cdp.call('Page.navigate', {url: `http://127.0.0.1:${portNumber}/tests/library-fixture.html`});
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.knowledge-sidebar .library-tree-table'))"), 'reset fixture sidebar');
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr'))"), 'reset table rows');
+
+
+    // Sorting resets the page, requests the server's full-table order, and
+    // clears row state that belonged to the previous loaded page.
+    await cdp.evaluate("document.querySelector('.table-scroll tbody tr').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.table-scroll tbody tr[aria-selected=\"true\"]'))"), 'selected row before sort');
+    await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title'))"), 'global sort request');
+    const sortedState = await cdp.evaluate(`(() => {
+      const call = window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title')).at(-1);
+      const params = new URLSearchParams(call.path.split('?')[1]);
+      return {rowId: document.querySelector('.table-scroll tbody tr td:nth-child(2)')?.innerText, direction: params.get('direction'), selected: [...document.querySelectorAll('.table-scroll tbody tr[aria-selected="true"]')].length, active: Boolean(document.querySelector('.table-scroll tbody tr.is-active-row'))};
+    })()`);
+    assert.equal(sortedState.rowId, 'row-101', 'the unique minimum on a later page becomes the first global result');
+    assert.equal(sortedState.direction, 'asc', 'the first click requests ascending order');
+    assert.equal(sortedState.selected, 0, 'sorting clears selection from the previous page');
+    assert.equal(sortedState.active, false, 'sorting clears the previous active row');
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-footer button')].find(button=>button.innerText.includes('加载更多')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title')).length>=2"), 'sorted cursor request');
+    const nextSortParams = await cdp.evaluate(`(() => {const params=new URLSearchParams(window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('sort_by=title')).at(-1).path.split('?')[1]);return {direction:params.get('direction'),cursor:params.get('cursor')}})()`);
+    assert.equal(nextSortParams.direction, 'asc', 'loading the next page retains the sort direction');
+    assert.ok(nextSortParams.cursor, 'loading the next page uses the server cursor');
 
     // Select a row: inspector opens, attachment panel is visible.
     await cdp.evaluate("document.querySelector('.table-scroll tbody tr').click()");
@@ -227,6 +348,77 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await cdp.evaluate('window.libraryFixture.state.conflict=false');
     await cdp.evaluate("[...document.querySelectorAll('.inspector-conflict button')].find(button=>button.innerText.includes('重新加载')).click()");
     await waitFor(() => cdp.evaluate("!document.querySelector('.inspector-conflict')"), 'conflict cleared after reload');
+
+    // Deleting from a sorted table refreshes with deleted rows included. The
+    // next cursor request must keep that filter, or the server rejects it.
+    await cdp.evaluate("[...document.querySelectorAll('.inspector-tabs .ds-tab')].find(tab=>tab.innerText.includes('字段')).click()");
+    await cdp.evaluate("[...document.querySelectorAll('.inspector-fields button')].find(button=>button.innerText.includes('软删除记录')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.method==='DELETE'&&call.path==='/tables/t1/rows/row-101')"), 'sorted row soft delete');
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')&&call.path.includes('include_deleted=true')&&call.path.includes('sort_by=title'))"), 'refresh including deleted rows retains sorting');
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-footer button')].find(button=>button.innerText.includes('加载更多')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>{if(call.method!=='GET'||!call.path.includes('/tables/t1/rows?'))return false;const params=new URLSearchParams(call.path.split('?')[1]);return params.has('cursor')&&params.get('include_deleted')==='true'&&params.get('sort_by')==='title'})"), 'sorted cursor retains deleted-row filter');
+    const refreshedCursorParams = await cdp.evaluate("(()=>{const call=window.libraryFixture.calls.filter(call=>call.method==='GET'&&call.path.includes('/tables/t1/rows?')).at(-1);const params=new URLSearchParams(call.path.split('?')[1]);return {includeDeleted:params.get('include_deleted'),direction:params.get('direction')}})()");
+    assert.equal(refreshedCursorParams.includeDeleted, 'true', 'refresh state is carried into the next page request');
+    assert.equal(refreshedCursorParams.direction, 'asc', 'refresh preserves the current sort direction');
+
+    // Reopen in the default view so the remaining inspector checks use the
+    // attachment-bearing first fixture row.
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('notes')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.table-scroll tbody tr')?.dataset.rowId==='t2-row-1'"), 'switch to another table');
+    await cdp.evaluate("[...document.querySelectorAll('.knowledge-sidebar .library-tree-table')].find(button=>button.innerText.includes('uniform-convergence')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.table-scroll tbody tr')?.dataset.rowId==='row-001'"), 'return to default row order');
+
+    // Ask-AI selection extension point: composed draft, bounded and editable,
+    // delivered through the shell intent channel only on explicit confirm.
+    await cdp.evaluate("document.querySelector('.table-scroll tbody tr').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.record-editor'))"), 'row active before ask-ai');
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-actions button')].find(button=>button.innerText.includes('Ask AI')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-ask-editor'))"), 'ask-ai dialog');
+    await cdp.evaluate(`(${setValue})('.library-ask-question textarea', '这些记录的共同点是什么？')`);
+    await cdp.evaluate("document.querySelector('.library-ask-question textarea').dispatchEvent(new Event('blur'))");
+    await sleep(120);
+    const askDraft = await cdp.evaluate("document.querySelector('.library-ask-editor')?.value || ''");
+    assert.match(askDraft, /知识表：\/数学\/分析\/uniform-convergence/, 'draft names the source table');
+    assert.match(askDraft, /问题：这些记录的共同点是什么？/, 'question is embedded in the draft');
+    assert.ok(askDraft.includes('title='), 'draft embeds field values');
+    await capture('xelibrary-ask-ai-dark-1440x900');
+
+    // Switching actions regenerates the draft; nothing is sent yet.
+    await cdp.evaluate("[...document.querySelectorAll('.library-ask-actions button')].find(button=>button.innerText.includes('Summarize selection')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.library-ask-editor')?.value.includes('总结')"), 'summarize template');
+    const intentsBefore = await cdp.evaluate('window.libraryFixture.appIntents.length');
+    assert.equal(intentsBefore, 0, 'no intent is emitted before confirmation');
+
+    // Context menu entry on an unselected row targets exactly that row.
+    await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.trim()==='取消').click()");
+    await waitFor(() => cdp.evaluate("!document.querySelector('.library-ask-editor')"), 'dialog closed');
+    await cdp.evaluate("const row=document.querySelectorAll('.table-scroll tbody tr')[2]; row.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:300,clientY:300}))");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'row context menu');
+    await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('Ask AI about this row')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-ask-editor'))"), 'row-scoped ask-ai dialog');
+    const rowDraft = await cdp.evaluate("document.querySelector('.library-ask-editor')?.value || ''");
+    assert.match(rowDraft, /选中记录：1 行/, 'context menu on an unselected row drafts just that row');
+
+    // Confirm routes through openApp with the current draft.
+    await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.includes('发送到 AI 对话')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.appIntents.length===1"), 'ask-ai intent delivered');
+    const askIntent = await cdp.evaluate("window.libraryFixture.appIntents[0]");
+    assert.equal(askIntent.id, 'chat', 'delivery targets the registered chat app');
+    assert.equal(askIntent.action, 'askAI');
+    assert.ok(String(askIntent.prompt).includes('选中记录：1 行'), 'the delivered prompt is the row-scoped draft');
+    assert.equal(await cdp.evaluate("window.libraryFixture.state.openedApp"), 'chat');
+    assert.ok((await cdp.evaluate("window.libraryFixture.state.notices")).some(text => text.includes('AI 草稿已投递')), 'a visible notice explains what happened');
+
+    // Without a registered chat app the dialog stays honest: copyable, not sendable.
+    await cdp.evaluate("window.libraryFixture.state.chatKind='native'; window.libraryFixture.appIntents.length=0");
+    await sleep(700);
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-actions button')].find(button=>button.innerText.includes('Ask AI')).click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-ask-editor'))"), 'ask-ai dialog without chat');
+    const unavailableButton = await cdp.evaluate("(([...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.includes('AI 对话不可用')))||{disabled:null}).disabled");
+    assert.equal(unavailableButton, true, 'the unavailable chat action is disabled instead of a send button');
+    assert.ok((await cdp.evaluate("document.querySelector('.library-ask-meta')?.innerText || ''")).includes('将与 AI 共享'), 'the shared-context summary is shown');
+    await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.trim()==='取消').click()");
+    await cdp.evaluate("window.libraryFixture.state.chatKind='iframe'");
 
     // Unified search: Fast semantic results, completeness warnings, exact-row navigation.
     await cdp.evaluate("[...document.querySelectorAll('.library-nav button')].find(button=>button.innerText.includes('搜索')).click()");

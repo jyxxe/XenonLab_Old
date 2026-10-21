@@ -70,6 +70,7 @@
 .library-sort{border:0;background:none;color:inherit;font:inherit;cursor:pointer;padding:0;text-align:left}
 .library-sort:hover{color:var(--accent)}
 .library-th-resize{width:6px;height:16px;cursor:col-resize;border-left:1px solid var(--border);flex-shrink:0}
+.library-th-resize:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-left-color:var(--accent)}
 .library-th-select,.library-td-select{width:36px;text-align:center}
 .library-th-status,.library-td-status{width:150px;white-space:nowrap}
 .library-td-status .ds-badge{margin-right:4px}
@@ -116,6 +117,10 @@
 .library-search{display:flex;flex-direction:column;gap:var(--spacing-3)}
 .library-search-bar{display:flex;gap:var(--spacing-2)}
 .library-search-bar .ds-input{flex:1}
+.library-search-limit{display:flex;align-items:center;gap:var(--spacing-2);color:var(--text-secondary);font-size:var(--font-size-sm)}
+.library-search-limit .ds-select{flex:0 0 auto;width:auto}
+.library-result-count{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--spacing-2);color:var(--text-secondary);font-size:var(--font-size-sm)}
+.library-result-count small{color:var(--text-muted)}
 .library-search-kind{display:flex;align-items:center;gap:var(--spacing-2);color:var(--text-secondary);font-size:var(--font-size-sm)}
 .library-search-filters{display:flex;flex-direction:column;gap:var(--spacing-2);border:1px solid var(--border);border-radius:var(--radius-panel);padding:var(--spacing-3)}
 .library-search-filter-body{display:flex;flex-direction:column;gap:var(--spacing-2)}
@@ -138,6 +143,14 @@
 /* Query console */
 .library-query{display:flex;flex-direction:column;gap:var(--spacing-3)}
 .library-query-editor{min-height:140px;font-family:var(--font-mono)}
+.library-query-history{min-width:0;color:var(--text-secondary);font-size:var(--font-size-sm)}
+.library-query-history p{margin:0 0 var(--spacing-2);overflow-wrap:anywhere}
+.library-query-history details{border:1px solid var(--border);border-radius:var(--radius-control);padding:var(--spacing-2)}
+.library-query-history summary{cursor:pointer;font-weight:600}
+.library-query-history ol{list-style:none;padding:0;margin:var(--spacing-2) 0;display:flex;flex-direction:column;gap:var(--spacing-2)}
+.library-query-history li{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:var(--spacing-2);border-top:1px solid var(--border-subtle);padding-top:var(--spacing-2)}
+.library-query-history li code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-query-history time{color:var(--text-muted);font-size:var(--font-size-xs)}
 .library-query-toolbar{display:flex;align-items:center;gap:var(--spacing-2);flex-wrap:wrap}
 .library-query-plan{display:flex;flex-wrap:wrap;gap:var(--spacing-3);margin:0;font-size:var(--font-size-sm)}
 .library-query-plan div{display:flex;gap:6px}
@@ -181,4 +194,18 @@
   .knowledge-sidebar{width:100%;max-height:38vh;border-right:0;border-bottom:1px solid var(--border)}
   .knowledge-inspector{width:min(320px,92vw)}
   .history-diff{grid-template-columns:1fr}
+  .library-query-history li{grid-template-columns:minmax(0,1fr) auto}
+  .library-query-history time{grid-column:1 / -1}
 }
+
+/* Ask-AI selection dialog (Issue #71 §17): the draft is reviewable and
+   editable before anything leaves the library window. */
+.library-ask-actions{display:flex;gap:var(--spacing-2);flex-wrap:wrap;margin-bottom:var(--spacing-3)}
+.library-ask-meta{margin:0 0 var(--spacing-3);font-size:var(--font-size-sm)}
+.library-ask-question{display:flex;flex-direction:column;gap:var(--spacing-1);margin-bottom:var(--spacing-3);font-size:var(--font-size-sm);color:var(--text-secondary)}
+.library-ask-question textarea{min-height:64px}
+.library-ask-draft{display:flex;flex-direction:column;gap:var(--spacing-1);font-size:var(--font-size-sm);color:var(--text-secondary)}
+.library-ask-editor{min-height:180px;font-family:var(--font-mono)}
+
+.library-copy-boundary,.library-copy-error{margin:4px 12px;font-size:var(--font-size-xs)}
+.library-copy-error{color:var(--danger)}

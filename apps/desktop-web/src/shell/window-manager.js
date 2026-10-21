@@ -11,10 +11,59 @@ export const MIN_HEIGHT = 200;
 export const MIN_VISIBLE_X = 96;
 export const MIN_VISIBLE_Y = 40;
 
+/** The old external XeLibrary registry app is replaced by the native Knowledge app. */
+export const LEGACY_XELIBRARY_APP_ID = 'xelibrary';
+
+export function isRetiredRegistryAppId(id) {
+  return id === LEGACY_XELIBRARY_APP_ID;
+}
+
+export function migrateLegacyAppReferences(layout) {
+  if (!layout || typeof layout !== 'object' || Array.isArray(layout)) return layout;
+  const migrate = id => id === LEGACY_XELIBRARY_APP_ID ? 'knowledge' : id;
+  const dock = Array.isArray(layout.dock) ? [...new Set(layout.dock.map(migrate))] : layout.dock;
+  const hasNativeKnowledgeWindow = Array.isArray(layout.windows)
+    && layout.windows.some(win => win && typeof win === 'object' && win.app_id === 'knowledge');
+  const windows = Array.isArray(layout.windows)
+    ? layout.windows
+      .filter(win => !(hasNativeKnowledgeWindow && win && typeof win === 'object' && win.app_id === LEGACY_XELIBRARY_APP_ID))
+      .map(win => win && typeof win === 'object' && win.app_id === LEGACY_XELIBRARY_APP_ID
+        ? {...win, app_id: 'knowledge', title: '知识库'}
+        : win)
+    : layout.windows;
+  return {...layout, dock, windows};
+}
+
 export function workArea(viewport) {
   const width = Math.max(MIN_WIDTH, viewport.width - WINDOW_MARGIN * 2);
   const height = Math.max(MIN_HEIGHT, viewport.height - MENUBAR_HEIGHT - DOCK_CLEARANCE);
   return {x: WINDOW_MARGIN, y: MENUBAR_HEIGHT + WINDOW_MARGIN, width, height};
+}
+
+/** Half-screen placement uses measured chrome bounds, without inflating a small viewport. */
+export function halfScreenPlacement(viewport, minSize, side, bounds) {
+  const unavailable = reason => ({rect: null, reason});
+  if (!bounds || ![viewport.width, viewport.height, minSize.width, minSize.height, bounds.menuBottom, bounds.dockTop].every(Number.isFinite)
+    || !['left', 'right'].includes(side) || minSize.width <= 0 || minSize.height <= 0
+    || bounds.menuBottom < 0 || bounds.dockTop > viewport.height || bounds.dockTop <= bounds.menuBottom) {
+    return unavailable('unmeasured');
+  }
+  // Matches the compact CSS mode, which overrides ordinary window geometry.
+  if (viewport.width < 1024) return unavailable('compact');
+  const x = WINDOW_MARGIN;
+  const y = bounds.menuBottom + WINDOW_MARGIN;
+  const availableWidth = viewport.width - WINDOW_MARGIN * 3;
+  const leftWidth = Math.floor(availableWidth / 2);
+  const width = side === 'left' ? leftWidth : availableWidth - leftWidth;
+  const height = Math.min(viewport.height - WINDOW_MARGIN, bounds.dockTop - WINDOW_MARGIN) - y;
+  if (width < minSize.width) return unavailable('width');
+  if (height < minSize.height) return unavailable('height');
+  return {rect: {x: side === 'left' ? x : x + leftWidth + WINDOW_MARGIN, y, width, height}, reason: null};
+}
+
+/** Maximize fills the viewport below the menu bar; the Dock hides temporarily. */
+export function maximizedRect(viewport) {
+  return {x: 0, y: MENUBAR_HEIGHT, width: Math.max(0, viewport.width), height: Math.max(0, viewport.height - MENUBAR_HEIGHT)};
 }
 
 export function clamp(value, min, max) {
@@ -84,7 +133,7 @@ export function moveRect(rect, x, y, viewport) {
 }
 
 export function toggleMaximize(win, viewport) {
-  const area = workArea(viewport);
+  const area = maximizedRect(viewport);
   if (win.maximized) {
     const restore = clampRect(win.restore ?? {...win}, viewport, minSizeOf({}));
     return {...win, ...restore, maximized: false, restore: undefined};
@@ -147,7 +196,7 @@ export function restoreWindows(raw, knownApp, viewport) {
         viewport,
         min,
       ),
-      ...(item.maximized ? workArea(viewport) : {}),
+      ...(item.maximized ? maximizedRect(viewport) : {}),
     });
   }
   return windows;

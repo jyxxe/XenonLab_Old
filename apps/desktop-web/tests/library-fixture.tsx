@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '../src/design-system/tokens.css';
 import '../src/design-system/primitives.css';
@@ -22,14 +22,14 @@ const COLUMNS = [
   {name: 'files', type: 'attachment_list', nullable: true, default_value: null},
 ];
 
-const ROWS = Array.from({length: 100}, (_, index) => ({
+const ROWS = Array.from({length: 101}, (_, index) => ({
   _row_id: `row-${String(index + 1).padStart(3, '0')}`,
   _revision: index === 0 ? 3 : 1,
   _created_at: '2026-09-01T00:00:00Z',
   _updated_at: `2026-09-${String((index % 28) + 1).padStart(2, '0')}T00:00:00Z`,
   _deleted_at: index === 3 ? '2026-09-20T00:00:00Z' : null,
   values: {
-    title: index === 0 ? '一致收敛定义' : `Synthetic row ${index + 1}`,
+    title: index === 0 ? '一致收敛定义' : index === 100 ? '!global-first' : `Synthetic row ${index + 1}`,
     body: `记录 ${index + 1} 的正文内容，用于浏览器验收。`,
     type: index % 2 ? 'note' : 'theorem',
     confidence: index % 2 ? null : 0.91,
@@ -37,7 +37,15 @@ const ROWS = Array.from({length: 100}, (_, index) => ({
   },
 }));
 
+const fixtureParams = new URLSearchParams(location.search);
+
 const state = {
+  subject: fixtureParams.get('subject') === '__none__' ? '' : (fixtureParams.get('subject') || 'fixture-user'),
+  // Default fixture identity is fully authorized for every library feature;
+  // `?noTheoremRead=1` simulates an account without xelibrary:theorem:read.
+  scopes: (['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'xelibrary:theorem:read', 'dev:read'] as string[]).filter(
+    scope => !(fixtureParams.get('noTheoremRead') === '1' && scope === 'xelibrary:theorem:read'),
+  ),
   conflict: false,
   slow: false,
   denied: false,
@@ -51,6 +59,10 @@ const state = {
   saved: [] as Array<{rowId: string; values: Record<string, any>; revision: number}>,
   moved: '',
   created: [] as any[],
+  chatKind: 'iframe' as 'iframe' | 'native',
+  openedApp: '',
+  notices: [] as string[],
+  searchPool: Number(new URLSearchParams(location.search).get('searchPool') || 0) || 0,
 };
 
 async function route(path: string, init: RequestInit = {}): Promise<{data: any; meta: Record<string, any>}> {
@@ -61,7 +73,7 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   const clean = url.pathname;
 
   if (clean === '/users/me') {
-    return {data: {subject: 'fixture-user', scopes: ['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'dev:read']}, meta: {}};
+    return {data: {subject: state.subject || null, scopes: state.scopes}, meta: {}};
   }
   if (clean === '/tables' && method === 'GET') {
     return {data: [
@@ -83,11 +95,27 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     if (state.slow) await new Promise(resolve => setTimeout(resolve, 450));
     if (state.denied) throw new APIRequestError('path permission denied', 403, 'XL_FORBIDDEN');
     const includeDeleted = url.searchParams.get('include_deleted') === 'true';
-    if (url.searchParams.get('cursor')) {
-      return {data: [{_row_id: 'row-extra', _revision: 1, _created_at: '2026-09-01T00:00:00Z', _updated_at: '2026-09-01T00:00:00Z', _deleted_at: null, values: {title: '追加页记录', body: 'page 2', type: 'note', confidence: null, files: []}}], meta: {next_cursor: null}};
+    const list = [...state.rows, {_row_id: 'row-extra', _revision: 1, _created_at: '2026-09-01T00:00:00Z', _updated_at: '2026-09-01T00:00:00Z', _deleted_at: null, values: {title: '追加页记录', body: 'page 2', type: 'note', confidence: null, files: []}}]
+      .filter(row => includeDeleted || !row._deleted_at);
+    const sortBy = url.searchParams.get('sort_by');
+    const direction = url.searchParams.get('direction') === 'desc' ? -1 : 1;
+    if (sortBy) {
+      const value = (row: any) => sortBy.startsWith('_') ? row[sortBy] : row.values[sortBy];
+      list.sort((left, right) => {
+        const a = value(left);
+        const b = value(right);
+        const compare = a === b ? 0 : a === null || a === undefined ? -1 : b === null || b === undefined ? 1 : a > b ? 1 : -1;
+        return compare ? direction * compare : left._row_id.localeCompare(right._row_id);
+      });
+    } else {
+      list.sort((left, right) => left._row_id.localeCompare(right._row_id));
     }
-    const list = state.rows.filter(row => includeDeleted || !row._deleted_at);
-    return {data: list.slice(0, 100), meta: {next_cursor: 'rows-page-2'}};
+    const limit = Number(url.searchParams.get('limit') || 100);
+    const cursor = url.searchParams.get('cursor');
+    const pageNumber = cursor ? Number(cursor.split('page-').at(-1) || 2) : 1;
+    const offset = (pageNumber - 1) * limit;
+    const page = list.slice(offset, offset + limit);
+    return {data: page, meta: {next_cursor: offset + page.length < list.length ? `rows-page-${pageNumber + 1}` : null}};
   }
   if (clean === '/tables/t2/rows' && method === 'GET') {
     return {data: [{_row_id: 't2-row-1', _revision: 1, _created_at: '2026-09-01T00:00:00Z', _updated_at: '2026-09-01T00:00:00Z', _deleted_at: null, values: {note: '另一张表的记录'}}], meta: {next_cursor: null}};
@@ -121,6 +149,14 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     }
     return {data: {...ROWS[0], values: body.values, _revision: 4}, meta: {request_id: 'req-save'}};
   }
+  if (clean.startsWith('/tables/t1/rows/') && method === 'DELETE') {
+    const rowId = clean.split('/')[4];
+    const row = state.rows.find(item => item._row_id === rowId);
+    if (!row) throw new APIRequestError('row not found', 404, 'XL_ROW_NOT_FOUND');
+    row._deleted_at = '2026-10-21T00:00:00Z';
+    row._revision += 1;
+    return {data: {...row}, meta: {request_id: 'req-delete'}};
+  }
   if (clean.startsWith('/tables/t1/rows/') && method === 'GET') {
     const rowId = clean.split('/')[4];
     if (state.slowRowLookup && rowId === 'row-001') await new Promise(resolve => setTimeout(resolve, 450));
@@ -147,11 +183,18 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     return {data: {resource_type: 'table', resource_id: 't1', explicit: clean.startsWith('/acl/path/') ? false : true, grants: clean.startsWith('/acl/path/') ? {} : {'role:reader': ['read']}, revision: 1}, meta: {}};
   }
   if (clean === '/search/semantic') {
+    if (state.delaySearch) await new Promise(resolve => setTimeout(resolve, state.delaySearch));
     if (body.mode === 'quality') throw new APIRequestError('quality worker not configured', 503, 'QWEN_UNAVAILABLE');
+    const hit = (index: number) => ({
+      table_id: 't1', row_id: `row-${String(index + 1).padStart(3, '0')}`, row_revision: 3, path: '/数学/分析',
+      score: Number((0.87 - index * 0.001).toFixed(3)), score_type: 'd100m_cosine',
+      snippet: `一致收敛定义：如果 fn 一致收敛于 f…（${index + 1}）`, approximate: true, indexed_revision: 2,
+    });
+    const data = state.searchPool > 0
+      ? Array.from({length: Math.min(body.limit, state.searchPool)}, (_, index) => hit(index))
+      : [hit(0)];
     return {
-      data: [
-        {table_id: 't1', row_id: 'row-001', row_revision: 3, path: '/数学/分析', score: 0.87, score_type: 'd100m_cosine', snippet: '一致收敛定义：如果 fn 一致收敛于 f…', approximate: true, indexed_revision: 2},
-      ],
+      data,
       meta: {partial: true, missing_embeddings: 2341, index_backend: 'qdrant_fast_text', model_revision: 'd100m-1'},
     };
   }
@@ -212,10 +255,49 @@ const apiRaw = async (path: string, init?: RequestInit) => {
   return new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}});
 };
 
+const appIntents: Array<Record<string, unknown>> = [];
+
 (window as any).libraryFixture = {
   calls,
   state,
+  appIntents,
   resetCalls: () => calls.splice(0, calls.length),
 };
 
-createRoot(document.getElementById('root')!).render(<LibraryApp api={api} apiPage={apiPage} apiRaw={apiRaw} />);
+// Mirrors the desktop shell wiring: a registered chat iframe app and an
+// openApp that records intents instead of opening windows. Toggling
+// window.libraryFixture.state.chatKind forces React to re-read the list.
+function ShellFixture() {
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let last = state.chatKind;
+    const timer = setInterval(() => {
+      if (state.chatKind !== last) {
+        last = state.chatKind;
+        setRevision(value => value + 1);
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, []);
+  const apps = revision >= 0 ? [
+    {id: 'chat', title: 'AI 对话', icon: '✦', kind: state.chatKind, origin: 'https://chat.fixture.local', entry: '/', permissions: [], defaultSize: [1080, 780], minSize: [720, 520], singleton: true, dock: true},
+    {id: 'knowledge', title: '知识库', icon: '▤', kind: 'native', permissions: [], defaultSize: [1180, 780], minSize: [820, 520], singleton: true, dock: true},
+  ] : [];
+  return (
+    <LibraryApp
+      api={api}
+      apiPage={apiPage}
+      apiRaw={apiRaw}
+      apps={apps as any}
+      openApp={(id: string, intent?: Record<string, unknown>) => {
+        appIntents.push({id, ...(intent || {})});
+        state.openedApp = id;
+      }}
+      notify={(toast: {title: string}) => {
+        state.notices = [...(state.notices || []), toast.title];
+      }}
+    />
+  );
+}
+
+createRoot(document.getElementById('root')!).render(<ShellFixture />);

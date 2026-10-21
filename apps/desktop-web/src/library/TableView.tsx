@@ -1,7 +1,10 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Icon} from '../design-system/Icon';
+import {stringifyExactJSON} from './json.js';
+import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ContextMenu, EmptyState, ErrorState, Input, Skeleton, StatusDot, type MenuItem} from '../design-system/primitives';
-import {describeError, filterRows, formatNumber, relativeTime, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
+import {clampColumnWidth, keyboardColumnWidth, describeError, filterRows, formatNumber, relativeTime, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
 import type {Column, Row, Table} from './types';
+import {serializeTSV} from './tsv.js';
 
 const ROW_HEIGHT = 34;
 const SYSTEM_COLUMNS: Array<{name: string; label: string}> = [
@@ -14,7 +17,7 @@ export type SortState = {key: string; direction: 'asc' | 'desc'} | null;
 function cellText(row: Row, column: Column): string {
   const value = row.values?.[column.name];
   if (value === null || value === undefined) return '';
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'object') return stringifyExactJSON(value);
   return String(value);
 }
 
@@ -39,6 +42,7 @@ export function TableView({
   onRetry,
   onRefresh,
   onContextMenu,
+  onAskAI,
   canWrite,
 }: {
   table: Table;
@@ -54,19 +58,26 @@ export function TableView({
   onSort: (key: string) => void;
   selection: Set<string>;
   activeRowId: string | null;
-  onSelectRow: (rowId: string, event: React.MouseEvent) => void;
+  onSelectRow: (rowId: string, event: React.MouseEvent, visibleRowIds: string[]) => void;
   onActivateRow: (rowId: string) => void;
   onSelectionChange: (next: Set<string>) => void;
   onLoadMore: () => void;
   onRetry: () => void;
   onRefresh: () => void;
   onContextMenu: (row: Row, x: number, y: number) => void;
+  onAskAI: (rows: Row[]) => void;
   canWrite: boolean;
 }) {
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyMessage, setCopyMessage] = useState<{error: boolean; text: string} | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewportHeight, setViewportHeight] = useState(400);
   const [scrollTop, setScrollTop] = useState(0);
   const [widths, setWidths] = useState<Record<string, number>>({});
+  const [measuredWidths, setMeasuredWidths] = useState<Record<string, number>>({});
+  const widthOwner = useRef(table.id);
+  widthOwner.current = table.id;
+  const stopResize = useRef<(() => void) | null>(null);
   const [columnMenu, setColumnMenu] = useState<{row: Row; x: number; y: number} | null>(null);
 
   const gridColumns = useMemo(() => [...SYSTEM_COLUMNS.map(column => ({...column, schema: null as Column | null})), ...columns.map(column => ({name: column.name, label: column.name, schema: column}))], [columns]);
@@ -75,6 +86,28 @@ export function TableView({
     const filtered = filterRows(rows, filter);
     return sort ? sortRows(filtered, sort.key, sort.direction) : filtered;
   }, [rows, filter, sort]);
+  const visibleRowIds = useMemo(() => visibleRows.map(row => row._row_id), [visibleRows]);
+
+  const selectedVisibleRows = visibleRows.filter(row => selection.has(row._row_id));
+
+  useEffect(() => setCopyMessage(null), [table.id, selection, filter, sort]);
+
+  async function copySelected() {
+    if (!selectedVisibleRows.length || copyBusy) return;
+    const selected = selectedVisibleRows;
+    setCopyBusy(true); setCopyMessage(null);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器无法写入剪贴板。');
+      const cells = selected.map(row => [
+        ...gridColumns.map(column => column.schema ? row.values?.[column.name] : row[column.name as keyof Row]),
+        [row._deleted_at ? '已删除' : '', rowHasAttachment(row, columns) ? '附件' : '', row._revision > 1 ? `r${row._revision}` : ''].filter(Boolean).join(' '),
+      ]);
+      await navigator.clipboard.writeText(serializeTSV([...gridColumns.map(column => column.label), '状态'], cells));
+      setCopyMessage({error: false, text: `已复制 ${selected.length} 行为 TSV。`});
+    } catch {
+      setCopyMessage({error: true, text: '复制失败，请检查浏览器剪贴板权限后重试；选择已保留。'});
+    } finally { setCopyBusy(false); }
+  }
 
   const windowed = virtualWindow(scrollTop, viewportHeight, visibleRows.length, ROW_HEIGHT);
   const slice = visibleRows.slice(windowed.start, windowed.end);
@@ -92,7 +125,7 @@ export function TableView({
   useEffect(() => {
     setScrollTop(0);
     scrollRef.current?.scrollTo({top: 0});
-  }, [table.id, filter]);
+  }, [table.id, filter, sort?.key, sort?.direction]);
 
   // Opening a row from search, recents or the inspector scrolls it into view so the
   // active row is always rendered, even when it sits outside the current window.
@@ -120,29 +153,54 @@ export function TableView({
     }
   }, [table.id]);
 
-  const resizeColumn = useCallback(
-    (name: string, startWidth: number, startX: number) => {
-      const move = (event: PointerEvent) => {
-        const next = Math.max(80, Math.min(520, startWidth + event.clientX - startX));
-        setWidths(current => {
-          const updated = {...current, [name]: next};
-          try {
-            localStorage.setItem(`xeonolab.library.columns.${table.id}`, JSON.stringify(updated));
-          } catch {
-            /* view preference only */
-          }
-          return updated;
-        });
-      };
-      const up = () => {
-        removeEventListener('pointermove', move);
-        removeEventListener('pointerup', up);
-      };
-      addEventListener('pointermove', move);
-      addEventListener('pointerup', up);
-    },
-    [table.id],
-  );
+  // Unset preferences start at the actual header size, rather than an arbitrary width.
+  useLayoutEffect(() => {
+    const grid = scrollRef.current;
+    if (!grid) return;
+    const measure = () => {
+      const next: Record<string, number> = {};
+      grid.querySelectorAll<HTMLTableCellElement>('th[data-resize-column]').forEach(header => {
+        next[header.dataset.resizeColumn!] = clampColumnWidth(header.getBoundingClientRect().width);
+      });
+      setMeasuredWidths(current => Object.keys(next).length === Object.keys(current).length && Object.keys(next).every(key => next[key] === current[key]) ? current : next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(grid);
+    const element = grid.querySelector('table');
+    if (element) observer.observe(element);
+    return () => observer.disconnect();
+  }, [table.id, gridColumns, widths, loading]);
+
+  useEffect(() => () => { stopResize.current?.(); }, [table.id]);
+
+  const setColumnWidth = useCallback((name: string, width: number) => {
+    if (widthOwner.current !== table.id) return;
+    setWidths(current => {
+      const updated = {...current, [name]: clampColumnWidth(width)};
+      try {
+        localStorage.setItem(`xeonolab.library.columns.${table.id}`, stringifyExactJSON(updated));
+      } catch {
+        /* view preference only */
+      }
+      return updated;
+    });
+  }, [table.id]);
+
+  const resizeColumn = useCallback((name: string, startWidth: number, startX: number) => {
+    stopResize.current?.();
+    const move = (event: PointerEvent) => setColumnWidth(name, startWidth + event.clientX - startX);
+    const up = () => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', up);
+      stopResize.current = null;
+    };
+    stopResize.current = up;
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
+  }, [setColumnWidth]);
 
   const moveActive = (direction: number, extend: boolean) => {
     if (!visibleRows.length) return;
@@ -167,6 +225,14 @@ export function TableView({
 
   const allSelected = visibleRows.length > 0 && visibleRows.every(row => selection.has(row._row_id));
 
+  // The AI action targets the current selection; a context menu on an
+  // unselected row upgrades it to that row first so the draft always matches
+  // what the user is looking at.
+  function rowsForAI(row: Row): Row[] {
+    if (selection.has(row._row_id)) return selectedVisibleRows;
+    return [row];
+  }
+
   function menuItems(row: Row): MenuItem[] {
     return [
       {id: 'open', label: '在 Inspector 中打开', onSelect: () => onActivateRow(row._row_id)},
@@ -174,14 +240,13 @@ export function TableView({
       {
         id: 'copy-row',
         label: '复制记录 JSON',
-        onSelect: () => void navigator.clipboard?.writeText(JSON.stringify(row.values, null, 2)),
+        onSelect: () => void navigator.clipboard?.writeText(stringifyExactJSON(row.values, 2)),
       },
       {separator: true},
       {
         id: 'ask-ai',
-        label: 'Ask AI about this row',
-        disabled: true,
-        onSelect: undefined,
+        label: rowsForAI(row).length > 1 ? `Ask AI about selection (${rowsForAI(row).length} 行)` : 'Ask AI about this row',
+        onSelect: () => onAskAI(rowsForAI(row)),
       },
       {
         id: 'selection',
@@ -214,10 +279,15 @@ export function TableView({
         {selection.size > 0 && (
           <>
             <Badge tone="accent">已选 {selection.size} 行</Badge>
+            <Button size="sm" loading={copyBusy} disabled={!selectedVisibleRows.length} onClick={() => void copySelected()}>复制已选记录为 TSV（{selectedVisibleRows.length} 行）</Button>
+            <Button size="sm" variant="ghost" onClick={() => onAskAI(selectedVisibleRows)}>Ask AI about selection</Button>
             <Button size="sm" variant="ghost" onClick={() => onSelectionChange(new Set())}>清除选择</Button>
           </>
         )}
       </div>
+
+      {selection.size > 0 && <p className="muted library-copy-boundary">仅复制已加载且当前筛选可见的选中行，不加载后续分页。</p>}
+      {copyMessage && <p className={copyMessage.error ? 'library-copy-error' : 'muted'} role={copyMessage.error ? 'alert' : 'status'}>{copyMessage.text}</p>}
 
       {loading && !rows.length ? (
         <div className="library-table-skeleton" role="status" aria-label="正在加载记录">
@@ -277,7 +347,7 @@ export function TableView({
                   />
                 </th>
                 {gridColumns.map(column => (
-                  <th key={column.name} style={{width: widths[column.name], minWidth: widths[column.name]}}>
+                  <th key={column.name} data-resize-column={column.name} style={{width: widths[column.name], minWidth: widths[column.name]}}>
                     <span className="library-th-inner">
                       <button
                         type="button"
@@ -286,15 +356,30 @@ export function TableView({
                         title={`按 ${column.label} 排序`}
                       >
                         {column.label}
-                        {sort?.key === column.name ? <span aria-hidden="true">{sort.direction === 'asc' ? ' ↑' : ' ↓'}</span> : null}
+                        {sort?.key === column.name ? <span aria-hidden="true"><Icon value={sort.direction === 'asc' ? 'arrow-up' : 'arrow-down'} size={14} /></span> : null}
                       </button>
                       <span
                         className="library-th-resize"
                         role="separator"
+                        tabIndex={0}
+                        aria-orientation="vertical"
+                        aria-valuemin={80}
+                        aria-valuemax={520}
+                        aria-valuenow={widths[column.name] ?? measuredWidths[column.name] ?? 160}
+                        aria-valuetext={`${Math.round(widths[column.name] ?? measuredWidths[column.name] ?? 160)} 像素`}
+                        title="左右方向键调整 10 像素；Shift 调整 40 像素；Home 最窄，End 最宽"
+                        onKeyDown={event => {
+                          if (event.key !== 'Tab') event.stopPropagation();
+                          const next = keyboardColumnWidth(widths[column.name] ?? measuredWidths[column.name] ?? 160, event.key, event.shiftKey);
+                          if (next === null) return;
+                          event.preventDefault();
+                          setColumnWidth(column.name, next);
+                        }}
                         aria-label={`调整 ${column.label} 列宽`}
                         onPointerDown={event => {
                           event.preventDefault();
-                          resizeColumn(column.name, widths[column.name] ?? 160, event.clientX);
+                          event.currentTarget.focus();
+                          resizeColumn(column.name, widths[column.name] ?? measuredWidths[column.name] ?? 160, event.clientX);
                         }}
                       />
                     </span>
@@ -319,7 +404,7 @@ export function TableView({
                     data-row-id={row._row_id}
                     aria-selected={selected}
                     style={{height: ROW_HEIGHT}}
-                    onClick={event => onSelectRow(row._row_id, event)}
+                    onClick={event => onSelectRow(row._row_id, event, visibleRowIds)}
                     onDoubleClick={() => onActivateRow(row._row_id)}
                     onContextMenu={event => {
                       event.preventDefault();
@@ -348,7 +433,7 @@ export function TableView({
                     })}
                     <td className="library-td-status">
                       {row._deleted_at ? <Badge tone="danger">已删除</Badge> : null}
-                      {rowHasAttachment(row, columns) ? <Badge tone="accent" >🗎 附件</Badge> : null}
+                      {rowHasAttachment(row, columns) ? <Badge tone="accent"><Icon value="attachment" size={14} /> 附件</Badge> : null}
                       {row._revision > 1 ? <Badge>r{row._revision}</Badge> : null}
                     </td>
                   </tr>

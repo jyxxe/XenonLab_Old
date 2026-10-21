@@ -4,8 +4,10 @@ import {Knowledge} from '../Knowledge';
 import {Work} from '../Work';
 import {System} from './System';
 import {Settings} from '../Settings';
+import {Embedding} from '../Embedding';
 import {Development} from './Development';
 import {Issues} from './Issues';
+import {isRetiredRegistryAppId} from './window-manager.js';
 import type {DesktopApp, RegistryApp} from './types';
 
 const chatOrigin =
@@ -17,9 +19,7 @@ function ChatUnavailable() {
   return <EmptyState icon="✦" title="AI 对话尚未配置" description="OpenWebUI 未提供可用入口。管理员部署服务后，可在系统设置的应用中登记 chat 或 openwebui。" />;
 }
 
-export function forgejoBase(): string {
-  return location.hostname === 'xenon.jyxxe.com' ? 'https://xenon.jyxxe.com/dev' : 'https://192.168.0.101:9445';
-}
+export {forgejoBase} from './forgejo-links.js';
 
 /** Built-in native apps. The backend registry only manages external (iframe) apps. */
 export function builtinApps(): DesktopApp[] {
@@ -102,6 +102,19 @@ export function builtinApps(): DesktopApp[] {
       component: System as React.ComponentType<any>,
     },
     {
+      id: 'embedding',
+      title: 'Embedding',
+      icon: '⟡',
+      kind: 'native',
+      permissions: [],
+      defaultSize: [980, 760],
+      minSize: [620, 520],
+      singleton: true,
+      dock: true,
+      description: '文本编码与本人索引队列',
+      component: Embedding as React.ComponentType<any>,
+    },
+    {
       id: 'settings',
       title: '系统设置',
       icon: '⚙',
@@ -131,7 +144,8 @@ export function toDesktopApp(entry: RegistryApp): DesktopApp {
     minSize: [480, 360],
     singleton: entry.singleton ?? true,
     dock: false,
-    description: entry.origin,
+    description: entry.description || entry.origin,
+    plugin_id: entry.plugin_id,
   };
 }
 
@@ -140,7 +154,7 @@ export function mergeApps(registry: RegistryApp[], scopes: string[]): DesktopApp
   const builtins = builtinApps().map(app => app.id === 'chat' && configuredChat ? {...toDesktopApp(configuredChat), id: 'chat', title: app.title, dock: true, menu: app.menu} : app).filter(app => app.permissions.every(scope => scopes.includes(scope)));
   const builtinIds = new Set(builtins.map(app => app.id));
   const external = registry
-    .filter(entry => !builtinIds.has(entry.id) && entry !== configuredChat)
+    .filter(entry => !isRetiredRegistryAppId(entry.id) && !builtinIds.has(entry.id) && entry !== configuredChat)
     .map(toDesktopApp)
     .filter(app => app.permissions.every(scope => scopes.includes(scope)));
   return [...builtins, ...external];

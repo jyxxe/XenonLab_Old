@@ -5,6 +5,7 @@ type ResourceType='path'|'table'|'row';
 type ACL={resource_type:ResourceType;resource_id:string;explicit:boolean;grants:Record<string,string[]>;revision:number};
 type Account={id:string;username:string;name:string;enabled:boolean};
 const actions=['read','write','attach'] as const;
+function displayError(error:unknown,fallback:string){return error instanceof Error&&error.message.trim()?error.message:fallback}
 
 function endpoint(type:ResourceType,id:string){return `/acl/${type}/${encodeURIComponent(id)}`}
 
@@ -16,7 +17,7 @@ export function ACLManager({api}:{api:API}){
  const isAdmin=identity?.scopes?.includes('xelibrary:admin')===true;
 
  async function loadResources(){
-   try{setResources(await api('/acl?limit=1000'))}catch(e){setMessage(String(e))}
+   try{setResources(await api('/acl?limit=1000'))}catch(e){setMessage(displayError(e,'读取 ACL 失败，请重试'))}
  }
  async function loadAccounts(){
    setTreeReady(false);setTreeMessage('');
@@ -34,17 +35,17 @@ export function ACLManager({api}:{api:API}){
      setAccounts(rows);setTreeReady(true);
    }catch(error){
      setAccounts([]);
-     setTreeMessage(`无法读取当前身份可管理的账号树（${String(error)}）。为避免向未核实的主体授权，授权编辑已停用；仍可查看 ACL 或清除显式 ACL。`);
+     setTreeMessage(`无法读取当前身份可管理的账号树（${displayError(error,'请求失败，请重试')}）。为避免向未核实的主体授权，授权编辑已停用；仍可查看 ACL 或清除显式 ACL。`);
    }
  }
- useEffect(()=>{api('/users/me').then(setIdentity).catch(e=>setMessage(String(e)))},[]);
+ useEffect(()=>{api('/users/me').then(setIdentity).catch(e=>setMessage(displayError(e,'读取当前身份失败，请重试')))},[]);
  useEffect(()=>{if(isAdmin){void loadResources();void loadAccounts()}},[isAdmin]);
 
  async function readACL(type=kind,id=resource){
    if(!id.trim()){setMessage('请输入路径、表 ID 或 table_id:row_id');return}
    setBusy(true);setMessage('');setLoaded(null);
    try{const acl:ACL=await api(endpoint(type,id.trim()));setLoaded(acl);setDraft(acl.grants||{});setKind(type);setResource(id.trim());setMessage(acl.explicit?'已读取显式 ACL；它覆盖此资源从父级继承的授权。':'此资源没有显式 ACL；权限按表/路径层级与账号树继承规则计算。')}
-   catch(e){setMessage(String(e))}finally{setBusy(false)}
+   catch(e){setMessage(displayError(e,'读取 ACL 失败，请重试'))}finally{setBusy(false)}
  }
 
  function changeGrant(subject:string,action:string,checked:boolean){
@@ -61,14 +62,14 @@ export function ACLManager({api}:{api:API}){
    const grants=mergeManagedGrants(loaded.grants,draft,accounts);
    setBusy(true);setMessage('');
    try{const acl:ACL=await api(endpoint(kind,loaded.resource_id),{method:'PUT',headers:{'If-Match':`"revision:${loaded.revision}"`},body:JSON.stringify({grants})});setLoaded(acl);setDraft(acl.grants);setMessage(`ACL 已保存（revision ${acl.revision}）`);await loadResources()}
-   catch(e){setMessage(`${String(e)}。若其他管理员已更新，请重新读取后再编辑。`)}finally{setBusy(false)}
+   catch(e){setMessage(`${displayError(e,'保存 ACL 失败，请重试')}。若其他管理员已更新，请重新读取后再编辑。`)}finally{setBusy(false)}
  }
 
  async function inherit(){
    if(!loaded||!loaded.explicit||loaded.resource_type!==kind||loaded.resource_id!==resource.trim())return;
    setBusy(true);setMessage('');
    try{const acl:ACL=await api(endpoint(kind,loaded.resource_id),{method:'DELETE',headers:{'If-Match':`"revision:${loaded.revision}"`}});setLoaded(acl);setDraft({});setMessage(`显式 ACL 已清除（revision ${acl.revision}）；权限将从上级继承。`);await loadResources()}
-   catch(e){setMessage(`${String(e)}。若其他管理员已更新，请重新读取后再操作。`)}finally{setBusy(false)}
+   catch(e){setMessage(`${displayError(e,'清除 ACL 失败，请重试')}。若其他管理员已更新，请重新读取后再操作。`)}finally{setBusy(false)}
  }
 
  const unknownSubjects=unknownSubjectsForTree(loaded?.grants||{},accounts,treeReady);

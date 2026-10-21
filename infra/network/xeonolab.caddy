@@ -4,7 +4,11 @@ import security-headers.caddy
   tls internal
   encode zstd gzip
   import security_headers
-  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/*
+  @embedding_api path /api/v1/embed/*
+  handle @embedding_api {
+    reverse_proxy 192.168.0.107:8104
+  }
+  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/* /api/v1/plugins*
   handle @desktop_api {
     reverse_proxy 127.0.0.1:8101
   }
@@ -60,4 +64,10 @@ https://192.168.0.101:9445 {
   }
   tls internal
   reverse_proxy 192.168.0.110:3000
+}
+
+https://chat.xenon.lan {
+  tls internal
+  reverse_proxy 192.168.0.100:3000
+  header Content-Security-Policy "frame-ancestors https://xenon.lan https://192.168.0.101:9443"
 }

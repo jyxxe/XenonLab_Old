@@ -8,10 +8,12 @@ export const SYSTEM_FIELDS: Array<{name: string; label: string; type: string}>;
 export function rowValue(row: any, key: string): unknown;
 export function sortRows(rows: any[], key: string, direction?: 'asc' | 'desc'): any[];
 export function filterRows(rows: any[], query: string): any[];
+export function rowSelectionRange(visibleIds: string[], anchorId: string | null, targetId: string): string[];
 
 export type TreeNode = {path: string; name: string; tables: Table[]; children: TreeNode[]; count: number};
 export function buildPathTree(tables: Table[]): TreeNode;
 export function filterTree(node: TreeNode, needle: string): TreeNode | null;
+export function filteredTreeExpansion(root: TreeNode | null, collapsed?: Set<string>): Set<string>;
 export function flattenTree(
   root: TreeNode,
   expanded: Set<string>,
@@ -36,7 +38,9 @@ export type SchemaChange = {
   summary: string[];
 };
 export function classifySchemaChange(current?: Column[], draft?: Column[]): SchemaChange;
-export function parseFieldFilters(text: string): {filters: Record<string, string>; errors: string[]};
+export function parseFieldFilters(text: string): {filters: Record<string, unknown>; errors: string[]};
+export const SEARCH_LIMIT_OPTIONS: number[];
+export function searchResultSummary(limit: unknown, hitCount: unknown): string | null;
 export function searchWarnings(meta?: Record<string, unknown>): string[];
 export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;
@@ -44,7 +48,7 @@ export function indexStatusFromJobs(jobs?: Job[]): {state: string; detail: strin
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];
 export function toggleFavorite(list: any[], entry: any): any[];
 export function isFavorite(list: any[], entry: any): boolean;
-export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites'): string;
+export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites'): string | null;
 export function changedFields(before?: Record<string, unknown>, after?: Record<string, unknown>): string[];
 export function rowHasAttachment(row: any, columns?: Column[]): boolean;
 export function isIndexActiveJob(job: Job | undefined): boolean;
@@ -63,3 +67,25 @@ export type ErrorInfo = {
 export function describeError(error: unknown, context?: string): ErrorInfo;
 
 export type {Theorem};
+export type SelectionAIActionId = 'ask' | 'summarize' | 'related';
+export const SELECTION_AI_ACTIONS: Array<{id: SelectionAIActionId; label: string; hint: string}>;
+export type SelectionContextSummary = {
+  tablePath: string;
+  tableId: string;
+  rowCount: number;
+  sharedRows: number;
+  truncated: boolean;
+  fields: string[];
+  rowIds: string[];
+};
+export function selectionContextSummary(table: Table | null, rows: any[], columns?: Column[]): SelectionContextSummary;
+export function buildSelectionPrompt(
+  action: SelectionAIActionId,
+  table: Table | null,
+  rows: any[],
+  columns?: Column[],
+  question?: string,
+): string;
+
+export function clampColumnWidth(width: number): number;
+export function keyboardColumnWidth(width: number, key: string, shift?: boolean): number | null;

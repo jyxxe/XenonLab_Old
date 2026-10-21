@@ -5,16 +5,41 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  halfScreenPlacement,
+  isRetiredRegistryAppId,
+  migrateLegacyAppReferences,
   nextWindowId,
   restoreWindows,
   resizeRect,
   serializeWindows,
   toggleMaximize,
   workArea,
+  maximizedRect,
 } from '../src/shell/window-manager.js';
 
 const viewport = {width: 1440, height: 900};
 const app = {title: 'Knowledge', defaultSize: [1200, 800], minSize: [820, 520]};
+
+test('legacy XeLibrary layout references migrate to native Knowledge without changing other preferences', () => {
+  assert.equal(isRetiredRegistryAppId('xelibrary'), true);
+  assert.equal(isRetiredRegistryAppId('custom-app'), false, 'unrelated external apps remain eligible');
+  const source = {
+    dock: ['settings', 'xelibrary', 'knowledge', 'chat'],
+    dock_initialized: true,
+    windows: [
+      {id: 'legacy', app_id: 'xelibrary', title: 'Legacy library', x: 20, y: 40, width: 900, height: 600, minimized: true},
+      {id: 'other', app_id: 'chat', title: 'Chat', x: 30, y: 50, width: 800, height: 500},
+    ],
+    revision: 7,
+  };
+  const migrated = migrateLegacyAppReferences(source);
+  assert.deepEqual(migrated.dock, ['settings', 'knowledge', 'chat']);
+  assert.deepEqual(migrated.windows[0], {...source.windows[0], app_id: 'knowledge', title: '知识库'});
+  assert.deepEqual(migrated.windows[1], source.windows[1]);
+  assert.equal(migrated.dock_initialized, true);
+  assert.equal(migrated.revision, 7);
+  assert.deepEqual(source.dock, ['settings', 'xelibrary', 'knowledge', 'chat'], 'migration does not mutate stored input');
+});
 
 test('default geometry stays inside the work area and respects minimums', () => {
   const rect = defaultRect(app, viewport);
@@ -46,7 +71,7 @@ test('resizeRect anchors the opposite edge and clamps to the viewport', () => {
   assert.ok(clamped.width >= 400 && clamped.height >= 300, 'minimum size enforced');
 });
 
-test('maximize respects the menu bar and dock and restores the previous rectangle', () => {
+test('maximize fills the viewport below the menu bar and restores the previous rectangle', () => {
   const win = {
     id: 'w1',
     app_id: 'knowledge',
@@ -58,11 +83,13 @@ test('maximize respects the menu bar and dock and restores the previous rectangl
     minimized: false,
   };
   const maximized = toggleMaximize(win, viewport);
-  const area = workArea(viewport);
+  const area = maximizedRect(viewport);
+  assert.equal(maximized.x, 0);
+  assert.equal(maximized.width, viewport.width);
   assert.equal(maximized.y, area.y);
   assert.equal(maximized.height, area.height);
   assert.ok(maximized.y >= 30, 'maximize does not cover the menu bar');
-  assert.ok(maximized.y + maximized.height <= viewport.height - 70, 'dock remains visible');
+  assert.equal(maximized.y + maximized.height, viewport.height, 'bottom edge reaches viewport');
   const restored = toggleMaximize(maximized, viewport);
   assert.equal(restored.x, 100);
   assert.equal(restored.width, 900);
@@ -140,9 +167,80 @@ test('maximized geometry survives save/reload and restores after viewport change
   const resized={width:1366,height:768};
   const [loaded]=restoreWindows(saved,()=>app,resized);
   assert.equal(loaded.maximized,true);
-  assert.deepEqual({x:loaded.x,y:loaded.y,width:loaded.width,height:loaded.height},workArea(resized));
+  assert.deepEqual({x:loaded.x,y:loaded.y,width:loaded.width,height:loaded.height},maximizedRect(resized));
   const restored=toggleMaximize(loaded,resized);
   assert.equal(restored.x,original.x);
   assert.equal(restored.width,original.width);
   assert.equal(restored.maximized,false);
+});
+
+test('maximized geometry fits compact screens regardless of app minimum size', () => {
+  for (const viewport of [{width:390,height:844},{width:820,height:1180}]) {
+    const [win] = restoreWindows([{id:'compact',app_id:'knowledge',maximized:true}],()=>app,viewport);
+    assert.deepEqual({x:win.x,y:win.y,width:win.width,height:win.height}, maximizedRect(viewport));
+  }
+});
+
+test('half-screen placement clears measured menu and all Dock sizes with a 12px gap', () => {
+  const viewport = {width: 1920, height: 1080};
+  for (const dockTop of [994, 988, 980]) {
+    const bounds = {menuBottom: 30, dockTop};
+    const left = halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', bounds);
+    const right = halfScreenPlacement(viewport, {width: 720, height: 480}, 'right', bounds);
+    assert.equal(left.reason, null);
+    assert.equal(right.reason, null);
+    assert.deepEqual(left.rect, {x: 12, y: 42, width: 942, height: dockTop - 54});
+    assert.equal(right.rect.x, left.rect.x + left.rect.width + 12);
+    assert.equal(right.rect.x + right.rect.width, viewport.width - 12);
+    assert.equal(right.rect.y + right.rect.height, dockTop - 12);
+  }
+  const customChrome = halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', {menuBottom: 45, dockTop: 930});
+  assert.equal(customChrome.rect.y, 57, 'uses measured menu height');
+  assert.equal(customChrome.rect.y + customChrome.rect.height, 918);
+});
+
+test('odd viewport widths split the remainder without overlap or escaping the workspace', () => {
+  const viewport = {width: 1921, height: 1080};
+  const bounds = {menuBottom: 30, dockTop: 980};
+  const min = {width: 942, height: 480};
+  const left = halfScreenPlacement(viewport, min, 'left', bounds).rect;
+  const right = halfScreenPlacement(viewport, min, 'right', bounds).rect;
+  assert.equal(left.width, 942);
+  assert.equal(right.width, 943);
+  assert.equal(right.x - left.x - left.width, 12);
+  assert.equal(right.x + right.width, 1909);
+  assert.equal(halfScreenPlacement(viewport, {width: 943, height: 480}, 'left', bounds).reason, 'width');
+  assert.equal(halfScreenPlacement(viewport, {width: 943, height: 480}, 'right', bounds).reason, null);
+});
+
+test('half-screen placement disables compact CSS mode and honors each app minimum', () => {
+  const bounds = {menuBottom: 30, dockTop: 688};
+  assert.equal(halfScreenPlacement({width: 1023, height: 768}, {width: 320, height: 200}, 'left', bounds).reason, 'compact');
+  assert.equal(halfScreenPlacement({width: 1024, height: 768}, {width: 320, height: 200}, 'left', bounds).reason, null);
+  const viewport = {width: 1440, height: 768};
+  assert.equal(halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', bounds).reason, null, 'Settings fits');
+  assert.equal(halfScreenPlacement(viewport, {width: 720, height: 480}, 'left', bounds).reason, 'width', 'Development does not fit');
+  assert.equal(halfScreenPlacement(viewport, {width: 820, height: 520}, 'right', bounds).reason, 'width', 'Knowledge does not fit');
+});
+
+test('short or invalid work areas are rejected instead of inflating minimum sizes', () => {
+  const viewport = {width: 1920, height: 500};
+  const bounds = {menuBottom: 30, dockTop: 400};
+  assert.equal(halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', bounds).reason, 'height');
+  const min = {width: 320, height: 200};
+  for (const invalid of [null, {menuBottom: NaN, dockTop: 400}, {menuBottom: 30, dockTop: Infinity}, {menuBottom: -1, dockTop: 400}, {menuBottom: 30, dockTop: 501}, {menuBottom: 400, dockTop: 300}]) {
+    assert.deepEqual(halfScreenPlacement(viewport, min, 'left', invalid), {rect: null, reason: 'unmeasured'});
+  }
+});
+
+test('a half-screen rectangle persists as an ordinary window and survives maximize/restore', () => {
+  const viewport = {width: 1920, height: 1080};
+  const rect = halfScreenPlacement(viewport, {width: 820, height: 520}, 'right', {menuBottom: 30, dockTop: 980}).rect;
+  const win = {id: 'half', app_id: 'knowledge', title: 'K', minimized: false, maximized: false, ...rect};
+  const payload = serializeWindows([win]);
+  assert.deepEqual(Object.keys(payload[0]).sort(), ['app_id', 'height', 'id', 'maximized', 'minimized', 'title', 'width', 'x', 'y']);
+  const [loaded] = restoreWindows(payload, () => app, viewport);
+  assert.deepEqual({x: loaded.x, y: loaded.y, width: loaded.width, height: loaded.height}, rect);
+  const restored = toggleMaximize(toggleMaximize(loaded, viewport), viewport);
+  assert.deepEqual({x: restored.x, y: restored.y, width: restored.width, height: restored.height}, rect);
 });
