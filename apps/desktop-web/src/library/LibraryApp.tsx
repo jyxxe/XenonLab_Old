@@ -508,6 +508,9 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
             onPath={search.setPath}
             filterText={search.filterText}
             onFilterText={search.setFilterText}
+            limit={search.limit}
+            onLimit={search.setLimit}
+            resultLimit={search.resultLimit}
             hits={search.hits}
             meta={search.meta}
             error={search.error}
