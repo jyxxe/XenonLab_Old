@@ -1,5 +1,6 @@
+import {stringifyExactJSON} from './json.js';
 import React, {useState} from 'react';
-import {Badge, Button, EmptyState, ErrorState, Input, Skeleton} from '../design-system/primitives';
+import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton} from '../design-system/primitives';
 import {describeError, relativeTime} from './logic.js';
 import type {Theorem} from './types';
 
@@ -16,6 +17,7 @@ function confidenceAverage(theorem: Theorem): number | null {
 export function TheoremView({
   items,
   searchResults,
+  searchPartial = false,
   selected,
   relations,
   detailLoading,
@@ -33,6 +35,7 @@ export function TheoremView({
 }: {
   items: Theorem[];
   searchResults: Theorem[] | null;
+  searchPartial?: boolean;
   selected: Theorem | null;
   relations: {dependencies: any[]; dependents: any[]; evidence: any[]} | null;
   detailLoading: boolean;
@@ -43,12 +46,13 @@ export function TheoremView({
   cursor: string | null;
   onLoad: () => void;
   onLoadMore: () => void;
-  onSearch: (query: string) => void;
+  onSearch: (query: string, reviewStatus?: string) => void;
   onClearSearch: () => void;
   onOpen: (id: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
+  const [reviewStatus, setReviewStatus] = useState('');
   const list = searchResults ?? items;
   const errorInfo = error ? describeError(error, '读取定理') : null;
   const detailErrorInfo = detailError ? describeError(detailError, '读取定理关联信息') : null;
@@ -60,7 +64,7 @@ export function TheoremView({
           <h2>定理</h2>
           <p>定理对象存储在 XeLibrary catalogue 中；形式验证与候选生成在 Library Agent / Lean 就绪前不可用。</p>
         </div>
-        <Button size="sm" onClick={onLoad} disabled={loading}>{loading ? '刷新中…' : '刷新'}</Button>
+        <Button size="sm" onClick={() => { setQuery(''); setReviewStatus(''); onLoad(); }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</Button>
       </header>
 
       <div className="library-search-bar">
@@ -70,14 +74,19 @@ export function TheoremView({
           placeholder="按标题或陈述搜索定理"
           value={query}
           onChange={event => setQuery(event.target.value)}
-          onKeyDown={event => event.key === 'Enter' && onSearch(query)}
+          onKeyDown={event => event.key === 'Enter' && query.trim() && onSearch(query, reviewStatus)}
         />
-        <Button onClick={() => onSearch(query)} disabled={loading}>搜索</Button>
-        {searchResults && <Button variant="ghost" onClick={() => { setQuery(''); onClearSearch(); }}>清除搜索</Button>}
+        <Select aria-label="定理审查状态" value={reviewStatus} disabled={!query.trim()} onChange={event => { const status = event.target.value; setReviewStatus(status); if (query.trim()) onSearch(query, status); }}>
+          <option value="">全部审查状态</option><option value="draft">草稿</option><option value="proposed">待审</option><option value="promoted">已晋升</option><option value="rejected">已拒绝</option>
+        </Select>
+        <Button onClick={() => onSearch(query, reviewStatus)} disabled={loading || !query.trim()}>搜索</Button>
+        {(searchResults !== null || query || reviewStatus) && <Button variant="ghost" onClick={() => { setQuery(''); setReviewStatus(''); onClearSearch(); }}>清除搜索</Button>}
       </div>
 
+      {searchResults !== null && searchPartial && <p className="library-notice" role="status">仅显示部分匹配结果；这不是完整审阅队列。请缩小关键词范围或调整审查状态。</p>}
+
       {errorInfo ? (
-        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={onLoad} />
+        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={() => query.trim() ? onSearch(query, reviewStatus) : onLoad()} />
       ) : loading && !list.length ? (
         <div className="library-result-skeleton" role="status" aria-label="正在加载定理">
           {Array.from({length: 4}, (_, index) => <Skeleton key={index} height={54} />)}
@@ -143,15 +152,15 @@ export function TheoremView({
             <>
               <section>
                 <h4>Evidence</h4>
-                {relations?.evidence?.length ? <ul>{relations.evidence.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有 evidence_refs。</p>}
+                {relations?.evidence?.length ? <ul>{relations.evidence.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : stringifyExactJSON(item)}</li>)}</ul> : <p className="muted">没有 evidence_refs。</p>}
               </section>
               <section>
                 <h4>Dependencies</h4>
-                {relations?.dependencies?.length ? <ul>{relations.dependencies.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录依赖。</p>}
+                {relations?.dependencies?.length ? <ul>{relations.dependencies.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : stringifyExactJSON(item)}</li>)}</ul> : <p className="muted">没有记录依赖。</p>}
               </section>
               <section>
                 <h4>Dependents</h4>
-                {relations?.dependents?.length ? <ul>{relations.dependents.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录被依赖项。</p>}
+                {relations?.dependents?.length ? <ul>{relations.dependents.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : stringifyExactJSON(item)}</li>)}</ul> : <p className="muted">没有记录被依赖项。</p>}
               </section>
             </>
           )}

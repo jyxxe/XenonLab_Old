@@ -22,14 +22,14 @@ const COLUMNS = [
   {name: 'files', type: 'attachment_list', nullable: true, default_value: null},
 ];
 
-const ROWS = Array.from({length: 100}, (_, index) => ({
+const ROWS = Array.from({length: 101}, (_, index) => ({
   _row_id: `row-${String(index + 1).padStart(3, '0')}`,
   _revision: index === 0 ? 3 : 1,
   _created_at: '2026-09-01T00:00:00Z',
   _updated_at: `2026-09-${String((index % 28) + 1).padStart(2, '0')}T00:00:00Z`,
   _deleted_at: index === 3 ? '2026-09-20T00:00:00Z' : null,
   values: {
-    title: index === 0 ? '一致收敛定义' : `Synthetic row ${index + 1}`,
+    title: index === 0 ? '一致收敛定义' : index === 100 ? '!global-first' : `Synthetic row ${index + 1}`,
     body: `记录 ${index + 1} 的正文内容，用于浏览器验收。`,
     type: index % 2 ? 'note' : 'theorem',
     confidence: index % 2 ? null : 0.91,
@@ -87,11 +87,27 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     if (state.slow) await new Promise(resolve => setTimeout(resolve, 450));
     if (state.denied) throw new APIRequestError('path permission denied', 403, 'XL_FORBIDDEN');
     const includeDeleted = url.searchParams.get('include_deleted') === 'true';
-    if (url.searchParams.get('cursor')) {
-      return {data: [{_row_id: 'row-extra', _revision: 1, _created_at: '2026-09-01T00:00:00Z', _updated_at: '2026-09-01T00:00:00Z', _deleted_at: null, values: {title: '追加页记录', body: 'page 2', type: 'note', confidence: null, files: []}}], meta: {next_cursor: null}};
+    const list = [...state.rows, {_row_id: 'row-extra', _revision: 1, _created_at: '2026-09-01T00:00:00Z', _updated_at: '2026-09-01T00:00:00Z', _deleted_at: null, values: {title: '追加页记录', body: 'page 2', type: 'note', confidence: null, files: []}}]
+      .filter(row => includeDeleted || !row._deleted_at);
+    const sortBy = url.searchParams.get('sort_by');
+    const direction = url.searchParams.get('direction') === 'desc' ? -1 : 1;
+    if (sortBy) {
+      const value = (row: any) => sortBy.startsWith('_') ? row[sortBy] : row.values[sortBy];
+      list.sort((left, right) => {
+        const a = value(left);
+        const b = value(right);
+        const compare = a === b ? 0 : a === null || a === undefined ? -1 : b === null || b === undefined ? 1 : a > b ? 1 : -1;
+        return compare ? direction * compare : left._row_id.localeCompare(right._row_id);
+      });
+    } else {
+      list.sort((left, right) => left._row_id.localeCompare(right._row_id));
     }
-    const list = state.rows.filter(row => includeDeleted || !row._deleted_at);
-    return {data: list.slice(0, 100), meta: {next_cursor: 'rows-page-2'}};
+    const limit = Number(url.searchParams.get('limit') || 100);
+    const cursor = url.searchParams.get('cursor');
+    const pageNumber = cursor ? Number(cursor.split('page-').at(-1) || 2) : 1;
+    const offset = (pageNumber - 1) * limit;
+    const page = list.slice(offset, offset + limit);
+    return {data: page, meta: {next_cursor: offset + page.length < list.length ? `rows-page-${pageNumber + 1}` : null}};
   }
   if (clean === '/tables/t2/rows' && method === 'GET') {
     return {data: [{_row_id: 't2-row-1', _revision: 1, _created_at: '2026-09-01T00:00:00Z', _updated_at: '2026-09-01T00:00:00Z', _deleted_at: null, values: {note: '另一张表的记录'}}], meta: {next_cursor: null}};
@@ -124,6 +140,14 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
       return {data: {...row}, meta: {request_id: 'req-save'}};
     }
     return {data: {...ROWS[0], values: body.values, _revision: 4}, meta: {request_id: 'req-save'}};
+  }
+  if (clean.startsWith('/tables/t1/rows/') && method === 'DELETE') {
+    const rowId = clean.split('/')[4];
+    const row = state.rows.find(item => item._row_id === rowId);
+    if (!row) throw new APIRequestError('row not found', 404, 'XL_ROW_NOT_FOUND');
+    row._deleted_at = '2026-10-21T00:00:00Z';
+    row._revision += 1;
+    return {data: {...row}, meta: {request_id: 'req-delete'}};
   }
   if (clean.startsWith('/tables/t1/rows/') && method === 'GET') {
     const rowId = clean.split('/')[4];
