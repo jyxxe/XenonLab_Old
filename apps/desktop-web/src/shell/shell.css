@@ -222,3 +222,4 @@
 .widget-plugin>header{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-2);margin:0;padding:0;background:transparent;border:0;height:auto}
 .widget-plugin>header strong{display:inline-flex;align-items:center;gap:4px;min-width:0;font-size:var(--font-size-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .widget-plugin iframe{flex:1;width:100%;min-height:0;border:1px solid var(--border-subtle);border-radius:var(--radius-control);background:var(--surface)}
+.system-audit-filter{display:flex;align-items:center;gap:var(--spacing-2);flex-wrap:wrap}.system-audit-filter .ds-input{flex:1;min-width:160px}.system-audit-filter label{font-size:var(--font-size-sm)}
