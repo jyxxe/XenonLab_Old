@@ -1,7 +1,9 @@
+import {Icon} from '../design-system/Icon';
 import React from 'react';
 import {MenuButton, type MenuItem} from '../design-system/primitives';
 import {appEntryUrl, forgejoBase} from './apps';
 import type {AppIntent, DesktopApp, UserPreferences, WindowState} from './types';
+import type {HalfScreenSide} from './window-manager.js';
 
 export function MenuBar({
   userLabel,
@@ -16,6 +18,9 @@ export function MenuBar({
   onCloseWindow,
   onMinimizeWindow,
   onToggleMaximize,
+  onArrangeWindow,
+  arrangementReasons,
+  elementRef,
   onSaveLayout,
   onLogout,
   onApplyPreferences,
@@ -34,6 +39,9 @@ export function MenuBar({
   onCloseWindow: (id: string) => void;
   onMinimizeWindow: (id: string) => void;
   onToggleMaximize: (id: string) => void;
+  onArrangeWindow: (id: string, side: HalfScreenSide) => void;
+  arrangementReasons: Record<HalfScreenSide, string | null>;
+  elementRef?: React.Ref<HTMLElement>;
   onSaveLayout: () => void;
   onLogout: () => void;
   onApplyPreferences: (patch: Partial<UserPreferences>) => void;
@@ -78,6 +86,13 @@ export function MenuBar({
     ...(windows.length ? [{separator: true} as MenuItem] : []),
     {id: 'minimize', label: '最小化当前窗口', shortcut: 'Ctrl+M', disabled: !active, onSelect: () => active && onMinimizeWindow(active.id)},
     {id: 'zoom', label: active?.maximized ? '还原当前窗口' : '缩放当前窗口', disabled: !active, onSelect: () => active && onToggleMaximize(active.id)},
+    {separator: true},
+    ...(['left', 'right'] as const).map(side => ({
+      id: `arrange-${side}`,
+      label: `将当前窗口放到${side === 'left' ? '左' : '右'}半屏`,
+      disabled: !active || Boolean(arrangementReasons[side]),
+      onSelect: () => active && onArrangeWindow(active.id, side),
+    })),
   ];
 
   const appMenu: MenuItem[] = activeApp?.menu?.map(entry => ({
@@ -98,12 +113,12 @@ export function MenuBar({
   ];
 
   return (
-    <header className="menubar">
-      <MenuButton label={<span className="menubar-brand"><b>✦</b> XeonoLab</span>} items={systemMenu} className="menubar-app-menu" />
+    <header className="menubar" ref={elementRef}>
+      <MenuButton label={<span className="menubar-brand"><b><Icon value="sparkle" size={18} /></b> XeonoLab</span>} items={systemMenu} className="menubar-app-menu" />
       <MenuButton label={activeApp ? activeApp.title : 'Desktop'} items={appMenu} />
       <MenuButton label="文件" items={fileMenu} />
       <MenuButton label="显示" items={viewMenu} />
-      <MenuButton label="窗口" items={windowMenu} />
+      <MenuButton label="窗口" items={windowMenu} description={[...new Set(Object.values(arrangementReasons).filter(Boolean))].join('；') || undefined} />
       <MenuButton label="帮助" items={helpMenu} />
       <span className="menubar-spacer" />
       <div className="menubar-mobile-switcher"><MenuButton label="切换应用" items={[
@@ -112,7 +127,7 @@ export function MenuBar({
         {id: 'mobile-launchpad', label: '打开 LaunchPad', onSelect: onOpenLaunchPad},
       ]} align="right" /></div>
       {status ? <span className="menubar-status menubar-secondary">{status}</span> : null}
-      <button type="button" className="menubar-icon" aria-label="命令面板" title="命令面板 (⌘K)" onClick={onOpenPalette}>⌕</button>
+      <button type="button" className="menubar-icon" aria-label="命令面板" title="命令面板 (⌘K)" onClick={onOpenPalette}><Icon value="search" size={18} /></button>
       <span className="menubar-clock">{clock}</span>
       <MenuButton
         label={<span title={userLabel}>{userLabel.slice(0, 12) || '账户'}</span>}
