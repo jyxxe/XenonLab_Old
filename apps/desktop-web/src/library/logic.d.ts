@@ -8,6 +8,7 @@ export const SYSTEM_FIELDS: Array<{name: string; label: string; type: string}>;
 export function rowValue(row: any, key: string): unknown;
 export function sortRows(rows: any[], key: string, direction?: 'asc' | 'desc'): any[];
 export function filterRows(rows: any[], query: string): any[];
+export function rowSelectionRange(visibleIds: string[], anchorId: string | null, targetId: string): string[];
 
 export type TreeNode = {path: string; name: string; tables: Table[]; children: TreeNode[]; count: number};
 export function buildPathTree(tables: Table[]): TreeNode;
@@ -38,6 +39,8 @@ export type SchemaChange = {
 };
 export function classifySchemaChange(current?: Column[], draft?: Column[]): SchemaChange;
 export function parseFieldFilters(text: string): {filters: Record<string, string>; errors: string[]};
+export const SEARCH_LIMIT_OPTIONS: number[];
+export function searchResultSummary(limit: unknown, hitCount: unknown): string | null;
 export function searchWarnings(meta?: Record<string, unknown>): string[];
 export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;
@@ -83,3 +86,6 @@ export function buildSelectionPrompt(
   columns?: Column[],
   question?: string,
 ): string;
+
+export function clampColumnWidth(width: number): number;
+export function keyboardColumnWidth(width: number, key: string, shift?: boolean): number | null;

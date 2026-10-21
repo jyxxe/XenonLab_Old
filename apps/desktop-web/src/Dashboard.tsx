@@ -27,7 +27,7 @@ function jobDuration(job:Job){
   if(Number.isNaN(start)||Number.isNaN(end)||end<start)return '';
   return end-start<1000?`${end-start} ms`:`${((end-start)/1000).toFixed(1)} s`;
 }
-export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)=>void}){
+export function Dashboard({apiPage,openApp,canOpenTasks=false}:{apiPage:APIPage;openApp:(id:string)=>void;canOpenTasks?:boolean}){
   const [work,setWork]=useState<WorkItem[]>([]),[workTruncated,setWorkTruncated]=useState(false),[jobs,setJobs]=useState<Job[]>([]),[tables,setTables]=useState<Table[]>([]),[tablesTruncated,setTablesTruncated]=useState(false),[tablesLoading,setTablesLoading]=useState(true),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null);
   const [notes,setNotes]=useState<Record<string,string>>({}),[health,setHealth]=useState<{service:string;ready:boolean;latency:number}|null>(null);
   const [stamp,setStamp]=useState(0),[tick,setTick]=useState(0);
@@ -104,7 +104,7 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
           {href?<a className="job-table" href={href} target="_blank" rel="noopener noreferrer" title={item.title}>#{item.issue_id} {item.title}</a>:<span className="job-table" title={item.title}>#{item.issue_id} {item.title}</span>}
           <small>{item.holder||'待领取'}</small>
         </li>})}</ul>}
-        <button onClick={()=>openApp('work')}>打开任务中心</button>
+        {canOpenTasks?<button onClick={()=>openApp('issues')}>打开任务中心</button>:<p className="muted">当前身份没有可用的任务应用。</p>}
       </article>
       <article className="mac-card"><header><h3>知识库概览</h3><span className="mac-badge">{tablesLoading?'读取中…':notes.tables?'不可用':tablesTruncated?`${tables.length}+ 张表`:`${tables.length} 张表`}</span></header>
         {notes.tables?<ErrorState title="无法读取知识库概览" message={notes.tables} onRetry={retry}/>:tablesLoading?<p className="muted" role="status">正在读取可见知识表…</p>:pathData.length?<Bars data={pathData} unit=" 张表"/>:<p className="muted">暂无可见知识表。</p>}

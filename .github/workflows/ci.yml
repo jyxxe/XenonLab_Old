@@ -62,6 +62,7 @@ jobs:
           path: |
             runtime/ci-browser-smoke/
             runtime/verification/issue216/
+            runtime/verification/issue219/
           if-no-files-found: ignore
           retention-days: 7
       - run: npm run build

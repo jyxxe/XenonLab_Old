@@ -21,7 +21,7 @@ const tables=[
   {id:'example-table',name:'部署验收',path:'/示例/平台'},
 ];
 const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,
-  libraryEnabled:true,embeddingTableId:'example-table',tableReadError:'',tableReadDelay:false,releaseTableRead:()=>{}};
+  tasksEnabled:scenario !== 'no-task-app',libraryEnabled:true,embeddingTableId:'example-table',tableReadError:'',tableReadDelay:false,releaseTableRead:()=>{}};
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -74,7 +74,8 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
   calls.push({method, path, body});
   if (path === '/users/me') {
-    return {subject: 'fixture-user-0001', kind: 'human', scopes: [...(control.libraryEnabled ? ['xelibrary:read'] : []), 'dev:read', 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read','embedding:write'] : [])]};
+    if (scenario === 'desktop-error') throw Error('Synthetic desktop load failure');
+    return {subject: 'fixture-user-0001', kind: 'human', scopes: [...(control.libraryEnabled ? ['xelibrary:read'] : []), ...(control.tasksEnabled ? ['dev:read'] : []), 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read','embedding:write'] : [])]};
   }
   if(path==='/apps?include_unavailable=true')return [...registry];
   if (path === '/apps') {if(method==='POST'){const saved={...body,revision:1};registry.push(saved);return saved}return [...registry]}
@@ -97,6 +98,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     return {dock_initialized:layout.dock_initialized,dock: [...layout.dock], windows: layout.windows.map(win => ({...win}))};
   }
   if (path.startsWith('/work')) {
+    if (!control.tasksEnabled) throw new APIRequestError('dev:read required', 403, 'FORBIDDEN');
     if (control.failWork) throw new Error('synthetic work read failure');
     const url = new URL(path, 'http://fixture.local');
     const cursor = url.searchParams.get('cursor');
@@ -183,7 +185,9 @@ window.fetch = (input, init) => String(input) === '/health/ready'
   resetCalls: () => calls.splice(0, calls.length),
 };
 
-createRoot(document.getElementById('root')!).render(
+const root = createRoot(document.getElementById('root')!);
+(window as any).shellFixture.unmount = () => root.unmount();
+root.render(
   <ToastProvider>
     <DesktopShell
       api={api}
