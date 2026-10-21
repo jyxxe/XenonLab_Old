@@ -96,7 +96,7 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
     await waitFor(()=>cdp.evaluate("document.querySelectorAll('tbody tr').length===100"),'first synthetic page');
     const initial=await cdp.evaluate(`(() => ({rows:document.querySelectorAll('tbody tr').length,loaded:document.querySelector('small')?.textContent,href:document.querySelector('tbody a')?.href,claim:[...document.querySelectorAll('tbody tr')][0]?.innerText.includes('领取'),malformedLink:!![...document.querySelectorAll('tbody tr')][98]?.querySelector('a')}))()`);
     assert.equal(initial.rows,100);assert.match(initial.loaded,/当前已加载的 100 项任务/);
-    assert.equal(initial.href,'https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/issues/51');
+    assert.equal(initial.href,'https://192.168.0.101:9445/xenon-admin/XeonoLab/issues/51');
     assert.equal(initial.claim,true);assert.equal(initial.malformedLink,false);
     const owned=await cdp.evaluate("[...document.querySelectorAll('tbody tr')][1].innerText");
     assert.match(owned,/释放/);assert.match(owned,/标记完成/);

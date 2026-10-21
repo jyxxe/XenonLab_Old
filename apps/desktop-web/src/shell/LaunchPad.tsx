@@ -1,5 +1,7 @@
+import {Icon} from '../design-system/Icon';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Input, useFocusTrap} from '../design-system/primitives';
+import {launchpadSource} from './launchpad-source.js';
 import type {DesktopApp} from './types';
 
 export function LaunchPad({
@@ -81,23 +83,31 @@ export function LaunchPad({
       />
       {ordered.length ? (
         <div id="launchpad-apps" className="launchpad-grid" role="listbox" aria-label="应用程序列表">
-          {ordered.map((app, index) => (
-            <button
-              key={app.id}
-              id={`launchpad-app-${app.id}`}
-              data-app-index={index}
-              type="button"
-              role="option"
-              aria-selected={index === active}
-              className={`launchpad-app${index === active ? ' ds-active' : ''}`}
-              onMouseEnter={() => setActive(index)}
-              onClick={() => onLaunch(app.id)}
-            >
-              <span className="launchpad-icon" aria-hidden="true">{app.icon}</span>
-              <strong>{app.title}</strong>
-              <small>{recentIds.includes(app.id) && !query.trim() ? '最近使用' : app.kind === 'native' ? '桌面应用' : '外部应用'}</small>
-            </button>
-          ))}
+          {ordered.map((app, index) => {
+            const source = launchpadSource(app);
+            const category = recentIds.includes(app.id) && !query.trim() ? '最近使用' : app.kind === 'native' ? '桌面应用' : '外部应用';
+            return (
+              <button
+                key={app.id}
+                id={`launchpad-app-${app.id}`}
+                data-app-index={index}
+                type="button"
+                role="option"
+                aria-selected={index === active}
+                aria-label={source ? `${app.title} · ${source.host} · ${category}` : undefined}
+                aria-description={source ? `来源：${source.origin}` : undefined}
+                title={source ? `来源：${source.origin}` : undefined}
+                className={`launchpad-app${index === active ? ' ds-active' : ''}`}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => onLaunch(app.id)}
+              >
+                <span className="launchpad-icon" aria-hidden="true"><Icon value={app.icon} size={32} /></span>
+                <strong>{app.title}</strong>
+                {source && <small className="launchpad-source">{source.host}</small>}
+                <small>{category}</small>
+              </button>
+            );
+          })}
         </div>
       ) : (
         <p className="launchpad-empty">没有匹配的应用</p>

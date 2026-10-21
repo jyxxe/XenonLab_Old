@@ -1,7 +1,8 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {ErrorState, Spinner, useToast} from '../design-system/primitives';
-import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
+import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget, PluginWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
 import {customWallpaperStyle} from '../wallpaper.js';
+import {selectedPluginWidgets} from '../plugin-widgets.js';
 import {mergeApps} from './apps';
 import {CommandPalette, type Command, type CommandProvider} from './CommandPalette';
 import {Dock, type DockSize} from './Dock';
@@ -15,6 +16,7 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  halfScreenPlacement,
   LEGACY_XELIBRARY_APP_ID,
   migrateLegacyAppReferences,
   minSizeOf,
@@ -24,9 +26,20 @@ import {
   toggleMaximize,
   maximizedRect,
 } from './window-manager.js';
-import type {API, APIPage, APIRaw, AppIntent, DesktopApp, RegistryApp, UserPreferences, WindowState} from './types';
+import type {DesktopBounds, HalfScreenPlacement, HalfScreenSide} from './window-manager.js';
+import type {API, APIPage, APIRaw, AppIntent, DesktopApp, PluginWidget as PluginWidgetInfo, PreferenceApplyOptions, RegistryApp, UserPreferences, WindowState} from './types';
 
 const RECENT_KEY = 'xeonolab.recent-apps';
+
+function placementReason(placement: HalfScreenPlacement, minSize: {width: number; height: number}): string | null {
+  switch (placement.reason) {
+    case 'unmeasured': return '左右排列不可用：正在测量桌面工作区';
+    case 'compact': return '左右排列不可用：窄屏使用单窗口布局';
+    case 'width': return `左右排列不可用：半屏宽度不足，当前窗口至少需要 ${minSize.width}px`;
+    case 'height': return `左右排列不可用：工作区高度不足，当前窗口至少需要 ${minSize.height}px`;
+    default: return null;
+  }
+}
 
 const defaultPreferences: UserPreferences = {
   theme: 'system',
@@ -40,6 +53,7 @@ const defaultPreferences: UserPreferences = {
   wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
+  plugin_widgets: [],
   shortcut_apps: [],
   notes: '',
   custom_wallpaper_available: false,
@@ -72,6 +86,7 @@ export function DesktopShell({
 }) {
   const {push} = useToast();
   const [apps, setApps] = useState<DesktopApp[]>([]);
+  const [pluginWidgets, setPluginWidgets] = useState<PluginWidgetInfo[]>([]);
   const [windows, setWindows] = useState<WindowState[]>([]);
   const [dockIds, setDockIds] = useState<string[]>([]);
   const [preferences, setPreferences] = useState<UserPreferences>(defaultPreferences);
@@ -93,7 +108,35 @@ export function DesktopShell({
   const layoutQueue = useRef<Promise<unknown>>(Promise.resolve());
   const preferenceQueue = useRef<Promise<unknown>>(Promise.resolve());
   const preferenceVersion = useRef(0);
+  const preferenceOwner = useRef('');
+  const preferenceLifetime = useRef(true);
+  const currentAPI = useRef(api);
+  if (currentAPI.current !== api) {preferenceOwner.current = ''; ++preferenceVersion.current;}
+  currentAPI.current = api;
+  useLayoutEffect(() => {preferenceLifetime.current = true; return () => {preferenceLifetime.current = false;};}, []);
   const viewport = useRef({width: innerWidth, height: innerHeight});
+  const [menuElement, setMenuElement] = useState<HTMLElement | null>(null);
+  const [dockElement, setDockElement] = useState<HTMLElement | null>(null);
+  const [arrangementBounds, setArrangementBounds] = useState<(DesktopBounds & {width: number; height: number}) | null>(null);
+  const readArrangementBounds = useCallback(() => {
+    if (!menuElement || !dockElement) return null;
+    return {width: innerWidth, height: innerHeight, menuBottom: menuElement.getBoundingClientRect().bottom, dockTop: dockElement.getBoundingClientRect().top};
+  }, [menuElement, dockElement]);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const next = readArrangementBounds();
+      setArrangementBounds(current => current && next && current.width === next.width && current.height === next.height
+        && current.menuBottom === next.menuBottom && current.dockTop === next.dockTop ? current : next);
+    };
+    measure();
+    if (!menuElement || !dockElement) return;
+    // Observe the natural nav box: auto-hide transforms its child, not this box.
+    const observer = new ResizeObserver(measure);
+    observer.observe(menuElement);
+    observer.observe(dockElement);
+    addEventListener('resize', measure);
+    return () => {observer.disconnect(); removeEventListener('resize', measure);};
+  }, [menuElement, dockElement, readArrangementBounds]);
 
   const [appIntents, setAppIntents] = useState<Record<string, AppIntent>>({});
 
@@ -104,15 +147,30 @@ export function DesktopShell({
     const win = windows.find(item => item.id === activeId);
     return win ? apps.find(app => app.id === win.app_id) ?? null : null;
   }, [activeId, windows, apps]);
+  const activeMinSize = minSizeOf(activeApp);
+  const arrangementReasons: Record<HalfScreenSide, string | null> = {left: null, right: null};
+  for (const side of ['left', 'right'] as const) {
+    arrangementReasons[side] = !activeApp ? '左右排列不可用：请先打开或恢复一个窗口'
+      : placementReason(halfScreenPlacement(arrangementBounds ?? viewport.current, activeMinSize, side, arrangementBounds), activeMinSize);
+  }
   const customWallpaper = useMemo(() => customWallpaperStyle(preferences, wallpaperImageUrl), [preferences, wallpaperImageUrl]);
   const knowledgeSearchAvailable = useMemo(() => apps.some(app => app.id === 'knowledge') && accountScopes.includes('xelibrary:query'), [apps, accountScopes]);
   const workAvailable = useMemo(() => apps.some(app => app.id === 'issues'), [apps]);
+  const shownPluginWidgets = useMemo(
+    () => selectedPluginWidgets(preferences.plugin_widgets || [], pluginWidgets),
+    [preferences.plugin_widgets, pluginWidgets],
+  );
 
   const connect = useCallback(async () => {
     setLoadError('');
     try {
-      const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
+      const [me, registry, widgets] = await Promise.all([
+        api('/users/me'),
+        api('/apps'),
+        api('/users/me/plugin-widgets', undefined, {soft: true}).catch(() => [] as PluginWidgetInfo[]),
+      ]);
       const [layout, stored] = await Promise.all([api('/users/me/layout'), api('/users/me/preferences')]);
+      if (currentAPI.current !== api || !preferenceLifetime.current) return;
       const available = mergeApps(registry as RegistryApp[], me.scopes || []);
       const migratedLayout = migrateLegacyAppReferences(layout);
       const migratedRecent = [...new Set(loadRecent().map(id => id === LEGACY_XELIBRARY_APP_ID ? 'knowledge' : id))].slice(0, 6);
@@ -127,9 +185,11 @@ export function DesktopShell({
       const storedDock = Array.isArray(migratedLayout.dock) ? migratedLayout.dock.filter((id: string) => known(id)) : [];
       const nextDock = migratedLayout.dock_initialized || storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
       setApps(available);
+      setPluginWidgets(Array.isArray(widgets) ? widgets as PluginWidgetInfo[] : []);
       setAccountScopes(Array.isArray(me.scopes) ? me.scopes : []);
       setDockIds(nextDock);
       setPreferences(prefs);
+      preferenceOwner.current = me.subject || '';
       setSubject(me.subject || '');
       setUserLabel(me.subject ? String(me.subject).slice(0, 8) : '本地账户');
       if (!loadedRef.current) {
@@ -271,10 +331,15 @@ export function DesktopShell({
   );
 
   const refreshApps = useCallback(async () => {
-    const [me, registry] = await Promise.all([api('/users/me'), api('/apps')]);
+    const [me, registry, widgets] = await Promise.all([
+      api('/users/me'),
+      api('/apps'),
+      api('/users/me/plugin-widgets', undefined, {soft: true}).catch(() => [] as PluginWidgetInfo[]),
+    ]);
     const available = mergeApps(registry, me.scopes || []);
     const known = new Set(available.map(app => app.id));
     setApps(available);
+    setPluginWidgets(Array.isArray(widgets) ? widgets as PluginWidgetInfo[] : []);
     editWindows(current => current.filter(win => known.has(win.app_id)));
     setDockIds(current => current.filter(id => known.has(id)));
   }, [api, editWindows]);
@@ -297,6 +362,21 @@ export function DesktopShell({
   const toggleWindowMaximize = useCallback((id: string) => {
     editWindows(current => current.map(win => (win.id === id ? toggleMaximize(win, viewport.current) : win)));
   }, [editWindows]);
+  const arrangeWindow = useCallback((id: string, side: HalfScreenSide) => {
+    const win = windows.find(item => item.id === id);
+    const app = apps.find(item => item.id === win?.app_id);
+    if (!win || !app) return;
+    const minSize = minSizeOf(app);
+    const bounds = readArrangementBounds();
+    const placement = halfScreenPlacement({width: innerWidth, height: innerHeight}, minSize, side, bounds);
+    if (!placement.rect) {
+      push({tone: 'warning', title: '窗口未排列', description: placementReason(placement, minSize) ?? undefined});
+      return;
+    }
+    const rect = placement.rect;
+    editWindows(current => focusWindow(current.map(item => item.id === id
+      ? {...item, ...rect, minimized: false, maximized: false, restore: undefined} : item), id));
+  }, [apps, windows, readArrangementBounds, editWindows, push]);
   const updateRect = useCallback(
     (id: string, rect: {x: number; y: number; width: number; height: number}) => {
       editWindows(current =>
@@ -310,16 +390,29 @@ export function DesktopShell({
   const focus = useCallback((id: string) => editWindows(current => focusWindow(current, id)), [editWindows]);
 
   const applyPreferences = useCallback(
-    async (patch: Partial<UserPreferences>) => {
+    async (patch: Partial<UserPreferences>, options?: PreferenceApplyOptions) => {
+      if (!preferenceLifetime.current || currentAPI.current !== api || !preferenceOwner.current) throw new Error('账户上下文已变化，未保存旧偏好');
+      const owner = preferenceOwner.current;
       const version = ++preferenceVersion.current;
       setPreferences(current => ({...current, ...patch}));
-      const pending = preferenceQueue.current.catch(() => undefined).then(() => api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch)}));
+      if (options?.previewOnly) return;
+      const pending = preferenceQueue.current.catch(() => undefined).then(async () => {
+        if (!preferenceLifetime.current || currentAPI.current !== api || preferenceOwner.current !== owner) throw new Error('账户上下文已变化，未保存旧偏好');
+        return api('/users/me/preferences', {method: 'PATCH', body: JSON.stringify(patch), ...(options?.keepalive ? {keepalive: true} : {})});
+      });
       preferenceQueue.current = pending;
       try {
         const saved = await pending;
-        if (version === preferenceVersion.current) setPreferences(current => ({...current, ...saved}));
+        // A full response also contains ranges whose preview/save may still be
+        // pending or failed. Other PATCHes must not confirm those fields.
+        if (preferenceLifetime.current && preferenceOwner.current === owner && currentAPI.current === api && version === preferenceVersion.current) {
+          const confirmed = {...saved};
+          if (!Object.hasOwn(patch, 'wallpaper_gradient_angle')) delete confirmed.wallpaper_gradient_angle;
+          if (!Object.hasOwn(patch, 'wallpaper_dim')) delete confirmed.wallpaper_dim;
+          setPreferences(current => ({...current, ...confirmed}));
+        }
       } catch (error) {
-        push({tone: 'danger', title: '偏好保存失败', description: String(error)});
+        if (preferenceLifetime.current && preferenceOwner.current === owner && currentAPI.current === api) push({tone: 'danger', title: '偏好保存失败', description: String(error)});
         throw error;
       }
     },
@@ -540,6 +633,8 @@ export function DesktopShell({
           onCloseWindow={() => undefined}
           onMinimizeWindow={() => undefined}
           onToggleMaximize={() => undefined}
+          onArrangeWindow={() => undefined}
+          arrangementReasons={{left: '左右排列不可用：桌面尚未加载', right: '左右排列不可用：桌面尚未加载'}}
           onSaveLayout={() => undefined}
           onLogout={() => void onLogout()}
           onApplyPreferences={patch => void applyPreferences(patch).catch(() => undefined)}
@@ -567,7 +662,7 @@ export function DesktopShell({
   }
 
   return (
-    <div className="desktop ds-compact" data-maximized-active={maximizedActive ? 'true' : undefined} data-has-widgets={(preferences.widgets || []).length ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
+    <div className="desktop ds-compact" data-maximized-active={maximizedActive ? 'true' : undefined} data-has-widgets={((preferences.widgets || []).length > 0 || shownPluginWidgets.length > 0) ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
       backgroundColor: customWallpaper.backgroundColor,
       backgroundImage: customWallpaper.backgroundImage,
       backgroundSize: customWallpaper.backgroundSize,
@@ -587,6 +682,9 @@ export function DesktopShell({
         onCloseWindow={closeWindow}
         onMinimizeWindow={minimizeWindow}
         onToggleMaximize={toggleWindowMaximize}
+        onArrangeWindow={arrangeWindow}
+        arrangementReasons={arrangementReasons}
+        elementRef={setMenuElement}
         onSaveLayout={() => void saveLayoutWithFeedback()}
         onLogout={() => void onLogout()}
         onApplyPreferences={patch => void applyPreferences(patch).catch(() => undefined)}
@@ -660,7 +758,7 @@ export function DesktopShell({
         })}
       </div>
 
-      {(preferences.widgets || []).length > 0 && (
+      {((preferences.widgets || []).length > 0 || shownPluginWidgets.length > 0) && (
         <div className="widgets">
           {(preferences.widgets || []).includes('clock') && <ClockWidget timezone={preferences.timezone} />}
           {(preferences.widgets || []).includes('status') && <StatusWidget apiPage={apiPage} onOpen={() => openApp('system')} />}
@@ -669,12 +767,14 @@ export function DesktopShell({
           {(preferences.widgets || []).includes('work') && <WorkWidget apiPage={apiPage} allowed={workAvailable} onOpen={() => openApp('issues')} />}
           {(preferences.widgets || []).includes('search') && <SearchWidget available={knowledgeSearchAvailable} onSearch={query => openApp('knowledge', {action: 'search', query})} />}
           {(preferences.widgets || []).includes('notes') && <NotesWidget notes={preferences.notes || ''} onSave={saveNotes} />}
+          {shownPluginWidgets.map(widget => <PluginWidget key={widget.plugin_id} widget={widget} />)}
         </div>
       )}
 
       {wallpaperError && <div className="wallpaper-load-error" role="alert">{wallpaperError}</div>}
 
       <Dock
+        elementRef={setDockElement}
         apps={apps}
         windows={windows}
         activeWindowId={activeId}
