@@ -6,6 +6,7 @@ import {
   defaultRect,
   focusWindow,
   stableWindowOrder,
+  halfScreenPlacement,
   isRetiredRegistryAppId,
   migrateLegacyAppReferences,
   nextWindowId,
@@ -192,4 +193,68 @@ test('window DOM order remains stable while focus and stacking still change', ()
   const extended = stableWindowOrder([...focused,{id:'aa'}]);
   assert.deepEqual(extended.filter(w=>w.id!=='aa').map(w=>w.id), ['a','b','c']);
   assert.deepEqual(stableWindowOrder(focused.filter(w=>w.id!=='b')).map(w=>w.id), ['a','c']);
+});
+
+test('half-screen placement clears measured menu and all Dock sizes with a 12px gap', () => {
+  const viewport = {width: 1920, height: 1080};
+  for (const dockTop of [994, 988, 980]) {
+    const bounds = {menuBottom: 30, dockTop};
+    const left = halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', bounds);
+    const right = halfScreenPlacement(viewport, {width: 720, height: 480}, 'right', bounds);
+    assert.equal(left.reason, null);
+    assert.equal(right.reason, null);
+    assert.deepEqual(left.rect, {x: 12, y: 42, width: 942, height: dockTop - 54});
+    assert.equal(right.rect.x, left.rect.x + left.rect.width + 12);
+    assert.equal(right.rect.x + right.rect.width, viewport.width - 12);
+    assert.equal(right.rect.y + right.rect.height, dockTop - 12);
+  }
+  const customChrome = halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', {menuBottom: 45, dockTop: 930});
+  assert.equal(customChrome.rect.y, 57, 'uses measured menu height');
+  assert.equal(customChrome.rect.y + customChrome.rect.height, 918);
+});
+
+test('odd viewport widths split the remainder without overlap or escaping the workspace', () => {
+  const viewport = {width: 1921, height: 1080};
+  const bounds = {menuBottom: 30, dockTop: 980};
+  const min = {width: 942, height: 480};
+  const left = halfScreenPlacement(viewport, min, 'left', bounds).rect;
+  const right = halfScreenPlacement(viewport, min, 'right', bounds).rect;
+  assert.equal(left.width, 942);
+  assert.equal(right.width, 943);
+  assert.equal(right.x - left.x - left.width, 12);
+  assert.equal(right.x + right.width, 1909);
+  assert.equal(halfScreenPlacement(viewport, {width: 943, height: 480}, 'left', bounds).reason, 'width');
+  assert.equal(halfScreenPlacement(viewport, {width: 943, height: 480}, 'right', bounds).reason, null);
+});
+
+test('half-screen placement disables compact CSS mode and honors each app minimum', () => {
+  const bounds = {menuBottom: 30, dockTop: 688};
+  assert.equal(halfScreenPlacement({width: 1023, height: 768}, {width: 320, height: 200}, 'left', bounds).reason, 'compact');
+  assert.equal(halfScreenPlacement({width: 1024, height: 768}, {width: 320, height: 200}, 'left', bounds).reason, null);
+  const viewport = {width: 1440, height: 768};
+  assert.equal(halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', bounds).reason, null, 'Settings fits');
+  assert.equal(halfScreenPlacement(viewport, {width: 720, height: 480}, 'left', bounds).reason, 'width', 'Development does not fit');
+  assert.equal(halfScreenPlacement(viewport, {width: 820, height: 520}, 'right', bounds).reason, 'width', 'Knowledge does not fit');
+});
+
+test('short or invalid work areas are rejected instead of inflating minimum sizes', () => {
+  const viewport = {width: 1920, height: 500};
+  const bounds = {menuBottom: 30, dockTop: 400};
+  assert.equal(halfScreenPlacement(viewport, {width: 680, height: 480}, 'left', bounds).reason, 'height');
+  const min = {width: 320, height: 200};
+  for (const invalid of [null, {menuBottom: NaN, dockTop: 400}, {menuBottom: 30, dockTop: Infinity}, {menuBottom: -1, dockTop: 400}, {menuBottom: 30, dockTop: 501}, {menuBottom: 400, dockTop: 300}]) {
+    assert.deepEqual(halfScreenPlacement(viewport, min, 'left', invalid), {rect: null, reason: 'unmeasured'});
+  }
+});
+
+test('a half-screen rectangle persists as an ordinary window and survives maximize/restore', () => {
+  const viewport = {width: 1920, height: 1080};
+  const rect = halfScreenPlacement(viewport, {width: 820, height: 520}, 'right', {menuBottom: 30, dockTop: 980}).rect;
+  const win = {id: 'half', app_id: 'knowledge', title: 'K', minimized: false, maximized: false, ...rect};
+  const payload = serializeWindows([win]);
+  assert.deepEqual(Object.keys(payload[0]).sort(), ['app_id', 'height', 'id', 'maximized', 'minimized', 'title', 'width', 'x', 'y']);
+  const [loaded] = restoreWindows(payload, () => app, viewport);
+  assert.deepEqual({x: loaded.x, y: loaded.y, width: loaded.width, height: loaded.height}, rect);
+  const restored = toggleMaximize(toggleMaximize(loaded, viewport), viewport);
+  assert.deepEqual({x: restored.x, y: restored.y, width: restored.width, height: restored.height}, rect);
 });
