@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React, {useMemo, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Input, Skeleton, Tabs, Textarea} from '../design-system/primitives';
 import {describeError, isKeywordResult, parseFieldFilters, searchWarnings} from './logic.js';
@@ -124,7 +125,7 @@ export function SearchView({
 
       {warnings.length > 0 && (
         <div className="library-warning" role="alert">
-          <strong>⚠ 结果可能不完整</strong>
+          <strong><Icon value="warning" size={16} /> 结果可能不完整</strong>
           <ul>{warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
         </div>
       )}
