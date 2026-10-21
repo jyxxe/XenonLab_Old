@@ -1,0 +1,12 @@
+[Unit]
+Description=Prune stale DevAgent validation worktrees
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=devagent
+Group=devagent
+ExecStart=/usr/local/libexec/devagent-prune-worktrees
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -60,7 +60,7 @@ export function QueryConsole({
 }) {
   const [showUnsupported, setShowUnsupported] = useState(false);
   const [copyState, setCopyState] = useState('');
-  const [offset, setOffset] = useState(0);
+  const offset = plan?.offset ?? 0;
   const errorInfo = error ? describeError(error, '执行查询') : null;
 
   const pageQuery = (nextOffset: number) => withQueryPagination(expression, plan?.limit ?? 100, nextOffset);
@@ -80,7 +80,7 @@ export function QueryConsole({
         aria-label="查询表达式"
         spellCheck={false}
         value={expression}
-        onChange={event => { setOffset(0); onExpression(event.target.value); }}
+        onChange={event => onExpression(event.target.value)}
         onKeyDown={event => {
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') onRun(expression);
         }}
@@ -174,14 +174,14 @@ export function QueryConsole({
             </table>
           </div>
           <div className="library-query-pagination">
-            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); setOffset(next); onRun(pageQuery(next), false); }}>
+            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); onRun(pageQuery(next), false); }}>
               上一页
             </Button>
             <span className="muted">OFFSET {offset}</span>
             <Button
               size="sm"
               disabled={rows.length < (plan?.limit ?? 100) || running}
-              onClick={() => { const next = offset + (plan?.limit ?? 100); setOffset(next); onRun(pageQuery(next), false); }}
+              onClick={() => { const next = offset + (plan?.limit ?? 100); onRun(pageQuery(next), false); }}
             >
               下一页
             </Button>

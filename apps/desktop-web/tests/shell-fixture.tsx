@@ -74,6 +74,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
   calls.push({method, path, body});
   if (path === '/users/me') {
+    if (scenario === 'desktop-error') throw Error('Synthetic desktop load failure');
     return {subject: 'fixture-user-0001', kind: 'human', scopes: [...(control.libraryEnabled ? ['xelibrary:read'] : []), ...(control.tasksEnabled ? ['dev:read'] : []), 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read','embedding:write'] : [])]};
   }
   if(path==='/apps?include_unavailable=true')return [...registry];
@@ -184,7 +185,9 @@ window.fetch = (input, init) => String(input) === '/health/ready'
   resetCalls: () => calls.splice(0, calls.length),
 };
 
-createRoot(document.getElementById('root')!).render(
+const root = createRoot(document.getElementById('root')!);
+(window as any).shellFixture.unmount = () => root.unmount();
+root.render(
   <ToastProvider>
     <DesktopShell
       api={api}
