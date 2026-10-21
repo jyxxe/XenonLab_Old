@@ -243,3 +243,74 @@ The root broker continues to run deterministic tests/builds, own production cred
 acquire the exclusive Deploy Gateway lease, stage fixed targets and verify/roll back.
 Trusted controller, installed policy and root receiver updates still require reviewed
 operator installation; application deployment cannot rewrite those privilege boundaries.
+
+### Operator abort after a failed preflight
+
+A deployment which failed entirely in `preflight` may be abandoned so a reviewed
+fix can pass the normal merge/deploy gates. Install the reviewed
+`publication_recovery.py` as `/usr/local/libexec/devagent-publication-recovery`
+(root-owned 0700), together with the reviewed controller, broker and VM106 staging
+receiver. This is an operator installation; an application rollout cannot install
+these files. Keep the previous installed files and their digests for rollback.
+
+The helper's default invocation prints an offline plan. The operator-only
+`--abort-preflight` mode reads a bounded JSON object from stdin with `number`,
+`head`, `commit`, `operation_id`, `baseline_commit`, `baseline_operation_id` and
+`reason`. These must identify the exact merged Forgejo PR and failed native job,
+and a preceding native deployment whose five targets and Gateway all passed.
+The helper uses the root-managed Forgejo TLS origin and checks the integration
+tip. It refuses active jobs, interrupted deployment recovery, any activation
+evidence, an existing attempt or a held Gateway lease.
+
+Under the broker operation lock, it acquires its own short lease for the already
+approved baseline release, checks the live immutable version and readiness of
+all five targets, and calls VM106's fixed read-only `publication-recovery` probe.
+That probe checks a consistent SQLite snapshot for unresolved deployments and
+the exact lease, and checks the running Gateway process's immutable working
+directory and HTTP readiness. Recovery I/O has short timeouts and a bounded
+deadline that reserves time to release its own lease. It rechecks native evidence
+and Forgejo before releasing the lease through the normal API and reading it back.
+
+Only after those checks does it issue a root-owned 0600 receipt at
+`/var/lib/devagent-privileged/publication-recoveries/OPERATION_ID.json`. Full
+evidence and lease states remain in the separate root-only attempt journal.
+The broker exposes only a validated read of that receipt. The watcher records
+`operator_aborted` while preserving the original failed operation; the merge gate
+revalidates the receipt's PR/head/commit/operation binding through the broker.
+This is an abandoned attempt, not a successful deployment. Repeating the original
+deployment request still returns its failed operation. The fix must use fresh
+CI, protected preflight, exact-head approval, a normal merge and a new deployment.
+
+An unknown acquire/release response, interrupted helper, expired lease or failed
+check produces no receipt and preserves the attempt journal. Do not delete that
+journal to retry. Inspect the exact recorded acknowledgement, epoch, holder and
+release, all native jobs, target versions and Gateway unresolved states. Release
+only a demonstrably owned lease through the normal API; an uncertain or foreign
+lease requires separate operator recovery. This helper does not recover staging,
+activation, rollback failures or interrupted deployments.
+
+## Validation worktree retention — 2026-10-21
+
+Each protected preflight creates `/var/lib/devagent/worktrees/validate-<task>`
+with a full dependency checkout. On 2026-10-21, 213 leftover worktrees reached
+32 GB and pushed the VM111 root filesystem to 81%; `hf_cache` evaluates the real
+`shutil.disk_usage`, so the 80/85/90 percent watermarks made nine unrelated
+`tests/test_hf_cache.py` cases fail and blocked every protected preflight
+(Issue #276). The tests now inject low pressure by default, and orphaned trees
+are pruned by `devagent-worktree-prune.timer` (`infra/devagent/`), which removes
+`validate-*` directories older than 48 hours as the `devagent` user.
+
+Install as root on VM111 after a reviewed release:
+
+```sh
+install -m 755 /opt/xeonolab/current/infra/devagent/prune-validation-worktrees.sh \
+  /usr/local/libexec/devagent-prune-worktrees
+install -m 644 /opt/xeonolab/current/infra/devagent/devagent-worktree-prune.service \
+  /opt/xeonolab/current/infra/devagent/devagent-worktree-prune.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now devagent-worktree-prune.timer
+systemctl start devagent-worktree-prune.service   # one manual run, check journal
+```
+
+The same `hf_cache` disk-pressure rule means the protected host must stay below
+80% root usage; check `df -h /` after large validation batches.

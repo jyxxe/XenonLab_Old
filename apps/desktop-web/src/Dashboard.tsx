@@ -2,6 +2,7 @@ import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Bars,Legend,Meter,Ring,chartColor} from './MacCharts';
 import {ErrorState} from './design-system/primitives';
 import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
+import {forgejoIssueUrl} from './shell/forgejo-links.js';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{request_id?:string;next_cursor?:string|null;[key:string]:any}}>;
 type WorkItem={id:string;repository:string;issue_id:number;title:string;status:string;holder:string|null;claim_active:boolean};
 type Job={job_id:string;owner:string;table_id:string;status:string;created_at?:string;updated_at?:string;error?:string};
@@ -25,10 +26,6 @@ function jobDuration(job:Job){
   const start=job.created_at?Date.parse(job.created_at):NaN, end=job.updated_at?Date.parse(job.updated_at):NaN;
   if(Number.isNaN(start)||Number.isNaN(end)||end<start)return '';
   return end-start<1000?`${end-start} ms`:`${((end-start)/1000).toFixed(1)} s`;
-}
-function issueHref(repository:string,issueId:number){
-  const [owner,repo]=repository.split('/');
-  return `https://xenon.jyxxe.com/dev/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueId}`;
 }
 export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)=>void}){
   const [work,setWork]=useState<WorkItem[]>([]),[workTruncated,setWorkTruncated]=useState(false),[jobs,setJobs]=useState<Job[]>([]),[tables,setTables]=useState<Table[]>([]),[tablesTruncated,setTablesTruncated]=useState(false),[tablesLoading,setTablesLoading]=useState(true),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null);
@@ -100,11 +97,13 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
           <Legend items={workSegments}/>
         </div>}
         {!notes.work&&workTruncated&&<p className="muted">状态统计仅覆盖当前载入的前 1000 项。</p>}
-        {!notes.work&&visibleWork.length>0&&<ul className="job-list">{visibleWork.slice(0,4).map(item=><li key={item.id}>
+        {!notes.work&&visibleWork.length>0&&<ul className="job-list">{visibleWork.slice(0,4).map(item=>{
+          const href=forgejoIssueUrl(item.repository,item.issue_id);
+          return <li key={item.id}>
           <span className={`chip ${workDisplayStatus(item)}`}>{workDisplayStatus(item)==='expired'?'已过期 · 可重领':workLabels[item.status]||item.status}</span>
-          <a className="job-table" href={issueHref(item.repository,item.issue_id)} target="_blank" rel="noopener noreferrer" title={item.title}>#{item.issue_id} {item.title}</a>
+          {href?<a className="job-table" href={href} target="_blank" rel="noopener noreferrer" title={item.title}>#{item.issue_id} {item.title}</a>:<span className="job-table" title={item.title}>#{item.issue_id} {item.title}</span>}
           <small>{item.holder||'待领取'}</small>
-        </li>)}</ul>}
+        </li>})}</ul>}
         <button onClick={()=>openApp('work')}>打开任务中心</button>
       </article>
       <article className="mac-card"><header><h3>知识库概览</h3><span className="mac-badge">{tablesLoading?'读取中…':notes.tables?'不可用':tablesTruncated?`${tables.length}+ 张表`:`${tables.length} 张表`}</span></header>

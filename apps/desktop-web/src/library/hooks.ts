@@ -1,14 +1,17 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage} from '../shell/types';
-import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, toggleFavorite} from './logic.js';
+import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, SEARCH_LIMIT_OPTIONS, toggleFavorite} from './logic.js';
 import {addQueryRecent, QUERY_EXPRESSION_LIMIT, queryDraftsStorageKey, readQueryDrafts, writeQueryDrafts} from './query-drafts.js';
 import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
-export const SEARCH_LIMIT = 25;
+/** Default UI cap for search results; users may raise it through SEARCH_LIMIT_OPTIONS. */
+export const SEARCH_LIMIT = SEARCH_LIMIT_OPTIONS[0];
 export const DEFAULT_QUERY = 'FROM "/**" LIMIT 100';
+export type TableSort = {key: string; direction: 'asc' | 'desc'} | null;
 
 export function useScopes(api: API, authEpoch = 0) {
-  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean; error?: unknown}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
   const current = identity.epoch === authEpoch ? identity : {epoch: authEpoch, scopes: [], subject: null, loaded: false};
   useEffect(() => {
     let active = true;
@@ -19,12 +22,16 @@ export function useScopes(api: API, authEpoch = 0) {
           setIdentity({epoch: authEpoch, scopes: me.scopes || [], subject: typeof me.subject === 'string' && me.subject.trim() ? me.subject : null, loaded: true});
         }
       })
-      .catch(() => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true}));
+      .catch(error => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true, error}));
     return () => {
       active = false;
     };
-  }, [api, authEpoch]);
-  return current;
+  }, [api, authEpoch, reloadGeneration]);
+  const reload = useCallback(() => {
+    setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+    setReloadGeneration(value => value + 1);
+  }, [authEpoch]);
+  return {...current, reload};
 }
 
 export function useCatalogue(apiPage: APIPage) {
@@ -91,6 +98,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
   const [table, setTable] = useState<Table | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [sort, setSort] = useState<TableSort>(null);
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -100,10 +108,14 @@ export function useTableSession(api: API, apiPage: APIPage) {
   const loadingMoreRef = useRef(false);
 
   const fetchRows = useCallback(
-    (tableId: string, cursorValue = '', showDeleted = false) => {
+    (tableId: string, cursorValue = '', showDeleted = false, sortValue: TableSort = null) => {
       const query = new URLSearchParams({limit: '100'});
       if (cursorValue) query.set('cursor', cursorValue);
       if (showDeleted) query.set('include_deleted', 'true');
+      if (sortValue) {
+        query.set('sort_by', sortValue.key);
+        query.set('direction', sortValue.direction);
+      }
       return apiPage(`/tables/${tableId}/rows?${query.toString()}`);
     },
     [apiPage],
@@ -115,6 +127,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
       setTable({...next});
       setRows([]);
       setCursor(null);
+      setSort(null);
       setError(null);
       setLoading(true);
       setLoadingMore(false);
@@ -122,7 +135,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
       loadingMoreRef.current = false;
       setIncludeDeleted(showDeleted);
       try {
-        const [page, schema] = await Promise.all([fetchRows(next.id, '', showDeleted), api(`/tables/${next.id}/schema`)]);
+        const [page, schema] = await Promise.all([fetchRows(next.id, '', showDeleted, null), api(`/tables/${next.id}/schema`)]);
         if (view.current !== request) return;
         setRows(page.data as Row[]);
         setCursor((page.meta.next_cursor as string) || null);
@@ -143,11 +156,13 @@ export function useTableSession(api: API, apiPage: APIPage) {
       const request = ++view.current;
       ++rowsRequest.current;
       loadingMoreRef.current = false;
+      setCursor(null);
+      setIncludeDeleted(showDeleted);
       setLoading(true);
       setLoadingMore(false);
       setError(null);
       try {
-        const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted), api(`/tables/${tableId}/schema`)]);
+        const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted, sort), api(`/tables/${tableId}/schema`)]);
         if (view.current !== request) return;
         setRows(page.data as Row[]);
         setCursor((page.meta.next_cursor as string) || null);
@@ -158,7 +173,34 @@ export function useTableSession(api: API, apiPage: APIPage) {
         if (view.current === request) setLoading(false);
       }
     },
-    [api, fetchRows, includeDeleted, table],
+    [api, fetchRows, includeDeleted, sort, table],
+  );
+
+  const changeSort = useCallback(
+    async (nextSort: TableSort) => {
+      setSort(nextSort);
+      if (!table) return;
+      const tableId = table.id;
+      const request = ++view.current;
+      ++rowsRequest.current;
+      loadingMoreRef.current = false;
+      setRows([]);
+      setCursor(null);
+      setLoading(true);
+      setLoadingMore(false);
+      setError(null);
+      try {
+        const page = await fetchRows(tableId, '', includeDeleted, nextSort);
+        if (view.current !== request) return;
+        setRows(page.data as Row[]);
+        setCursor((page.meta.next_cursor as string) || null);
+      } catch (cause) {
+        if (view.current === request) setError(cause);
+      } finally {
+        if (view.current === request) setLoading(false);
+      }
+    },
+    [fetchRows, includeDeleted, table],
   );
 
   const loadMore = useCallback(async () => {
@@ -169,7 +211,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
     loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const page = await fetchRows(tableId, cursor, includeDeleted);
+      const page = await fetchRows(tableId, cursor, includeDeleted, sort);
       if (view.current !== viewRequest || rowsRequest.current !== request) return;
       setRows(old => {
         const seen = new Set(old.map(row => row._row_id));
@@ -184,7 +226,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
         setLoadingMore(false);
       }
     }
-  }, [cursor, fetchRows, includeDeleted, table]);
+  }, [cursor, fetchRows, includeDeleted, sort, table]);
 
   const refreshMetadata = useCallback(async () => {
     if (!table) return;
@@ -207,6 +249,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
     setTable(null);
     setRows([]);
     setCursor(null);
+    setSort(null);
     setError(null);
   }, []);
 
@@ -215,12 +258,14 @@ export function useTableSession(api: API, apiPage: APIPage) {
     rows,
     setRows,
     cursor,
+    sort,
     includeDeleted,
     loading,
     loadingMore,
     error,
     open,
     refresh,
+    changeSort,
     loadMore,
     refreshMetadata,
     clear,
@@ -233,8 +278,12 @@ export function useSearch(apiPage: APIPage) {
   const [query, setQuery] = useState('');
   const [path, setPath] = useState('/**');
   const [filterText, setFilterText] = useState('');
+  const [limit, setLimit] = useState(SEARCH_LIMIT);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [meta, setMeta] = useState<SearchMeta>({});
+  // The cap actually sent with the results on screen, so "最多 N 条" never
+  // drifts from the hits while a changed limit has not been rerun yet.
+  const [resultLimit, setResultLimit] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
   const [ran, setRan] = useState(false);
@@ -262,7 +311,7 @@ export function useSearch(apiPage: APIPage) {
         const body: Record<string, unknown> = {
           query: text,
           path: scope,
-          limit: SEARCH_LIMIT,
+          limit,
           filters: {...parsed.filters, ...(overrides.filters || {})},
         };
         if (endpoint === '/search/semantic') body.mode = mode === 'quality' ? 'quality' : 'fast';
@@ -270,17 +319,19 @@ export function useSearch(apiPage: APIPage) {
         if (request !== generation.current) return;
         setHits(page.data as SearchHit[]);
         setMeta(page.meta as SearchMeta);
+        setResultLimit(limit);
       } catch (cause) {
         if (request === generation.current) {
           setHits([]);
           setMeta({});
+          setResultLimit(null);
           setError(cause);
         }
       } finally {
         if (request === generation.current) setRunning(false);
       }
     },
-    [apiPage, filterText, kind, mode, path, query],
+    [apiPage, filterText, kind, limit, mode, path, query],
   );
 
   const changeMode = useCallback((next: SearchMode) => {
@@ -291,6 +342,7 @@ export function useSearch(apiPage: APIPage) {
     setRunning(false);
     setHits([]);
     setMeta({});
+    setResultLimit(null);
     setError(null);
     setRan(false);
   }, []);
@@ -301,11 +353,12 @@ export function useSearch(apiPage: APIPage) {
     setRunning(false);
     setHits([]);
     setMeta({});
+    setResultLimit(null);
     setError(null);
     setRan(false);
   }, []);
 
-  return {resultVersion, mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, hits, meta, error, running, ran, run, reset};
+  return {resultVersion, mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, limit, setLimit, hits, meta, resultLimit, error, running, ran, run, reset};
 }
 
 export function useQueryConsole(apiPage: APIPage, subject: string | null, identityVerified = Boolean(subject), authEpoch = 0) {
@@ -488,6 +541,7 @@ export function useTheorems(apiPage: APIPage) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [searchResults, setSearchResults] = useState<Theorem[] | null>(null);
+  const [searchPartial, setSearchPartial] = useState(false);
   const [selected, setSelected] = useState<Theorem | null>(null);
   const [relations, setRelations] = useState<{dependencies: any[]; dependents: any[]; evidence: any[]} | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -504,6 +558,7 @@ export function useTheorems(apiPage: APIPage) {
       const page = await apiPage('/theorems?limit=50');
       if (request !== listGeneration.current) return;
       setSearchResults(null);
+      setSearchPartial(false);
       setItems(page.data as Theorem[]);
       setCursor((page.meta.next_cursor as string) || null);
     } catch (cause) {
@@ -530,15 +585,18 @@ export function useTheorems(apiPage: APIPage) {
   }, [apiPage, cursor]);
 
   const search = useCallback(
-    async (query: string) => {
+    async (query: string, reviewStatus = '') => {
+      if (!query.trim()) return;
       const request = ++listGeneration.current;
       setLoading(true);
       setLoadingMore(false);
       setError(null);
+      setSearchPartial(false);
       try {
-        const page = await apiPage('/theorems/search', {method: 'POST', body: JSON.stringify({query, limit: 50})});
+        const page = await apiPage('/theorems/search', {method: 'POST', body: JSON.stringify({query: query.trim(), limit: 50, ...(reviewStatus ? {review_status: reviewStatus} : {})})});
         if (request !== listGeneration.current) return;
         setSearchResults(page.data as Theorem[]);
+        setSearchPartial(page.meta.partial === true);
       } catch (cause) {
         if (request === listGeneration.current) setError(cause);
       } finally {
@@ -579,6 +637,7 @@ export function useTheorems(apiPage: APIPage) {
   const clearSearch = useCallback(() => {
     ++listGeneration.current;
     setSearchResults(null);
+    setSearchPartial(false);
     setError(null);
     setLoading(false);
     setLoadingMore(false);
@@ -595,6 +654,7 @@ export function useTheorems(apiPage: APIPage) {
   return {
     items,
     searchResults,
+    searchPartial,
     selected,
     relations,
     detailLoading,
