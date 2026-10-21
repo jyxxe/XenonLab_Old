@@ -42,9 +42,13 @@ export function Inspector({
   onReloadRow,
   onToggleFavorite,
   onClose,
+  tab: controlledTab,
+  onTabChange,
   uploadStore,
   identityKey = '',
 }: {
+  tab?: InspectorTab;
+  onTabChange?: (tab: InspectorTab) => void;
   table: Table;
   columns: Column[];
   row: Row | null;
@@ -69,7 +73,12 @@ export function Inspector({
   uploadStore?: UploadStore;
   identityKey?: string;
 }) {
-  const [tab, setTab] = useState<InspectorTab>('overview');
+  const [localTab, setLocalTab] = useState<InspectorTab>('overview');
+  const tab = controlledTab ?? localTab;
+  const setTab = (next: InspectorTab) => {
+    setLocalTab(next);
+    onTabChange?.(next);
+  };
   const [draft, setDraft] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
