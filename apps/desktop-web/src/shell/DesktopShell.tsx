@@ -16,6 +16,7 @@ import {
   clampRect,
   defaultRect,
   focusWindow,
+  stableWindowOrder,
   halfScreenPlacement,
   LEGACY_XELIBRARY_APP_ID,
   migrateLegacyAppReferences,
@@ -698,7 +699,7 @@ export function DesktopShell({
       />
 
       <div className="window-layer">
-        {windows.map(win => {
+        {stableWindowOrder(windows).map(win => {
           const app = apps.find(item => item.id === win.app_id);
           if (!app) return null;
           const index = windows.indexOf(win);
