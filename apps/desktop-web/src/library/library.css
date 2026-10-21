@@ -27,7 +27,7 @@
 .library-mini-list li>button:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;border:0;background:transparent;color:var(--text-secondary);cursor:pointer;padding:var(--spacing-1);border-radius:var(--radius-control);font-size:var(--font-size-sm)}
 .library-mini-list li>button:first-child:hover{background:var(--control);color:var(--text-primary)}
 .library-mini-list li>button.library-recent-theorem{display:flex;align-items:center;gap:var(--spacing-1)}
-.library-recent-theorem>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-recent-theorem>.library-recent-title{display:flex;align-items:center;gap:var(--spacing-1);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .library-recent-theorem>.library-recent-identifier{flex-shrink:0;max-width:60%;white-space:normal;overflow-wrap:anywhere}
 .library-tree{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px}
 .library-tree-node,.library-tree-table{display:flex;align-items:center;gap:var(--spacing-2);width:100%;padding:5px var(--spacing-2);border:0;border-radius:var(--radius-control);background:transparent;color:var(--text-primary);cursor:pointer;text-align:left;font-size:var(--font-size-md)}

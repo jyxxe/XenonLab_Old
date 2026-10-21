@@ -48,18 +48,18 @@ test('theorem recents show real titles and visible stable identifiers with origi
     await fs.mkdir(evidence, {recursive: true});
     await go('recent-distinct');
     await page.locator('.library-theorem-list button').nth(0).click();
-    await recent.getByRole('button', {name: '⊢ 一致收敛定理', exact: true}).waitFor();
+    await recent.getByRole('button', {name: '一致收敛定理', exact: true}).waitFor();
     await page.locator('.library-theorem-list button').nth(1).click();
-    await recent.getByRole('button', {name: '⊢ 极限唯一性定理', exact: true}).waitFor();
+    await recent.getByRole('button', {name: '极限唯一性定理', exact: true}).waitFor();
     assert.equal(await recent.locator('button.library-recent-theorem').count(), 2);
-    await originalID('thm-1', () => recent.getByRole('button', {name: '⊢ 一致收敛定理', exact: true}).click());
-    const second = recent.getByRole('button', {name: '⊢ 极限唯一性定理', exact: true});
+    await originalID('thm-1', () => recent.getByRole('button', {name: '一致收敛定理', exact: true}).click());
+    const second = recent.getByRole('button', {name: '极限唯一性定理', exact: true});
     await second.focus();
     await originalID('thm-2', () => page.keyboard.press('Enter'));
     await page.screenshot({path: path.join(evidence, 'distinct-titles.png'), fullPage: true});
     await page.reload();
-    await recent.getByRole('button', {name: '⊢ 一致收敛定理', exact: true}).waitFor();
-    assert.equal(await recent.getByRole('button', {name: '⊢ 极限唯一性定理', exact: true}).count(), 1, 'saved titles survive reload');
+    await recent.getByRole('button', {name: '一致收敛定理', exact: true}).waitFor();
+    assert.equal(await recent.getByRole('button', {name: '极限唯一性定理', exact: true}).count(), 1, 'saved titles survive reload');
 
     const longTitle = '同名且很长的定理标题'.repeat(8);
     await go('recent-duplicates', longTitle);
@@ -86,10 +86,10 @@ test('theorem recents show real titles and visible stable identifiers with origi
       {kind: 'theorem', id: 'thm-2', title: '', at: 1},
     ])));
     await page.reload();
-    for (const id of ['thm-1', 'thm-2']) await recent.getByRole('button', {name: `⊢ 定理 · ${id}`, exact: true}).waitFor();
+    for (const id of ['thm-1', 'thm-2']) await recent.getByRole('button', {name: `定理 · ${id}`, exact: true}).waitFor();
     assert.equal(await page.evaluate(() => window.libraryFixture.calls.some(call => call.path.startsWith('/theorems'))), false);
-    await originalID('thm-1', () => recent.getByRole('button', {name: '⊢ 定理 · thm-1', exact: true}).click());
-    await recent.getByRole('button', {name: '⊢ 定理 · thm-2', exact: true}).focus();
+    await originalID('thm-1', () => recent.getByRole('button', {name: '定理 · thm-1', exact: true}).click());
+    await recent.getByRole('button', {name: '定理 · thm-2', exact: true}).focus();
     await originalID('thm-2', () => page.keyboard.press('Space'));
     await page.screenshot({path: path.join(evidence, 'legacy-titles.png'), fullPage: true});
 
@@ -97,7 +97,7 @@ test('theorem recents show real titles and visible stable identifiers with origi
     await go('recent-missing-title', '');
     await page.locator('.library-theorem-list button').nth(0).click();
     await page.locator('.library-theorem-list button').nth(1).click();
-    for (const id of ['thm-1', 'thm-2']) await recent.getByRole('button', {name: `⊢ 定理 · ${id}`, exact: true}).waitFor();
+    for (const id of ['thm-1', 'thm-2']) await recent.getByRole('button', {name: `定理 · ${id}`, exact: true}).waitFor();
     await go('recent-search');
     await page.getByRole('searchbox', {name: '搜索定理'}).fill('一致收敛');
     await page.getByRole('searchbox', {name: '搜索定理'}).press('Enter');
@@ -105,10 +105,10 @@ test('theorem recents show real titles and visible stable identifiers with origi
     await page.evaluate(() => {window.libraryFixture.state.denyTheoremRelations = true;});
     await page.locator('.library-theorem-list button').first().click();
     await detail.getByText('XL_FORBIDDEN', {exact: false}).waitFor();
-    await recent.getByRole('button', {name: '⊢ 一致收敛定理', exact: true}).waitFor();
+    await recent.getByRole('button', {name: '一致收敛定理', exact: true}).waitFor();
     await page.evaluate(() => {window.libraryFixture.state.denyTheoremRelations = false;});
     await originalID('thm-1', () => detail.getByRole('button', {name: '重试', exact: true}).click());
-    assert.equal(await recent.getByRole('button', {name: '⊢ 一致收敛定理', exact: true}).count(), 1);
+    assert.equal(await recent.getByRole('button', {name: '一致收敛定理', exact: true}).count(), 1);
 
     // Real UUID lengths exercise both the normal suffix and complete-ID collision fallback.
     // These historical synthetic records test rendering only, not backend existence or access.

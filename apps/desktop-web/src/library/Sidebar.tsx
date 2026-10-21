@@ -130,7 +130,7 @@ export function LibrarySidebar({
                 return (
                   <li key={`${entry.kind}:${entry.id}`}>
                     <button type="button" className={entry.kind === 'theorem' ? 'library-recent-theorem' : undefined} onClick={() => onOpenEntry(entry)} title={label}>
-                      <Icon value={entry.kind === 'table' ? 'library' : entry.kind === 'row' ? 'rows' : entry.kind === 'theorem' ? 'theorem' : 'home'} size={16} /> {title}
+                      <span className="library-recent-title"><Icon value={entry.kind === 'table' ? 'library' : entry.kind === 'row' ? 'rows' : entry.kind === 'theorem' ? 'theorem' : 'home'} size={16} /> {title}</span>
                       {identifier && <span className="library-recent-identifier"> · {identifier}</span>}
                     </button>
                   </li>
