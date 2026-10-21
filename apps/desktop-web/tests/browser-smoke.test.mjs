@@ -67,6 +67,7 @@ test('headless browser smoke: synthetic login, Knowledge and Work paging, recove
       }
       if (apiPath === '/auth/session/logout') {state.logoutMethods.push(request.method()); state.mode = 'anonymous'; return route.fulfill({json: {}});}
       if (apiPath === '/users/me') return route.fulfill({json: {data: {subject: 'ci-smoke-user', kind: 'human', scopes: ['desktop:read', 'xelibrary:read', 'dev:read']}, meta: {request_id: 'ci-smoke'}}});
+      if (apiPath === '/users/me/plugin-widgets') return route.fulfill({json: {data: [], meta: {request_id: 'ci-smoke'}}});
       if (apiPath === '/users/me/preferences') return route.fulfill({json: {data: {theme: 'dark', accent: 'blue', wallpaper: 'silver', timezone: 'UTC', widgets: [], dock_size: 'medium', dock_autohide: false, restore_windows: true, animations: false, reduced_motion: true}, meta: {request_id: 'ci-smoke'}}});
       if (apiPath === '/users/me/layout') {
         if (request.method() === 'PUT') {
