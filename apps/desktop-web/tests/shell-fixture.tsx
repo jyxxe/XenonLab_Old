@@ -20,8 +20,9 @@ const registry:any[]=legacyRegistry;
 const tables=[
   {id:'example-table',name:'部署验收',path:'/示例/平台'},
 ];
-const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,
+const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,delayEmbedding:false,embeddingPending:0,qualityReady:false,
   tasksEnabled:scenario !== 'no-task-app',libraryEnabled:true,embeddingTableId:'example-table',tableReadError:'',tableReadDelay:false,releaseTableRead:()=>{}};
+let finishEmbedding: (() => void) | null = null;
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -140,12 +141,19 @@ const apiPage = async (path: string, init?: RequestInit) => {
 const apiRaw = async (path: string, init?: RequestInit) => {
   if (path === '/embed/models') {
     calls.push({method:'GET', path, body:null});
-    return new Response(JSON.stringify({data: [{id: 'D100M-Embedding', alias: 'fast', status: 'ready', dimensions: 256, max_tokens: 128}, {id: 'Qwen/Qwen3-VL-Embedding-2B', alias: 'quality', status: 'not_configured'}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
+    return new Response(JSON.stringify({data: [{id: 'D100M-Embedding', alias: 'fast', status: 'ready', dimensions: 256, max_tokens: 128}, {id: 'Qwen/Qwen3-VL-Embedding-2B', alias: 'quality', status: control.qualityReady ? 'ready' : 'not_configured'}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   if (path === '/embed/text' && init?.method === 'POST') {
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : null;
     calls.push({method:'POST', path, body});
-    if (control.busyEmbedding) return new Response(JSON.stringify({error:{message:'D100M worker busy; retry later'}}), {status:429, headers:{'Content-Type':'application/json'}});
+    const busy = control.busyEmbedding;
+    if (control.delayEmbedding) {
+      control.embeddingPending += 1;
+      await new Promise<void>(resolve => { finishEmbedding = resolve; });
+      control.embeddingPending -= 1;
+      finishEmbedding = null;
+    }
+    if (busy) return new Response(JSON.stringify({error:{message:'D100M worker busy; retry later'}}), {status:429, headers:{'Content-Type':'application/json'}});
     return new Response(JSON.stringify({model: 'D100M-Embedding', data: [{embedding: [0.125, -0.5, 0.25]}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   if (path === '/users/me/wallpaper' && (!init?.method || init.method === 'GET')) {
@@ -183,6 +191,7 @@ window.fetch = (input, init) => String(input) === '/health/ready'
   layout,
   loggedOut: false,
   resetCalls: () => calls.splice(0, calls.length),
+  resolveEmbedding: () => finishEmbedding?.(),
 };
 
 const root = createRoot(document.getElementById('root')!);
