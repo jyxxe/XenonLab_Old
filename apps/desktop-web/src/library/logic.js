@@ -222,9 +222,9 @@ export function classifySchemaChange(current = [], draft = []) {
   };
 }
 
-/** Parse `field = value` lines used by search filters into an exact-match dict. */
+/** Parse exact-match filters: JSON literals retain types; ordinary text is a string. */
 export function parseFieldFilters(text) {
-  const filters = {};
+  const entries = [];
   const errors = [];
   for (const line of String(text || '').split(/\n+/)) {
     const trimmed = line.trim();
@@ -234,9 +234,27 @@ export function parseFieldFilters(text) {
       errors.push(`无法解析「${trimmed}」，请使用 字段 = 值`);
       continue;
     }
-    filters[match[1]] = match[2];
+    const raw = match[2];
+    let value = raw;
+    if (/^(?:"|\[|\{|[+-]?(?:\d|\.\d)|true$|false$|null$|NaN$|[+-]?Infinity$)/.test(raw)) {
+      try {
+        value = JSON.parse(raw);
+        const pending = [value];
+        while (pending.length) {
+          const item = pending.pop();
+          if (typeof item === 'number' && (!Number.isFinite(item) || (Number.isInteger(item) && !Number.isSafeInteger(item)))) {
+            throw new Error('数值必须有限，整数必须在 JavaScript 安全整数范围内');
+          }
+          if (item && typeof item === 'object') pending.push(...Object.values(item));
+        }
+      } catch (cause) {
+        errors.push(`字段「${match[1]}」的 JSON 值无效：${cause.message}；字符串请使用双引号`);
+        continue;
+      }
+    }
+    entries.push([match[1], value]);
   }
-  return {filters, errors};
+  return {filters: Object.fromEntries(entries), errors};
 }
 
 /** Choices offered for the search `limit` field; the API contract caps at 100. */
