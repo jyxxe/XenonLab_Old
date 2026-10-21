@@ -1,0 +1,73 @@
+<!doctype html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<link rel="stylesheet" href="/src/design-system/tokens.css"/><link rel="stylesheet" href="/src/design-system/primitives.css"/>
+<link rel="stylesheet" href="/src/shell/shell.css"/><link rel="stylesheet" href="/src/style.css"/>
+<style>.plugin-widget-fixture{position:static;width:280px;max-height:none;margin:16px;overflow:visible}</style>
+<title>Plugin panel acceptance fixture</title></head>
+<body><div id="root"></div><script type="module">
+import React, {useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {Plugins} from '/src/Plugins.tsx';
+import {PluginWidget} from '/src/Widgets.tsx';
+
+const admin = new URLSearchParams(location.search).has('admin');
+const helloWidget = {id:'hello-widget', title:'Hello widget', origin:'https://plugin.example.test', entry:'/widget', icon:'◈', height:180};
+const catalog = [{
+  id:'hello-plugin', name:'Hello plugin', version:'1.0.0', description:'Example declarative plugin', author:'OpenCode', homepage:'', icon:'◈',
+  permissions:['xelibrary:read'], revision:1, published_at:0, updated_at:0,
+  app:{id:'hello-app', title:'Hello app', origin:'https://plugin.example.test', entry:'/', icon:'◈', default_size:[900,600], singleton:true, sandbox:{allow_scripts:true, allow_forms:true, allow_downloads:false}},
+  widget:helloWidget,
+}, {
+  id:'plain-widget', name:'Plain widget', version:'1.0.0', description:'Widget only', author:'OpenCode', homepage:'', icon:'◈',
+  permissions:[], revision:1, published_at:0, updated_at:0, app:null,
+  widget:{...helloWidget, id:'plain', title:'Plain widget', entry:'/plain'},
+}];
+const installed = new Set();
+const enabled = new Map();
+const calls = [];
+window.__pluginFixture = {calls, installed, enabled};
+const project = plugin => ({...plugin, installed:installed.has(plugin.id), enabled:enabled.get(plugin.id) ?? false,
+  installed_app:installed.has(plugin.id) && Boolean(plugin.app), installed_widget:installed.has(plugin.id) && Boolean(plugin.widget),
+  installed_version:installed.has(plugin.id) ? plugin.version : null, installed_at:installed.has(plugin.id) ? 0 : null,
+  missing_scopes:[], update_available:false});
+const api = async (path, init={}) => {
+  const method = (init.method || 'GET').toUpperCase();
+  calls.push([path, method]);
+  if (path === '/plugins' && method === 'GET') return catalog.map(project);
+  if (path === '/users/me') return {subject:'fixture', scopes:['desktop:read','xelibrary:read', ...(admin ? ['desktop:admin'] : [])]};
+  if (path === '/plugins' && method === 'POST') {
+    const body = JSON.parse(init.body);
+    const item = {...body, revision:1, published_at:0, updated_at:0, permissions:body.permissions || [], app:body.app || null, widget:body.widget || null};
+    catalog.push(item);
+    return project(item);
+  }
+  const match = path.match(/^\/plugins\/([^/]+)\/install$/);
+  if (match) {
+    const id = match[1];
+    if (method === 'POST') {installed.add(id); enabled.set(id, true);}
+    if (method === 'DELETE') {installed.delete(id); enabled.delete(id);}
+    if (method === 'PATCH') enabled.set(id, Boolean(JSON.parse(init.body).enabled));
+    return project(catalog.find(plugin => plugin.id === id));
+  }
+  throw new Error(`unexpected mock request ${method} ${path}`);
+};
+const basePreferences = {plugin_widgets:[], widgets:['clock'], shortcut_apps:[], notes:'', theme:'system', accent:'blue', wallpaper:'aurora',
+  timezone:'system', dock_size:'medium', dock_autohide:false, restore_windows:true, animations:true, reduced_motion:false};
+function Fixture() {
+  const [preferences, setPreferences] = useState(basePreferences);
+  const applyPreferences = async patch => {
+    calls.push(['preferences', patch]);
+    setPreferences(current => ({...current, ...patch}));
+  };
+  const refreshApps = async () => {calls.push(['refreshApps', 'GET']);};
+  return React.createElement('div', {className:'plugin-fixture'},
+    React.createElement(Plugins, {api, preferences, applyPreferences, refreshApps}),
+    React.createElement('div', {className:'widgets plugin-widget-fixture'},
+      preferences.plugin_widgets.map(id => {
+        const plugin = catalog.find(item => item.id === id);
+        if (!plugin || !plugin.widget) return null;
+        return React.createElement(PluginWidget, {key:id, widget:{...plugin.widget, plugin_id:plugin.id, plugin_name:plugin.name, plugin_version:plugin.version, permissions:plugin.permissions}});
+      })));
+}
+createRoot(document.getElementById('root')).render(React.createElement(Fixture));
+</script></body></html>

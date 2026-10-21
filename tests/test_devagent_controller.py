@@ -479,6 +479,62 @@ def test_superseded_merged_commit_is_not_a_deployment_candidate(tmp_path):
     assert list(controller.publication_events(Fake(), state))[0][1]['state'] == 'superseded'
 
 
+def test_failed_publication_is_upgraded_only_by_exact_root_receipt(tmp_path, monkeypatch):
+    state = controller.State(tmp_path)
+    operation_id, head, commit = 'd' * 32, 'a' * 40, 'b' * 40
+    state.db.execute('INSERT INTO publications(number,head,commit_sha,operation_id) VALUES(1,?,?,?)',
+                     (head, commit, operation_id))
+    state.db.commit()
+    operation = {'id': operation_id, 'state': 'failed', 'result': None}
+    receipt = {'receipt_id': 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'state': 'operator_aborted', 'operation_id': operation_id,
+               'number': 1, 'head': head, 'commit': commit, 'baseline_commit': 'f' * 40,
+               'evidence': {}}
+    calls = []
+
+    def protected(action, args):
+        calls.append((action, args))
+        return operation if action == 'operation' else receipt
+
+    monkeypatch.setattr(controller, 'protected_request', protected)
+    event = list(controller.publication_events(object(), state))[0]
+    assert event[1]['state'] == 'operator_aborted'
+    assert event[1]['operation'] == operation and event[1]['recovery'] == receipt
+    assert calls == [('operation', [operation_id]), ('publication-recovery', [operation_id])]
+    assert state.observe(*event)
+    assert json.loads(state.db.execute('SELECT evidence FROM publications').fetchone()[0])['state'] == 'operator_aborted'
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda value: value.update(number=2),
+    lambda value: value.update(head='c' * 40),
+    lambda value: value.update(commit='c' * 40),
+    lambda value: value.update(operation_id='c' * 32),
+    lambda value: value.update(receipt_id='bad'),
+])
+def test_previous_failed_publication_requires_matching_root_receipt(tmp_path, monkeypatch, mutate):
+    state = controller.State(tmp_path)
+    operation_id, head, commit = 'd' * 32, 'a' * 40, 'b' * 40
+    state.db.execute('INSERT INTO publications(number,head,commit_sha,operation_id) VALUES(1,?,?,?)',
+                     (head, commit, operation_id))
+    state.db.commit()
+    receipt = {'receipt_id': 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'state': 'operator_aborted', 'operation_id': operation_id,
+               'number': 1, 'head': head, 'commit': commit, 'baseline_commit': 'f' * 40,
+               'evidence': {}}
+    monkeypatch.setattr(controller, 'protected_request', lambda *args: receipt)
+    assert controller.previous_publications_resolved(state, 2)
+    mutate(receipt)
+    assert not controller.previous_publications_resolved(state, 2)
+
+
+def test_failed_publication_without_operation_or_receipt_remains_blocking(tmp_path, monkeypatch):
+    state = controller.State(tmp_path)
+    state.db.execute('INSERT INTO publications(number,head,commit_sha,evidence) VALUES(1,?,?,?)',
+                     ('a' * 40, 'b' * 40, json.dumps({'state': 'terminal', 'operation': {'state': 'failed'}})))
+    state.db.commit()
+    monkeypatch.setattr(controller, 'protected_request', lambda *args: pytest.fail('No op id, no receipt lookup'))
+    assert not controller.previous_publications_resolved(state, 2)
+
+
 @pytest.mark.parametrize('operation_state', ['running', 'completed', 'failed', 'interrupted'])
 def test_repeated_deploy_uses_recorded_operation_instead_of_resubmission(tmp_path, monkeypatch, capsys, operation_state):
     state = controller.State(tmp_path)
