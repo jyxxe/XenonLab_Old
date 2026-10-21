@@ -546,6 +546,22 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
   return lines.join('\n');
 }
 
+/** Resolve a local field order against the current schema; system fields stay outside it. */
+export function orderedColumns(columns, preference) {
+  const byName = new Map(columns.map(column => [column.name, column]));
+  const names = Array.isArray(preference) ? preference.filter(name => typeof name === 'string' && byName.has(name)) : [];
+  return [...new Set([...names, ...columns.map(column => column.name)])].map(name => byName.get(name));
+}
+
+export function moveColumn(columns, preference, name, direction) {
+  const names = orderedColumns(columns, preference).map(column => column.name);
+  const index = names.indexOf(name);
+  const next = index + direction;
+  if (index < 0 || next < 0 || next >= names.length || ![1, -1].includes(direction)) return names;
+  [names[index], names[next]] = [names[next], names[index]];
+  return names;
+}
+
 /** Shared pixel preference limits for both pointer and keyboard column resizing. */
 export function clampColumnWidth(width) {
   return Math.max(80, Math.min(520, Number.isFinite(width) ? width : 160));

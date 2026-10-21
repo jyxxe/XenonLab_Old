@@ -288,6 +288,25 @@ test('filtered path matches reveal descendants and support transient explicit co
   assert.deepEqual([...collapsed], ['/数学']);
 });
 
+test('field display order binds original schema objects, appends new fields and ignores removed/duplicate names', async () => {
+  const {orderedColumns} = await import('../src/library/logic.js');
+  const columns = [{name: 'title', type: 'string'}, {name: 'files', type: 'json'}, {name: 'new', type: 'bool'}];
+  const result = orderedColumns(columns, ['files', 'removed', 'files', 3, '_row_id', 'title']);
+  assert.deepEqual(result.map(column => column.name), ['files', 'title', 'new']);
+  assert.equal(result[0], columns[1]);
+  for (const invalid of [null, {}, 'files']) assert.deepEqual(orderedColumns(columns, invalid), columns);
+  assert.deepEqual(orderedColumns(columns, []), columns);
+});
+
+test('moving a field preserves other fields, handles both boundaries and leaves schema unchanged', async () => {
+  const {moveColumn} = await import('../src/library/logic.js');
+  const columns = [{name: 'a'}, {name: 'b'}, {name: 'c'}];
+  assert.deepEqual(moveColumn(columns, [], 'c', -1), ['a', 'c', 'b']);
+  assert.deepEqual(moveColumn(columns, ['c', 'a', 'b'], 'c', 1), ['a', 'c', 'b']);
+  for (const [name, direction] of [['a', -1], ['c', 1], ['missing', 1], ['b', 2]]) assert.deepEqual(moveColumn(columns, [], name, direction), ['a', 'b', 'c']);
+  assert.deepEqual(columns, [{name: 'a'}, {name: 'b'}, {name: 'c'}]);
+});
+
 test('search limit options stay aligned with the API contract and default', () => {
   assert.deepEqual(SEARCH_LIMIT_OPTIONS, [25, 50, 100]);
 });
