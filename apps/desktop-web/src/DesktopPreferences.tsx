@@ -1,3 +1,4 @@
+import {Icon} from './design-system/Icon';
 import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
 import type {APIRaw, DesktopApp, PreferenceApplyOptions, UserPreferences, WallpaperMode} from './shell/types';
@@ -16,6 +17,7 @@ export const defaultPreferences: UserPreferences = {
   wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
+  plugin_widgets: [],
   shortcut_apps: [],
   notes: '',
   dock_size: 'medium',
@@ -24,6 +26,10 @@ export const defaultPreferences: UserPreferences = {
   animations: true,
   reduced_motion: false,
 };
+
+// Reset appearance without submitting user-authored content or a stale note snapshot.
+const defaultAppearancePreferences: Partial<UserPreferences> = {...defaultPreferences};
+delete defaultAppearancePreferences.notes;
 
 const widgetOptions: Array<[UserPreferences['widgets'][number], string]> = [
   ['clock', '时钟与日期'],
@@ -287,7 +293,7 @@ export function DesktopPreferences({
                 void update({shortcut_apps: next});
               }}
             />
-            {app.icon} {app.title}
+            <Icon value={app.icon} size={16} /> {app.title}
           </label>)}
           {!apps.length && <p className="muted">当前没有可用的授权应用。</p>}
         </fieldset>}
@@ -337,15 +343,15 @@ export function DesktopPreferences({
             const index = dockIds.indexOf(app.id);
             return <li key={app.id}>
               <label><input type="checkbox" checked={index >= 0} onChange={() => togglePin(app.id)} />{app.title}</label>
-              <Button size="sm" aria-label={`向前移动 ${app.title}`} disabled={index <= 0} onClick={() => movePinned(app.id, -1)}>↑</Button>
-              <Button size="sm" aria-label={`向后移动 ${app.title}`} disabled={index < 0 || index === dockIds.length - 1} onClick={() => movePinned(app.id, 1)}>↓</Button>
+              <Button size="sm" aria-label={`向前移动 ${app.title}`} disabled={index <= 0} onClick={() => movePinned(app.id, -1)}><Icon value="arrow-up" size={16} /></Button>
+              <Button size="sm" aria-label={`向后移动 ${app.title}`} disabled={index < 0 || index === dockIds.length - 1} onClick={() => movePinned(app.id, 1)}><Icon value="arrow-down" size={16} /></Button>
             </li>;
           })}
         </ul>
       </Panel>
 
       <div className="preference-actions">
-        <Button onClick={() => update(defaultPreferences)}>恢复默认外观</Button>
+        <Button onClick={() => update(defaultAppearancePreferences)}>恢复默认外观</Button>
       </div>
 
       <Panel title="窗口布局" actions={<Badge tone="accent">自动保存</Badge>}>
