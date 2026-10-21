@@ -127,8 +127,9 @@ test('query drafts are subject isolated, recover from storage errors, and never 
     assert.equal(await page.evaluate(key => JSON.parse(localStorage.getItem(key)).draft.expression, bobKey), bobDraft);
 
     await page.goto(url('__none__'));
-    await openQuery();
-    await setExpression('FROM "/**" LIMIT 5');
+    await page.getByRole('alert').filter({hasText: '无法确认知识库身份'}).waitFor();
+    assert.equal(await page.locator('.library-query-editor').count(), 0);
+    assert.equal(await queryCalls(), 0, 'unverified identity cannot execute queries');
     const anonymousTouches = await page.evaluate(() => window.__storageTouches.filter(([, key]) => key.includes('.anonymous.')));
     assert.deepEqual(anonymousTouches, [], 'unverified identity does not read or write shared anonymous preferences');
 
@@ -258,13 +259,14 @@ test('trusted same-page session change revalidates identity and discards an old 
       data: {type: 'auth.session_changed', access_token: 'bob-token-1'},
     })));
     await bobIdentityStartedPromise;
-    await page.waitForFunction(() => document.querySelector('.library-query-history')?.textContent.includes('身份正在验证'));
-    assert.equal(await editor.inputValue(), 'FROM "/**" LIMIT 100', 'unverified transition hides the previous account draft immediately');
-    assert.equal(await page.getByRole('button', {name: '运行'}).isDisabled(), true, 'queries stay disabled while the new identity is unverified');
+    await page.getByRole('status').filter({hasText: '正在确认知识库身份'}).waitFor();
+    assert.equal(await editor.count(), 0, 'unverified transition removes the previous account draft immediately');
+    assert.equal(await page.getByRole('button', {name: '运行'}).count(), 0, 'unverified identity has no executable query control');
     releaseBobIdentity();
     await bobIdentityResponse;
     holdBobIdentity = false;
-    await page.waitForFunction(() => !document.querySelector('.library-query-history')?.textContent.includes('身份正在验证'));
+    await page.locator('.library-nav button').filter({hasText: '查询控制台'}).click();
+    await editor.waitFor();
     assert.ok(requests.some(request => request.path === '/users/me' && request.token === 'bob-token-1'), 'the new token is verified through the protected identity API');
     releaseAliceQuery();
     await page.waitForTimeout(100);
@@ -297,6 +299,7 @@ test('trusted same-page session change revalidates identity and discards an old 
       data: {type: 'auth.session_changed', access_token: 'bob-token-2'},
     })));
     await bobRefreshIdentityResponse;
+    await page.locator('.library-nav button').filter({hasText: '查询控制台'}).click();
     await page.waitForFunction(expression => document.querySelector('.library-query-editor')?.value === expression, bobExpression);
     assert.equal(await editor.inputValue(), bobExpression, 'same-user session refresh restores that subject’s draft');
     assert.equal(await page.locator('.library-query-results').count(), 0, 'session change clears old result rows even for the same subject');

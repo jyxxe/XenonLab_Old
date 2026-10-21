@@ -1,10 +1,21 @@
+import {stringifyExactJSON} from './json.js';
 /**
  * Pure helpers for the XeLibrary application. Kept as plain JS so the Node test
  * runner can exercise them without a bundler.
  */
 
 export function formatNumber(value) {
+  if (typeof value === 'bigint') return value.toLocaleString('zh-CN');
   return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
+}
+
+/** Inclusive range in the current loaded view, independent of virtual mounting. */
+export function rowSelectionRange(visibleIds, anchorId, targetId) {
+  const to = visibleIds.indexOf(targetId);
+  if (to < 0) return [];
+  const from = visibleIds.indexOf(anchorId);
+  if (from < 0) return [targetId];
+  return visibleIds.slice(Math.min(from, to), Math.max(from, to) + 1);
 }
 
 export function formatBytes(value) {
@@ -34,16 +45,16 @@ export function relativeTime(value, now = Date.now()) {
 export function sortableValue(value) {
   if (value === null || value === undefined) return [0, ''];
   if (typeof value === 'boolean') return [1, value ? 1 : 0];
-  if (typeof value === 'number') return [2, value];
+  if (typeof value === 'number' || typeof value === 'bigint') return [2, value];
   if (typeof value === 'string') return [3, value];
-  return [4, JSON.stringify(value)];
+  return [4, stringifyExactJSON(value)];
 }
 
 function compare(left, right) {
   const a = sortableValue(left);
   const b = sortableValue(right);
   if (a[0] !== b[0]) return a[0] - b[0];
-  if (a[1] === b[1]) return 0;
+  if (a[1] === b[1] || (a[0] === 2 && a[1] >= b[1] && a[1] <= b[1])) return 0;
   return a[1] > b[1] ? 1 : -1;
 }
 
@@ -73,7 +84,7 @@ export function filterRows(rows, query) {
     if (row._row_id.toLowerCase().includes(needle)) return true;
     return Object.values(row.values || {}).some(value => {
       if (value === null || value === undefined) return false;
-      return String(typeof value === 'object' ? JSON.stringify(value) : value).toLowerCase().includes(needle);
+      return String(typeof value === 'object' ? stringifyExactJSON(value) : value).toLowerCase().includes(needle);
     });
   });
 }
@@ -117,6 +128,18 @@ export function filterTree(node, needle) {
   const clone = {...node, children, tables: matchesSelf ? node.tables : tables};
   clone.count = clone.tables.length + clone.children.reduce((total, child) => total + child.count, 0);
   return clone;
+}
+
+/** Default expansion for a filtered tree, with only this filter's explicit collapses. */
+export function filteredTreeExpansion(root, collapsed = new Set()) {
+  const expanded = new Set();
+  const visit = node => {
+    if (!node) return;
+    if (!collapsed.has(node.path)) expanded.add(node.path);
+    for (const child of node.children) visit(child);
+  };
+  visit(root);
+  return expanded;
 }
 
 /** Depth-first list of visible tree rows for rendering; tables render at their node. */
@@ -199,9 +222,9 @@ export function classifySchemaChange(current = [], draft = []) {
   };
 }
 
-/** Parse `field = value` lines used by search filters into an exact-match dict. */
+/** Parse exact-match filters: JSON literals retain types; ordinary text is a string. */
 export function parseFieldFilters(text) {
-  const filters = {};
+  const entries = [];
   const errors = [];
   for (const line of String(text || '').split(/\n+/)) {
     const trimmed = line.trim();
@@ -211,9 +234,36 @@ export function parseFieldFilters(text) {
       errors.push(`无法解析「${trimmed}」，请使用 字段 = 值`);
       continue;
     }
-    filters[match[1]] = match[2];
+    const raw = match[2];
+    let value = raw;
+    if (/^(?:"|\[|\{|[+-]?(?:\d|\.\d)|true$|false$|null$|NaN$|[+-]?Infinity$)/.test(raw)) {
+      try {
+        value = JSON.parse(raw);
+        const pending = [value];
+        while (pending.length) {
+          const item = pending.pop();
+          if (typeof item === 'number' && (!Number.isFinite(item) || (Number.isInteger(item) && !Number.isSafeInteger(item)))) {
+            throw new Error('数值必须有限，整数必须在 JavaScript 安全整数范围内');
+          }
+          if (item && typeof item === 'object') pending.push(...Object.values(item));
+        }
+      } catch (cause) {
+        errors.push(`字段「${match[1]}」的 JSON 值无效：${cause.message}；字符串请使用双引号`);
+        continue;
+      }
+    }
+    entries.push([match[1], value]);
   }
-  return {filters, errors};
+  return {filters: Object.fromEntries(entries), errors};
+}
+
+/** Choices offered for the search `limit` field; the API contract caps at 100. */
+export const SEARCH_LIMIT_OPTIONS = [25, 50, 100];
+
+export function searchResultSummary(limit, hitCount) {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) return null;
+  if (typeof hitCount !== 'number' || !Number.isFinite(hitCount) || hitCount < 1) return null;
+  return `最多 ${limit} 条 · 返回 ${hitCount} 条`;
 }
 
 export function searchWarnings(meta = {}) {
@@ -287,7 +337,7 @@ export function isFavorite(list, entry) {
 
 export function changedFields(before = {}, after = {}) {
   const names = new Set([...Object.keys(before), ...Object.keys(after)]);
-  return [...names].filter(name => JSON.stringify(before[name] ?? null) !== JSON.stringify(after[name] ?? null));
+  return [...names].filter(name => stringifyExactJSON(before[name] ?? null) !== stringifyExactJSON(after[name] ?? null));
 }
 
 export function rowHasAttachment(row, columns = []) {
@@ -426,7 +476,7 @@ const SELECTION_AI_VALUE_LIMIT = 200;
 
 function selectionValueText(value) {
   if (value === null || value === undefined) return '';
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  const text = typeof value === 'object' ? stringifyExactJSON(value) : String(value);
   return text.length > SELECTION_AI_VALUE_LIMIT ? `${text.slice(0, SELECTION_AI_VALUE_LIMIT)}…` : text;
 }
 
@@ -477,4 +527,18 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
     lines.push(`问题：${String(question || '').trim() || '（请在发送前补充你的问题）'}`);
   }
   return lines.join('\n');
+}
+
+/** Shared pixel preference limits for both pointer and keyboard column resizing. */
+export function clampColumnWidth(width) {
+  return Math.max(80, Math.min(520, Number.isFinite(width) ? width : 160));
+}
+
+export function keyboardColumnWidth(width, key, shift = false) {
+  if (key === 'Home') return 80;
+  if (key === 'End') return 520;
+  const step = shift ? 40 : 10;
+  if (key === 'ArrowLeft') return clampColumnWidth(width - step);
+  if (key === 'ArrowRight') return clampColumnWidth(width + step);
+  return null;
 }
