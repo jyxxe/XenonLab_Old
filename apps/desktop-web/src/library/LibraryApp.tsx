@@ -1,11 +1,11 @@
 import {normalizeColumnDefaults, stringifyExactJSON} from './json.js';
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Select, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
 import type {API, APIPage, APIRaw, AppIntent, DesktopApp} from '../shell/types';
 import './library.css';
 import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
-import {TableView, type SortState} from './TableView';
+import {TableView} from './TableView';
 import {createUploadStore} from '../upload-state.js';
 import {Inspector, type ConflictInfo, type InspectorTab} from './Inspector';
 import {SearchView} from './SearchView';
@@ -14,19 +14,11 @@ import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
 import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
+import {createRequestLifetime} from './request-lifetime.js';
 import {ancestorPaths, changedFields, classifySchemaChange, describeError} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
-export function LibraryApp({
-  api,
-  apiPage,
-  apiRaw,
-  intent,
-  apps,
-  openApp,
-  notify,
-  authEpoch = 0,
-}: {
+type LibraryAppProps = {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
@@ -35,8 +27,44 @@ export function LibraryApp({
   openApp?: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
   notify?: (toast: {title: string; tone?: 'info' | 'success' | 'danger'}) => void;
   authEpoch?: number;
-}) {
-  const {scopes, subject, loaded: identityLoaded} = useScopes(api, authEpoch);
+};
+
+export function LibraryApp(props: LibraryAppProps) {
+  const identity = useScopes(props.api, props.authEpoch);
+  if (!identity.loaded) return (
+    <div className="knowledge">
+      <main aria-label="知识库身份验证">
+        <p role="status"><Spinner label="正在确认知识库身份" /> 正在确认知识库身份…</p>
+      </main>
+    </div>
+  );
+  if (!identity.subject) {
+    const error = describeError(identity.error || new Error('当前会话没有已验证的用户身份。'), '确认知识库身份');
+    return (
+      <div className="knowledge">
+        <main aria-label="知识库身份验证">
+          <ErrorState title="无法确认知识库身份" message={error.message} errorCode={error.code} requestId={error.requestId} onRetry={identity.reload} />
+        </main>
+      </div>
+    );
+  }
+  // A different epoch hides the old workspace synchronously, even while the
+  // next subject is still being verified. All resource/UI state belongs here.
+  return <LibraryWorkspace key={JSON.stringify([props.authEpoch ?? 0, identity.subject])} {...props} subject={identity.subject} scopes={identity.scopes} />;
+}
+
+function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourceAPIRaw, intent, apps, openApp, notify, authEpoch = 0, subject, scopes}: LibraryAppProps & {subject: string; scopes: string[]}) {
+  const lifetime = useMemo(() => createRequestLifetime(), []);
+  useLayoutEffect(() => {
+    lifetime.activate();
+    return () => lifetime.end();
+  }, [lifetime]);
+  // Stable wrappers reject late responses and prevent old async chains from
+  // starting follow-up requests with a new session's live credentials.
+  const api = useMemo(() => lifetime.bind(sourceAPI), [lifetime, sourceAPI]);
+  const apiPage = useMemo(() => lifetime.bind(sourceAPIPage), [lifetime, sourceAPIPage]);
+  const apiRaw = useMemo(() => lifetime.bind(sourceAPIRaw), [lifetime, sourceAPIRaw]);
+  const identityLoaded = true;
   const catalogue = useCatalogue(apiPage);
   const session = useTableSession(api, apiPage);
   const search = useSearch(apiPage);
@@ -50,7 +78,6 @@ export function LibraryApp({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [activeRowId, setActiveRowId] = useState<string | null>(null);
-  const [sort, setSort] = useState<SortState>(null);
   const [filter, setFilter] = useState('');
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1023);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
@@ -58,6 +85,7 @@ export function LibraryApp({
   const [notice, setNotice] = useState<{tone: 'info' | 'danger' | 'success'; message: string; code?: string; requestId?: string} | null>(null);
   const [dialog, setDialog] = useState<null | 'new' | 'move' | 'schema' | 'delete'>(null);
   const [askAI, setAskAI] = useState<SelectionAIAction | null>(null);
+  const [pendingAIHandoff, setPendingAIHandoff] = useState<string | null>(null);
   const [schemaDraft, setSchemaDraft] = useState<Column[]>([]);
   const [destructiveConfirmed, setDestructiveConfirmed] = useState(false);
   const [movePath, setMovePath] = useState('');
@@ -101,7 +129,6 @@ export function LibraryApp({
     setSelection(new Set());
     setActiveRowId(null);
     setFilter('');
-    setSort(null);
     setConflict(null);
     setInspectorOpen(true);
     if (expandPath) setExpanded(current => expandAncestors(current, next.path));
@@ -410,11 +437,19 @@ export function LibraryApp({
     [selection, activeRowId, session.rows],
   );
 
+  // Modal passive cleanup restores its source focus before passive effects run.
+  // Deliver only after that cleanup so source restoration cannot raise Library
+  // over the destination window. Cancellation keeps ordinary modal behavior.
+  useEffect(() => {
+    if (pendingAIHandoff === null) return;
+    setPendingAIHandoff(null);
+    if (openApp) openApp('chat', {action: 'askAI', prompt: pendingAIHandoff});
+    if (notify) notify({title: 'AI 草稿已投递到对话窗口，请核对后发送。', tone: 'info'});
+  }, [pendingAIHandoff, openApp, notify]);
+
   function confirmAskAI(prompt: string) {
     setAskAI(null);
-    if (!chatApp) return;
-    if (openApp) openApp('chat', {action: 'askAI', prompt});
-    if (notify) notify({title: 'AI 草稿已投递到对话窗口，请核对后发送。', tone: 'info'});
+    if (chatApp) setPendingAIHandoff(prompt);
   }
 
   const catalogueError = catalogue.error ? describeError(catalogue.error, '读取目录') : null;
@@ -592,10 +627,16 @@ export function LibraryApp({
               error={session.error}
               filter={filter}
               onFilter={setFilter}
-              sort={sort}
-              onSort={key =>
-                setSort(current => (current && current.key === key ? {key, direction: current.direction === 'asc' ? 'desc' : 'asc'} : {key, direction: 'asc'}))
-              }
+              sort={session.sort}
+              onSort={key => {
+                const current = session.sort;
+                const next = current && current.key === key
+                  ? {key, direction: current.direction === 'asc' ? 'desc' as const : 'asc' as const}
+                  : {key, direction: 'asc' as const};
+                setSelection(new Set());
+                setActiveRowId(null);
+                void session.changeSort(next);
+              }}
               selection={selection}
               activeRowId={activeRowId}
               onSelectRow={onSelectRow}
@@ -618,6 +659,7 @@ export function LibraryApp({
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          identityKey={JSON.stringify([subject, authEpoch, identityLoaded])}
           uploadStore={uploadStore}
           table={table}
           columns={table.columns || []}
@@ -648,7 +690,7 @@ export function LibraryApp({
         />
       )}
 
-      <NewTableDialog open={dialog === 'new'} onClose={() => setDialog(null)} onCreate={createTable} />
+      <NewTableDialog open={dialog === 'new'} initialPath={view === 'library' && table ? table.path : '/知识'} onClose={() => setDialog(null)} onCreate={createTable} />
 
       {askAI && table && (
         <AskAIDialog
