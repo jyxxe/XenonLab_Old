@@ -68,6 +68,8 @@
 .account-tree button{display:block;text-align:left;width:100%;margin:2px 0}
 .account-tree small{display:block;font-size:var(--font-size-xs);overflow-wrap:anywhere}
 .account-tree .active{background:var(--control-selected)}
+.account-tree-filter{display:block;font-size:var(--font-size-sm)}
+.account-tree-filter input{display:block;min-width:0;width:100%;margin-top:var(--spacing-2)}
 .account-detail{min-width:0}
 .account-detail label{display:block;margin:var(--spacing-2) 0}
 .account-detail input:not([type=checkbox]),.account-detail select{max-width:100%;width:100%}
