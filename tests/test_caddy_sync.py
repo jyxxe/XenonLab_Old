@@ -205,3 +205,17 @@ def test_snapshot_encoding_rejects_malformed_metadata(tmp_path):
     assert caddy_sync.Snapshot.from_json(snapshot.as_json()) == snapshot
     with pytest.raises(ValueError, match="snapshot metadata"):
         caddy_sync.Snapshot.from_json({"content": "b2xk", "uid": -1, "gid": 0, "mode": 0o644})
+
+
+def test_plugin_catalogue_is_routed_to_the_desktop_service_before_library():
+    root = Path(__file__).resolve().parents[1]
+    for filename in ("xeonolab.caddy", "cloudflare-origin.caddy"):
+        source = (root / "infra" / "network" / filename).read_text()
+        desktop_line = next(
+            line for line in source.splitlines() if line.strip().startswith("@desktop_api path")
+        )
+        assert "/api/v1/plugins*" in desktop_line, filename
+        assert source.index("@desktop_api") < source.index("handle /api/v1/*"), filename
+        assert source.index("handle @desktop_api") < source.index("handle /api/v1/*"), filename
+    nginx = (root / "infra" / "network" / "nginx.conf").read_text()
+    assert "location /api/v1/plugins" in nginx

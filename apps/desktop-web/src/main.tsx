@@ -1,3 +1,4 @@
+import {Icon} from './design-system/Icon';
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './design-system/tokens.css';
@@ -10,13 +11,17 @@ import {emptyAccess, accessExpired, canReplayRequest, classifyFailure, DEFAULT_R
 import {ToastProvider} from './design-system/primitives';
 import {DesktopShell} from './shell/DesktopShell';
 import {Knowledge} from './Knowledge';
+import {LibraryJSONError, parseAPIJSON} from './library/json.js';
 import {APIRequestError, apiErrorFromResponse} from './api-error.js';
 
 type APIPage<T = any> = {data: T; meta: {request_id?: string; next_cursor?: string | null; [key: string]: any}};
+type APIOptions = {soft?: boolean};
 type PendingRequest = {generation:number; replay:()=>Promise<unknown>; resolve:(value:unknown)=>void; reject:(reason:unknown)=>void};
 const libraryView = location.hostname === 'library.xenon.lan';
+class LibraryResponseError extends APIRequestError {}
 
 function isRetryable(error:unknown){
+  if(error instanceof LibraryResponseError)return false;
   if(error instanceof SessionFailure)return error.kind==='temporary';
   if(error instanceof APIRequestError)return error.status===0||error.status===429||error.status>=500;
   return false;
@@ -213,7 +218,7 @@ function App() {
     }
   }, [applyRetryState]);
 
-  const apiPage = useCallback(async <T = any>(path: string, init: RequestInit = {}): Promise<APIPage<T>> => {
+  const apiPage = useCallback(async <T = any>(path: string, init: RequestInit = {}, options: APIOptions = {}): Promise<APIPage<T>> => {
     const generation=sessionGenerationRef.current;
     const method=(init.method||'GET').toUpperCase();
     const perform=async():Promise<APIPage<T>>=>{
@@ -227,7 +232,7 @@ function App() {
       try{response=await fetch(`/api/v1${path}`, {...init, headers})}
       catch(cause){
         const failure=new APIRequestError('网络连接暂时中断，请稍后重试',0,'NETWORK_ERROR');
-        applyFailureState(0,undefined,{message:failure.message},generation);
+        if(!options.soft)applyFailureState(0,undefined,{message:failure.message},generation);
         throw failure;
       }
       let raw:string;
@@ -238,12 +243,14 @@ function App() {
         throw failure;
       }
       let result:any=null;
-      try{result=raw?JSON.parse(raw):null}catch{}
+      let decodingError:unknown;
+      try{result=raw?parseAPIJSON(path,raw):null}catch(cause){decodingError=cause}
       if(generation!==sessionGenerationRef.current)throw new APIRequestError('会话已结束',0,'SESSION_ENDED');
       if (!response.ok) {
-        applyFailureState(response.status,response.headers,result?.error,generation);
+        if(!options.soft)applyFailureState(response.status,response.headers,result?.error,generation);
         throw apiErrorFromResponse(response, result);
       }
+      if(decodingError instanceof LibraryJSONError)throw new LibraryResponseError(decodingError.message,502,'INVALID_RESPONSE',{requestId:response.headers.get('X-Request-ID')||undefined});
       if(!result||typeof result!=='object'){
         const failure=new APIRequestError('服务返回了无法读取的数据',502,'INVALID_RESPONSE',{requestId:response.headers.get('X-Request-ID')||undefined});
         applyFailureState(502,response.headers,{message:failure.message,code:failure.code},generation);
@@ -259,13 +266,13 @@ function App() {
     }
     try{return await perform()}
     catch(cause){
-      if(generation===sessionGenerationRef.current&&canReplayRequest(path,method,init.body)&&isRetryable(cause))return await defer();
+      if(!options.soft&&generation===sessionGenerationRef.current&&canReplayRequest(path,method,init.body)&&isRetryable(cause))return await defer();
       throw cause;
     }
   }, [accessToken, applyFailureState]);
 
-  const api = useCallback(async <T = any>(path: string, init: RequestInit = {}): Promise<T> => {
-    return (await apiPage<T>(path, init)).data;
+  const api = useCallback(async <T = any>(path: string, init: RequestInit = {}, options: APIOptions = {}): Promise<T> => {
+    return (await apiPage<T>(path, init, options)).data;
   }, [apiPage]);
 
   const apiRaw = useCallback(async (path: string, init: RequestInit = {}): Promise<Response> => {
@@ -435,7 +442,7 @@ function App() {
     return (
       <div className="login-page">
         <header className="menubar">
-          <span className="menubar-brand"><b>✦</b> XeonoLab</span>
+          <span className="menubar-brand"><b><Icon value="sparkle" size={18} /></b> XeonoLab</span>
           <span className="menubar-spacer" />
           <span className="menubar-status">知识 · 模型 · 工作空间</span>
         </header>

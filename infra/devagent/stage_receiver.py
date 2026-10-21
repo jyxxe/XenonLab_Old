@@ -4,6 +4,7 @@
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -82,8 +83,125 @@ def restart_gateway(sha, deployment_id):
     raise RuntimeError("gateway readiness failed")
 
 
+def _gateway_main_pid():
+    result = subprocess.run(
+        ["/usr/bin/systemctl", "show", "xeonolab@deploy-gateway.service", "--property=MainPID", "--value", "--no-pager"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    value = result.stdout.strip()
+    if not re.fullmatch(r"[1-9][0-9]{0,8}", value):
+        raise ValueError("gateway main PID unavailable")
+    return int(value)
+
+
+def _gateway_runtime_cwd(pid):
+    if type(pid) is not int or pid < 1:
+        raise ValueError("invalid gateway PID")
+    return Path(f"/proc/{pid}/cwd").resolve(strict=True)
+
+
+def _gateway_ready_probe():
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open("http://192.168.0.106:8103/health/ready", timeout=5) as response:
+        if type(response.status) is not int or response.status != 200:
+            raise RuntimeError("gateway readiness failed")
+        body = response.read(4097)
+        if len(body) > 4096:
+            raise ValueError("gateway readiness response is oversized")
+        payload = json.loads(body)
+        if payload != {"status": "ready", "service": "deploy-gateway"}:
+            raise ValueError("gateway readiness response is malformed")
+        return True
+
+
+def publication_recovery():
+    """Read-only proof for reconciling a merged publication with VM106 runtime state."""
+    activation = json.loads(ACTIVATION.read_text())
+    if not isinstance(activation, dict) or activation.get("address") != "192.168.0.106":
+        raise ValueError("gateway target required")
+
+    releases_root = ROOT.resolve(strict=True)
+    current = PLATFORM / "current"
+    current_path = current.resolve(strict=True)
+    gateway_commit = current_path.name
+    if (
+        not re.fullmatch(r"[a-f0-9]{40}", gateway_commit)
+        or current_path.parent != releases_root
+        or not current_path.is_dir()
+    ):
+        raise ValueError("current immutable gateway release is invalid")
+
+    with sqlite3.connect("file:" + str(DEPLOY_DATABASE) + "?mode=ro", uri=True) as db:
+        db.execute("PRAGMA query_only=ON")
+        query_only = db.execute("PRAGMA query_only").fetchone()
+        if not query_only or query_only[0] != 1:
+            raise ValueError("deployment database is not query-only")
+        db.execute("BEGIN")
+        lease_columns = {row[1] for row in db.execute("PRAGMA table_info(lease)")}
+        if not {"singleton", "id", "holder", "release_id", "epoch", "expires"}.issubset(lease_columns):
+            raise ValueError("deployment lease schema is incomplete")
+        deployment_columns = {row[1] for row in db.execute("PRAGMA table_info(deployments)")}
+        if "state" not in deployment_columns:
+            raise ValueError("deployment state schema is incomplete")
+        lease = db.execute(
+            "SELECT id,holder,release_id,epoch,expires FROM lease WHERE singleton=1"
+        ).fetchall()
+        if len(lease) != 1:
+            raise ValueError("deployment lease row is missing or ambiguous")
+        lease_id, holder, release_id, epoch, expires = lease[0]
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError("deployment lease epoch is invalid")
+        lease_fields = (lease_id, holder, release_id, expires)
+        if all(value is None for value in lease_fields):
+            lease_proof = {"id": None, "holder": None, "release_id": None, "epoch": epoch, "expires": None}
+        else:
+            if (
+                not isinstance(lease_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", lease_id)
+                or not isinstance(holder, str) or not re.fullmatch(r"[A-Za-z0-9_.:@/-]{1,256}", holder)
+                or not isinstance(release_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", release_id)
+                or isinstance(expires, bool) or not isinstance(expires, (int, float))
+                or not math.isfinite(expires) or expires <= 0
+            ):
+                raise ValueError("deployment lease fields are malformed")
+            lease_proof = {
+                "id": lease_id,
+                "holder": holder,
+                "release_id": release_id,
+                "epoch": epoch,
+                "expires": expires,
+            }
+        unresolved = db.execute(
+            "SELECT COUNT(*) FROM deployments WHERE state IS NULL OR state NOT IN ('completed','rolled_back','cancelled')"
+        ).fetchone()
+        if not unresolved or type(unresolved[0]) is not int or unresolved[0] < 0:
+            raise ValueError("unresolved deployment count is invalid")
+        unresolved_count = unresolved[0]
+
+    pid = _gateway_main_pid()
+    runtime_path = _gateway_runtime_cwd(pid)
+    if runtime_path != current_path or runtime_path.parent != releases_root:
+        raise ValueError("gateway process is not running the current immutable release")
+    runtime_commit = runtime_path.name
+    if not re.fullmatch(r"[a-f0-9]{40}", runtime_commit):
+        raise ValueError("gateway runtime commit is invalid")
+    _gateway_ready_probe()
+    return {
+        "gateway_commit": gateway_commit,
+        "runtime_commit": runtime_commit,
+        "ready": True,
+        "lease": lease_proof,
+        "unresolved_deployments": unresolved_count,
+    }
+
+
 def main():
     parts = os.getenv("SSH_ORIGINAL_COMMAND", "").split()
+    if parts == ["devagent-stage", "publication-recovery"]:
+        print(json.dumps(publication_recovery(), sort_keys=True))
+        return
     if len(parts) == 4 and parts[:2] == ["devagent-stage", "gateway"]:
         print(json.dumps(restart_gateway(parts[2], parts[3])))
         return
