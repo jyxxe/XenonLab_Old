@@ -26,6 +26,8 @@ export function IFrameApp({
   intent?: AppIntent;
   timeoutMs?: number;
 }) {
+  // Navigation identity excludes registry presentation metadata and theme.
+  const url = appEntryUrl(app);
   const [phase, setPhase] = useState<FramePhase>('loading');
   const [attempt, setAttempt] = useState(0);
   const timer = useRef<number | null>(null);
@@ -38,7 +40,7 @@ export function IFrameApp({
     return () => {
       if (timer.current) window.clearTimeout(timer.current);
     };
-  }, [attempt, timeoutMs]);
+  }, [url, attempt, timeoutMs]);
 
   useEffect(() => {
     const frame = document.getElementById(`frame-${windowId}`) as HTMLIFrameElement | null;
@@ -68,7 +70,6 @@ export function IFrameApp({
     setHandoff({prompt: intent.prompt, sent: false});
   }, [intent]);
 
-  const url = appEntryUrl(app);
   const frameUrl = new URL(url);
   if (attempt) frameUrl.searchParams.set('reload',String(attempt));
   return (
@@ -94,7 +95,7 @@ export function IFrameApp({
       )}
       {phase === 'loading' && <div className="iframe-loading-bar" aria-hidden="true" />}
       <iframe
-        key={attempt}
+        key={`${url}:${attempt}`}
         id={`frame-${windowId}`}
         title={app.title}
         src={frameUrl.href}
