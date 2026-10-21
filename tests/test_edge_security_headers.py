@@ -1,17 +1,19 @@
-"""Contract: LAN and public edge Caddy configs share one security-header snippet.
+"""Contract: LAN and public edge Caddy configs declare the same security headers.
 
-Issue #94 found the public edge missing the LAN hardening. The review of the
-first increment required a single shared source instead of duplicated header
-lines, because copy-paste still allowed drift and same-name conflicting
-values. Both site configs must import infra/network/security-headers.caddy,
-expand the snippet inside the site block, and must not declare the security
-headers inline (a second declaration would send conflicting duplicate values).
+Issue #94 found the public edge missing the LAN hardening. The first increment
+shared one snippet file between both configs, but activation on the ingress VM
+only installs `infra/network/cloudflare-origin.caddy`; an imported sibling file
+does not exist in `/etc/caddy`, so the activation-time Caddy reload failed and
+the deployment rolled back. This deploy-compatible revision keeps the headers
+inline in both files and enforces the no-drift requirement with this contract
+test instead of a runtime file import: both site blocks must declare exactly
+the same required header set with exact values, and neither config may import a
+file that the activation path does not install.
 """
 
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SNIPPET_FILE = REPO_ROOT / "infra" / "network" / "security-headers.caddy"
 SITE_FILES = {
     "lan": REPO_ROOT / "infra" / "network" / "xeonolab.caddy",
     "public": REPO_ROOT / "infra" / "network" / "cloudflare-origin.caddy",
@@ -39,33 +41,41 @@ def _site_text(filename: str, site_marker: str) -> str:
     raise AssertionError(f"unbalanced braces in {filename} after {site_marker!r}")
 
 
-def test_snippet_declares_every_required_header_with_exact_value():
-    lines = {
-        line.split()[1]: " ".join(line.split()[2:])
-        for line in SNIPPET_FILE.read_text().splitlines()
-        if line.strip().startswith("header ")
-    }
-    for header, value in REQUIRED_HEADERS.items():
-        assert lines.get(header) == value, f"snippet must declare {header} {value!r}, got {lines.get(header)!r}"
+def _headers(text: str) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("header "):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2:
+            headers[parts[1]] = " ".join(parts[2:])
+    return headers
 
 
-def test_both_sites_import_the_shared_snippet():
+def test_both_sites_declare_every_required_header_with_exact_value():
+    for label, path in SITE_FILES.items():
+        site_marker = "(xeonolab-desktop)" if label == "lan" else "http://xenon.jyxxe.com:8080"
+        declared = _headers(_site_text(path.name, site_marker))
+        for header, value in REQUIRED_HEADERS.items():
+            assert declared.get(header) == value, f"{label} must declare {header} {value!r}, got {declared.get(header)!r}"
+
+
+def test_site_header_sets_do_not_drift():
+    # The issue is drift between the two edges; a shared runtime file is not
+    # deployable by the current activation path, so the contract is the guard.
+    lan_marker = "(xeonolab-desktop)"
+    public_marker = "http://xenon.jyxxe.com:8080"
+    lan = _headers(_site_text(SITE_FILES["lan"].name, lan_marker))
+    public = _headers(_site_text(SITE_FILES["public"].name, public_marker))
+    for header in REQUIRED_HEADERS:
+        assert lan.get(header) == public.get(header), f"header {header!r} drifted: LAN={lan.get(header)!r} public={public.get(header)!r}"
+
+
+def test_configs_do_not_import_files_outside_the_activation_inventory():
+    # Activation installs only cloudflare-origin.caddy; an imported sibling
+    # fails Caddy reload during activation (observed rollback on 2026-10-22).
     for label, path in SITE_FILES.items():
         text = path.read_text()
-        assert "import security-headers.caddy" in text, f"{label} config must load the snippet file"
-        site_marker = "(xeonolab-desktop)" if label == "lan" else "http://xenon.jyxxe.com:8080"
-        assert "import security_headers" in _site_text(path.name, site_marker), (
-            f"{label} site block must expand the shared snippet"
-        )
-
-
-def test_site_blocks_do_not_declare_security_headers_inline():
-    """A duplicate inline declaration would conflict with the snippet values."""
-    for label, path in SITE_FILES.items():
-        site_marker = "(xeonolab-desktop)" if label == "lan" else "http://xenon.jyxxe.com:8080"
-        site = _site_text(path.name, site_marker)
-        inline = [
-            line.strip() for line in site.splitlines()
-            if line.strip().startswith("header ") and line.split()[1] in REQUIRED_HEADERS
-        ]
-        assert not inline, f"{label} site block must not redeclare security headers: {inline}"
+        assert "security-headers.caddy" not in text, f"{label} config must not import a non-deployed snippet file"
+        assert "import security_headers" not in text, f"{label} config must expand headers inline"

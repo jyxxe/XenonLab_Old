@@ -1,9 +1,9 @@
-import security-headers.caddy
-
 (xeonolab-desktop) {
   tls internal
   encode zstd gzip
-  import security_headers
+  header X-Content-Type-Options nosniff
+  header Referrer-Policy no-referrer
+  header Strict-Transport-Security "max-age=300"
   @embedding_api path /api/v1/embed/*
   handle @embedding_api {
     reverse_proxy 192.168.0.107:8104
