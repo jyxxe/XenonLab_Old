@@ -9,6 +9,15 @@ export function formatNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
 }
 
+/** Inclusive range in the current loaded view, independent of virtual mounting. */
+export function rowSelectionRange(visibleIds, anchorId, targetId) {
+  const to = visibleIds.indexOf(targetId);
+  if (to < 0) return [];
+  const from = visibleIds.indexOf(anchorId);
+  if (from < 0) return [targetId];
+  return visibleIds.slice(Math.min(from, to), Math.max(from, to) + 1);
+}
+
 export function formatBytes(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
   if (value < 1024) return `${value} B`;
@@ -500,4 +509,18 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
     lines.push(`问题：${String(question || '').trim() || '（请在发送前补充你的问题）'}`);
   }
   return lines.join('\n');
+}
+
+/** Shared pixel preference limits for both pointer and keyboard column resizing. */
+export function clampColumnWidth(width) {
+  return Math.max(80, Math.min(520, Number.isFinite(width) ? width : 160));
+}
+
+export function keyboardColumnWidth(width, key, shift = false) {
+  if (key === 'Home') return 80;
+  if (key === 'End') return 520;
+  const step = shift ? 40 : 10;
+  if (key === 'ArrowLeft') return clampColumnWidth(width - step);
+  if (key === 'ArrowRight') return clampColumnWidth(width + step);
+  return null;
 }

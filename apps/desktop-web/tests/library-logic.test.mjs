@@ -4,6 +4,8 @@ import {
   SEARCH_LIMIT_OPTIONS,
   searchResultSummary,
   ancestorPaths,
+  clampColumnWidth,
+  keyboardColumnWidth,
   buildPathTree,
   changedFields,
   classifySchemaChange,
@@ -19,6 +21,7 @@ import {
   mergeRecent,
   parseFieldFilters,
   rowHasAttachment,
+  rowSelectionRange,
   searchWarnings,
   sortRows,
   toggleFavorite,
@@ -84,6 +87,35 @@ test('virtualWindow keeps a bounded render window with padding', () => {
   assert.deepEqual(virtualWindow(0, 400, 3), {start: 0, end: 3, padTop: 0, padBottom: 0, totalHeight: 102});
   const filtered = virtualWindow(3400, 400, 2, 34, 8);
   assert.deepEqual(filtered, {start: 0, end: 2, padTop: 0, padBottom: 0, totalHeight: 68});
+});
+
+test('Shift ranges follow sorted filtered result order in either direction', () => {
+  const rows = [
+    {_row_id:'a',values:{title:'keep-z'}},
+    {_row_id:'hidden',values:{title:'hide'}},
+    {_row_id:'b',values:{title:'keep-a'}},
+    {_row_id:'c',values:{title:'keep-m'}},
+  ];
+  const visible = sortRows(filterRows(rows,'keep-'),'title').map(row=>row._row_id);
+  assert.deepEqual(visible,['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'b','a'),['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'a','b'),['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'c','a'),['c','a']);
+  assert.deepEqual(rowSelectionRange([...visible].reverse(),'a','c'),['a','c']);
+  assert.deepEqual(visible,['b','c','a'],'selection does not mutate the view');
+});
+
+test('Shift range with an absent anchor falls back to the clicked visible row', () => {
+  assert.deepEqual(rowSelectionRange(['a','b'],'hidden','b'),['b']);
+  assert.deepEqual(rowSelectionRange(['a','b'],null,'b'),['b']);
+  assert.deepEqual(rowSelectionRange(['a','b'],'a','a'),['a']);
+  assert.deepEqual(rowSelectionRange(['a','b'],'a','hidden'),[]);
+  assert.deepEqual(rowSelectionRange([],null,'b'),[]);
+});
+
+test('Shift range includes loaded virtual rows between the endpoints', () => {
+  const ids = Array.from({length:120},(_,index)=>`row-${index}`);
+  assert.deepEqual(rowSelectionRange(ids,'row-5','row-105'),ids.slice(5,106));
 });
 
 test('classifySchemaChange separates safe additions from destructive edits', () => {
@@ -224,4 +256,15 @@ test('searchResultSummary distinguishes the requested maximum from the returned 
   assert.equal(searchResultSummary(50, 0), null, 'an empty result set keeps its dedicated empty state');
   assert.equal(searchResultSummary(Number.NaN, 5), null);
   assert.equal(searchResultSummary(50, Number.NaN), null);
+test('column resize shares limits and keyboard steps without treating grid keys as resize', () => {
+  assert.equal(clampColumnWidth(40), 80);
+  assert.equal(clampColumnWidth(600), 520);
+  assert.equal(clampColumnWidth(NaN), 160);
+  assert.equal(keyboardColumnWidth(137, 'ArrowRight'), 147);
+  assert.equal(keyboardColumnWidth(137, 'ArrowLeft', true), 97);
+  assert.equal(keyboardColumnWidth(85, 'ArrowLeft'), 80);
+  assert.equal(keyboardColumnWidth(515, 'ArrowRight', true), 520);
+  assert.equal(keyboardColumnWidth(137, 'Home'), 80);
+  assert.equal(keyboardColumnWidth(137, 'End'), 520);
+  for (const key of ['ArrowDown', 'Enter', 'Escape', 'Tab']) assert.equal(keyboardColumnWidth(137, key), null);
 });

@@ -7,9 +7,11 @@ import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchM
 /** Default UI cap for search results; users may raise it through SEARCH_LIMIT_OPTIONS. */
 export const SEARCH_LIMIT = SEARCH_LIMIT_OPTIONS[0];
 export const DEFAULT_QUERY = 'FROM "/**" LIMIT 100';
+export type TableSort = {key: string; direction: 'asc' | 'desc'} | null;
 
 export function useScopes(api: API, authEpoch = 0) {
-  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean; error?: unknown}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
   const current = identity.epoch === authEpoch ? identity : {epoch: authEpoch, scopes: [], subject: null, loaded: false};
   useEffect(() => {
     let active = true;
@@ -20,12 +22,16 @@ export function useScopes(api: API, authEpoch = 0) {
           setIdentity({epoch: authEpoch, scopes: me.scopes || [], subject: typeof me.subject === 'string' && me.subject.trim() ? me.subject : null, loaded: true});
         }
       })
-      .catch(() => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true}));
+      .catch(error => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true, error}));
     return () => {
       active = false;
     };
-  }, [api, authEpoch]);
-  return current;
+  }, [api, authEpoch, reloadGeneration]);
+  const reload = useCallback(() => {
+    setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+    setReloadGeneration(value => value + 1);
+  }, [authEpoch]);
+  return {...current, reload};
 }
 
 export function useCatalogue(apiPage: APIPage) {
@@ -92,6 +98,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
   const [table, setTable] = useState<Table | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [sort, setSort] = useState<TableSort>(null);
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -101,10 +108,14 @@ export function useTableSession(api: API, apiPage: APIPage) {
   const loadingMoreRef = useRef(false);
 
   const fetchRows = useCallback(
-    (tableId: string, cursorValue = '', showDeleted = false) => {
+    (tableId: string, cursorValue = '', showDeleted = false, sortValue: TableSort = null) => {
       const query = new URLSearchParams({limit: '100'});
       if (cursorValue) query.set('cursor', cursorValue);
       if (showDeleted) query.set('include_deleted', 'true');
+      if (sortValue) {
+        query.set('sort_by', sortValue.key);
+        query.set('direction', sortValue.direction);
+      }
       return apiPage(`/tables/${tableId}/rows?${query.toString()}`);
     },
     [apiPage],
@@ -116,6 +127,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
       setTable({...next});
       setRows([]);
       setCursor(null);
+      setSort(null);
       setError(null);
       setLoading(true);
       setLoadingMore(false);
@@ -123,7 +135,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
       loadingMoreRef.current = false;
       setIncludeDeleted(showDeleted);
       try {
-        const [page, schema] = await Promise.all([fetchRows(next.id, '', showDeleted), api(`/tables/${next.id}/schema`)]);
+        const [page, schema] = await Promise.all([fetchRows(next.id, '', showDeleted, null), api(`/tables/${next.id}/schema`)]);
         if (view.current !== request) return;
         setRows(page.data as Row[]);
         setCursor((page.meta.next_cursor as string) || null);
@@ -144,11 +156,13 @@ export function useTableSession(api: API, apiPage: APIPage) {
       const request = ++view.current;
       ++rowsRequest.current;
       loadingMoreRef.current = false;
+      setCursor(null);
+      setIncludeDeleted(showDeleted);
       setLoading(true);
       setLoadingMore(false);
       setError(null);
       try {
-        const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted), api(`/tables/${tableId}/schema`)]);
+        const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted, sort), api(`/tables/${tableId}/schema`)]);
         if (view.current !== request) return;
         setRows(page.data as Row[]);
         setCursor((page.meta.next_cursor as string) || null);
@@ -159,7 +173,34 @@ export function useTableSession(api: API, apiPage: APIPage) {
         if (view.current === request) setLoading(false);
       }
     },
-    [api, fetchRows, includeDeleted, table],
+    [api, fetchRows, includeDeleted, sort, table],
+  );
+
+  const changeSort = useCallback(
+    async (nextSort: TableSort) => {
+      setSort(nextSort);
+      if (!table) return;
+      const tableId = table.id;
+      const request = ++view.current;
+      ++rowsRequest.current;
+      loadingMoreRef.current = false;
+      setRows([]);
+      setCursor(null);
+      setLoading(true);
+      setLoadingMore(false);
+      setError(null);
+      try {
+        const page = await fetchRows(tableId, '', includeDeleted, nextSort);
+        if (view.current !== request) return;
+        setRows(page.data as Row[]);
+        setCursor((page.meta.next_cursor as string) || null);
+      } catch (cause) {
+        if (view.current === request) setError(cause);
+      } finally {
+        if (view.current === request) setLoading(false);
+      }
+    },
+    [fetchRows, includeDeleted, table],
   );
 
   const loadMore = useCallback(async () => {
@@ -170,7 +211,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
     loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const page = await fetchRows(tableId, cursor, includeDeleted);
+      const page = await fetchRows(tableId, cursor, includeDeleted, sort);
       if (view.current !== viewRequest || rowsRequest.current !== request) return;
       setRows(old => {
         const seen = new Set(old.map(row => row._row_id));
@@ -185,7 +226,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
         setLoadingMore(false);
       }
     }
-  }, [cursor, fetchRows, includeDeleted, table]);
+  }, [cursor, fetchRows, includeDeleted, sort, table]);
 
   const refreshMetadata = useCallback(async () => {
     if (!table) return;
@@ -208,6 +249,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
     setTable(null);
     setRows([]);
     setCursor(null);
+    setSort(null);
     setError(null);
   }, []);
 
@@ -216,12 +258,14 @@ export function useTableSession(api: API, apiPage: APIPage) {
     rows,
     setRows,
     cursor,
+    sort,
     includeDeleted,
     loading,
     loadingMore,
     error,
     open,
     refresh,
+    changeSort,
     loadMore,
     refreshMetadata,
     clear,
