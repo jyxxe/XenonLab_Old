@@ -20,8 +20,9 @@ const registry:any[]=legacyRegistry;
 const tables=[
   {id:'example-table',name:'部署验收',path:'/示例/平台'},
 ];
-const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,
-  libraryEnabled:true,embeddingTableId:'example-table',tableReadError:'',tableReadDelay:false,releaseTableRead:()=>{}};
+const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,delayEmbedding:false,embeddingPending:0,qualityReady:false,
+  tasksEnabled:scenario !== 'no-task-app',libraryEnabled:true,embeddingTableId:'example-table',tableReadError:'',tableReadDelay:false,releaseTableRead:()=>{}};
+let finishEmbedding: (() => void) | null = null;
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -74,7 +75,8 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : undefined;
   calls.push({method, path, body});
   if (path === '/users/me') {
-    return {subject: 'fixture-user-0001', kind: 'human', scopes: [...(control.libraryEnabled ? ['xelibrary:read'] : []), 'dev:read', 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read','embedding:write'] : [])]};
+    if (scenario === 'desktop-error') throw Error('Synthetic desktop load failure');
+    return {subject: 'fixture-user-0001', kind: 'human', scopes: [...(control.libraryEnabled ? ['xelibrary:read'] : []), ...(control.tasksEnabled ? ['dev:read'] : []), 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read','embedding:write'] : [])]};
   }
   if(path==='/apps?include_unavailable=true')return [...registry];
   if (path === '/apps') {if(method==='POST'){const saved={...body,revision:1};registry.push(saved);return saved}return [...registry]}
@@ -97,6 +99,7 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     return {dock_initialized:layout.dock_initialized,dock: [...layout.dock], windows: layout.windows.map(win => ({...win}))};
   }
   if (path.startsWith('/work')) {
+    if (!control.tasksEnabled) throw new APIRequestError('dev:read required', 403, 'FORBIDDEN');
     if (control.failWork) throw new Error('synthetic work read failure');
     const url = new URL(path, 'http://fixture.local');
     const cursor = url.searchParams.get('cursor');
@@ -138,12 +141,19 @@ const apiPage = async (path: string, init?: RequestInit) => {
 const apiRaw = async (path: string, init?: RequestInit) => {
   if (path === '/embed/models') {
     calls.push({method:'GET', path, body:null});
-    return new Response(JSON.stringify({data: [{id: 'D100M-Embedding', alias: 'fast', status: 'ready', dimensions: 256, max_tokens: 128}, {id: 'Qwen/Qwen3-VL-Embedding-2B', alias: 'quality', status: 'not_configured'}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
+    return new Response(JSON.stringify({data: [{id: 'D100M-Embedding', alias: 'fast', status: 'ready', dimensions: 256, max_tokens: 128}, {id: 'Qwen/Qwen3-VL-Embedding-2B', alias: 'quality', status: control.qualityReady ? 'ready' : 'not_configured'}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   if (path === '/embed/text' && init?.method === 'POST') {
     const body = typeof init.body === 'string' ? JSON.parse(init.body) : null;
     calls.push({method:'POST', path, body});
-    if (control.busyEmbedding) return new Response(JSON.stringify({error:{message:'D100M worker busy; retry later'}}), {status:429, headers:{'Content-Type':'application/json'}});
+    const busy = control.busyEmbedding;
+    if (control.delayEmbedding) {
+      control.embeddingPending += 1;
+      await new Promise<void>(resolve => { finishEmbedding = resolve; });
+      control.embeddingPending -= 1;
+      finishEmbedding = null;
+    }
+    if (busy) return new Response(JSON.stringify({error:{message:'D100M worker busy; retry later'}}), {status:429, headers:{'Content-Type':'application/json'}});
     return new Response(JSON.stringify({model: 'D100M-Embedding', data: [{embedding: [0.125, -0.5, 0.25]}]}), {status: 200, headers: {'Content-Type': 'application/json'}});
   }
   if (path === '/users/me/wallpaper' && (!init?.method || init.method === 'GET')) {
@@ -181,9 +191,12 @@ window.fetch = (input, init) => String(input) === '/health/ready'
   layout,
   loggedOut: false,
   resetCalls: () => calls.splice(0, calls.length),
+  resolveEmbedding: () => finishEmbedding?.(),
 };
 
-createRoot(document.getElementById('root')!).render(
+const root = createRoot(document.getElementById('root')!);
+(window as any).shellFixture.unmount = () => root.unmount();
+root.render(
   <ToastProvider>
     <DesktopShell
       api={api}

@@ -282,9 +282,50 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("document.querySelector('.embedding-result')?.innerText.includes('3 维')"), 'real-shaped embedding response displayed');
     assert.match(await cdp.evaluate("document.querySelector('.embedding-queue-scroll').innerText"), /fixture-job-1/);
     assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embed/text'&&call.method==='POST'&&call.body.input==='fixture text')"), true, 'text is submitted through API boundary');
+    const editEmbeddingText = value => cdp.evaluate(`(() => {const input=document.querySelector('#embedding-text');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(value)});input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    const generateEmbedding = () => cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
+    const embeddingSettled = () => waitFor(() => cdp.evaluate("![...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).hasAttribute('aria-busy')"), 'encoding request settled');
+    await editEmbeddingText('edited text');
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result'))"), false, 'editing completed input clears the old result');
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR, {recursive:true});
+      const screenshot = await cdp.call('Page.captureScreenshot', {format:'png'});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue142-edited-input.png'),Buffer.from(screenshot.data,'base64'));
+    }
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.embedding-result'))"), 'encoding the edited input produces a new result');
+
+    // Barrier-controlled responses exercise real React state without timing races.
+    for (const failure of [false,true]) {
+      await editEmbeddingText('pending original');
+      await cdp.evaluate(`window.shellFixture.control.delayEmbedding=true;window.shellFixture.control.busyEmbedding=${failure}`);
+      await generateEmbedding();
+      await waitFor(() => cdp.evaluate('window.shellFixture.control.embeddingPending===1'), 'encoding blocked on fixture barrier');
+      await editEmbeddingText('pending edited');
+      assert.equal(await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).disabled"), true, 'editing keeps synchronous request busy until it settles');
+      await editEmbeddingText('pending original');
+      await cdp.evaluate('window.shellFixture.resolveEmbedding()');
+      await embeddingSettled();
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result,.embedding-error'))"), false, 'edited drafts discard old success and failure even after changing back');
+      await cdp.evaluate('window.shellFixture.control.delayEmbedding=false;window.shellFixture.control.busyEmbedding=false');
+    }
+    await cdp.evaluate('window.shellFixture.control.qualityReady=true');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("!document.querySelector('#embedding-model option[value=quality]').disabled"), 'second synthetic model ready');
+    await cdp.evaluate('window.shellFixture.control.delayEmbedding=true');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate('window.shellFixture.control.embeddingPending===1'), 'model-change request barrier');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-model');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(input,'quality');input.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await cdp.evaluate('window.shellFixture.resolveEmbedding()');
+    await embeddingSettled();
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result,.embedding-error'))"), false, 'changing model discards the previous model response');
+    await cdp.evaluate('window.shellFixture.control.delayEmbedding=false');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-model');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(input,'fast');input.dispatchEvent(new Event('change',{bubbles:true}))})()`);
     await cdp.evaluate('window.shellFixture.control.busyEmbedding=true');
     await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
     await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('D100M worker busy')"), '429 worker busy response remains visible and is not queued');
+    await editEmbeddingText('fresh after failure');
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-error'))"), false, 'editing clears a completed error for the old input');
     await cdp.evaluate('window.shellFixture.control.busyEmbedding=false');
     await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=true');
     await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");

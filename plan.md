@@ -1312,10 +1312,13 @@ DELETE /api/v1/uploads/{upload_id}
 ## 25.2 附件查询
 
 ```text
+GET /api/v1/tables/{table_id}/attachments?limit=25&q=...&cursor=...
 GET /api/v1/attachments/{attachment_id}
 GET /api/v1/attachments/{attachment_id}/content
 GET /api/v1/attachments/{attachment_id}/preview
 ```
+
+表内列表仅返回当前身份可读且未删除来源行的附件元数据，要求 `xelibrary:read` 与表/行 ACL；不读取对象内容。`data[]` 含既有附件元数据与 `source_label`（按 title、name、其余 string/text 列顺序取首个非空字符串的前 256 字符，否则 Row ID）。文件名或该显示标签按去空白、Unicode casefold 子串搜索，`q` 最多 200 字符。`limit` 默认 25、范围 1–100；附件 ID 升序 keyset 游标绑定表与规范化搜索，每页重新鉴权。每页最多检查 500 个引用，因此空页仍可能有 `meta.next_cursor`；客户端需明确已加载范围并允许继续读取，不把已加载数当作总数。绑定仍由既有端点再次检查源读与目标 attach 权限。
 
 ## 25.3 绑定 / 解绑
 
