@@ -222,8 +222,18 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     assert.match(await cdp.evaluate("document.querySelector('.library-copy-boundary').innerText"), /仅复制已加载且当前筛选可见/);
     assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsBeforeCopy, 'copy does not fetch page 2 or any API');
     await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path.includes('sort_by=title')&&call.path.includes('direction=asc'))"), 'ascending table-wide sort');
     await cdp.evaluate("[...document.querySelectorAll('.table-scroll thead .library-sort')].find(button=>button.innerText.includes('title')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.calls.some(call=>call.path.includes('sort_by=title')&&call.path.includes('direction=desc'))"), 'descending table-wide sort');
+    // Changing the table sort intentionally clears the selection, so the copy
+    // scenario selects its rows again after the ordering settles.
+    await selectRow('row-001');
+    await selectRow('row-002');
     await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','TSV')`);
+    // Table-wide sorting legitimately reloads the first sorted page; take the
+    // network baseline after those requests so the assertion below still proves
+    // copying and filtering never fetch another page.
+    const callsAfterSort = await cdp.evaluate('window.libraryFixture.calls.length');
     await copySelection();
     await waitFor(() => cdp.evaluate('window.tsvCopies.length===3'), 'filtered descending copy');
     assert.deepEqual(parseTSV(await cdp.evaluate('window.tsvCopies[2]')).slice(1).map(row=>row[0]), ['row-002','row-001']);
@@ -244,7 +254,7 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await cdp.evaluate("Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})");
     await copySelection();
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-copy-error'))"), 'unavailable clipboard has recoverable feedback');
-    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsBeforeCopy, 'sorting, filtering, retry and clipboard failures do not fetch unloaded rows');
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsAfterSort, 'filtering, retry and clipboard failures do not fetch unloaded rows');
     await cdp.evaluate(`(${setValue})('input[aria-label="筛选已加载记录"]','no match')`);
     assert.equal(await cdp.evaluate("[...document.querySelectorAll('.library-table-toolbar button')].find(button=>button.innerText.includes('复制已选记录为 TSV')).disabled"), true, 'no currently visible selected row disables copying');
 
@@ -261,7 +271,7 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     assert.deepEqual(nativeRows[0], copied[0]);
     assert.deepEqual(nativeRows.slice(1).map(row=>row[0]), ['row-002','row-001']);
     assert.deepEqual(nativeRows.slice(1), [copied[2],copied[1]], 'native clipboard read preserves two complete quoted TSV records');
-    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsBeforeCopy, 'native copy adds no API or pagination requests');
+    assert.equal(await cdp.evaluate('window.libraryFixture.calls.length'), callsAfterSort, 'native copy adds no API or pagination requests');
     await capture('issue143-native-clipboard');
     if (process.env.UI_VERIFICATION_DIR) {
       await fs.mkdir(process.env.UI_VERIFICATION_DIR, {recursive:true});
