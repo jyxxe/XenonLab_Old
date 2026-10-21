@@ -1,8 +1,8 @@
 import {Icon} from '../design-system/Icon';
 import {stringifyExactJSON} from './json.js';
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ContextMenu, EmptyState, ErrorState, Input, Skeleton, StatusDot, type MenuItem} from '../design-system/primitives';
-import {describeError, filterRows, formatNumber, relativeTime, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
+import {clampColumnWidth, keyboardColumnWidth, describeError, filterRows, formatNumber, relativeTime, rowHasAttachment, sortRows, virtualWindow} from './logic.js';
 import type {Column, Row, Table} from './types';
 import {serializeTSV} from './tsv.js';
 
@@ -74,6 +74,10 @@ export function TableView({
   const [viewportHeight, setViewportHeight] = useState(400);
   const [scrollTop, setScrollTop] = useState(0);
   const [widths, setWidths] = useState<Record<string, number>>({});
+  const [measuredWidths, setMeasuredWidths] = useState<Record<string, number>>({});
+  const widthOwner = useRef(table.id);
+  widthOwner.current = table.id;
+  const stopResize = useRef<(() => void) | null>(null);
   const [columnMenu, setColumnMenu] = useState<{row: Row; x: number; y: number} | null>(null);
 
   const gridColumns = useMemo(() => [...SYSTEM_COLUMNS.map(column => ({...column, schema: null as Column | null})), ...columns.map(column => ({name: column.name, label: column.name, schema: column}))], [columns]);
@@ -148,29 +152,54 @@ export function TableView({
     }
   }, [table.id]);
 
-  const resizeColumn = useCallback(
-    (name: string, startWidth: number, startX: number) => {
-      const move = (event: PointerEvent) => {
-        const next = Math.max(80, Math.min(520, startWidth + event.clientX - startX));
-        setWidths(current => {
-          const updated = {...current, [name]: next};
-          try {
-            localStorage.setItem(`xeonolab.library.columns.${table.id}`, stringifyExactJSON(updated));
-          } catch {
-            /* view preference only */
-          }
-          return updated;
-        });
-      };
-      const up = () => {
-        removeEventListener('pointermove', move);
-        removeEventListener('pointerup', up);
-      };
-      addEventListener('pointermove', move);
-      addEventListener('pointerup', up);
-    },
-    [table.id],
-  );
+  // Unset preferences start at the actual header size, rather than an arbitrary width.
+  useLayoutEffect(() => {
+    const grid = scrollRef.current;
+    if (!grid) return;
+    const measure = () => {
+      const next: Record<string, number> = {};
+      grid.querySelectorAll<HTMLTableCellElement>('th[data-resize-column]').forEach(header => {
+        next[header.dataset.resizeColumn!] = clampColumnWidth(header.getBoundingClientRect().width);
+      });
+      setMeasuredWidths(current => Object.keys(next).length === Object.keys(current).length && Object.keys(next).every(key => next[key] === current[key]) ? current : next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(grid);
+    const element = grid.querySelector('table');
+    if (element) observer.observe(element);
+    return () => observer.disconnect();
+  }, [table.id, gridColumns, widths, loading]);
+
+  useEffect(() => () => { stopResize.current?.(); }, [table.id]);
+
+  const setColumnWidth = useCallback((name: string, width: number) => {
+    if (widthOwner.current !== table.id) return;
+    setWidths(current => {
+      const updated = {...current, [name]: clampColumnWidth(width)};
+      try {
+        localStorage.setItem(`xeonolab.library.columns.${table.id}`, stringifyExactJSON(updated));
+      } catch {
+        /* view preference only */
+      }
+      return updated;
+    });
+  }, [table.id]);
+
+  const resizeColumn = useCallback((name: string, startWidth: number, startX: number) => {
+    stopResize.current?.();
+    const move = (event: PointerEvent) => setColumnWidth(name, startWidth + event.clientX - startX);
+    const up = () => {
+      removeEventListener('pointermove', move);
+      removeEventListener('pointerup', up);
+      removeEventListener('pointercancel', up);
+      stopResize.current = null;
+    };
+    stopResize.current = up;
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+    addEventListener('pointercancel', up);
+  }, [setColumnWidth]);
 
   const moveActive = (direction: number, extend: boolean) => {
     if (!visibleRows.length) return;
@@ -317,7 +346,7 @@ export function TableView({
                   />
                 </th>
                 {gridColumns.map(column => (
-                  <th key={column.name} style={{width: widths[column.name], minWidth: widths[column.name]}}>
+                  <th key={column.name} data-resize-column={column.name} style={{width: widths[column.name], minWidth: widths[column.name]}}>
                     <span className="library-th-inner">
                       <button
                         type="button"
@@ -331,10 +360,25 @@ export function TableView({
                       <span
                         className="library-th-resize"
                         role="separator"
+                        tabIndex={0}
+                        aria-orientation="vertical"
+                        aria-valuemin={80}
+                        aria-valuemax={520}
+                        aria-valuenow={widths[column.name] ?? measuredWidths[column.name] ?? 160}
+                        aria-valuetext={`${Math.round(widths[column.name] ?? measuredWidths[column.name] ?? 160)} 像素`}
+                        title="左右方向键调整 10 像素；Shift 调整 40 像素；Home 最窄，End 最宽"
+                        onKeyDown={event => {
+                          if (event.key !== 'Tab') event.stopPropagation();
+                          const next = keyboardColumnWidth(widths[column.name] ?? measuredWidths[column.name] ?? 160, event.key, event.shiftKey);
+                          if (next === null) return;
+                          event.preventDefault();
+                          setColumnWidth(column.name, next);
+                        }}
                         aria-label={`调整 ${column.label} 列宽`}
                         onPointerDown={event => {
                           event.preventDefault();
-                          resizeColumn(column.name, widths[column.name] ?? 160, event.clientX);
+                          event.currentTarget.focus();
+                          resizeColumn(column.name, widths[column.name] ?? measuredWidths[column.name] ?? 160, event.clientX);
                         }}
                       />
                     </span>
