@@ -1,3 +1,4 @@
+import {Icon} from './Icon';
 import React, {
   createContext,
   forwardRef,
@@ -40,7 +41,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       disabled={disabled || loading}
       aria-busy={loading || undefined}
     >
-      {loading ? <Spinner size="sm" label="处理中" /> : icon ? <span className="ds-button-icon">{icon}</span> : null}
+      {loading ? <Spinner size="sm" label="处理中" /> : icon ? <span className="ds-button-icon"><Icon value={icon} size={16} /></span> : null}
       {children}
     </button>
   );
@@ -65,7 +66,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={label}
       title={rest.title ?? label}
     >
-      {children}
+      <Icon value={children} size={18} />
     </button>
   );
 });
@@ -217,6 +218,8 @@ function MenuList({
   style,
   role = 'menu',
   ariaLabel,
+  description,
+  descriptionId,
 }: {
   items: MenuItem[];
   onClose: () => void;
@@ -225,6 +228,8 @@ function MenuList({
   style?: React.CSSProperties;
   role?: string;
   ariaLabel?: string;
+  description?: string;
+  descriptionId?: string;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(() => (autoFocus ? firstEnabledIndex(items) : -1));
@@ -250,6 +255,7 @@ function MenuList({
       ref={listRef}
       role={role}
       aria-label={ariaLabel}
+      aria-describedby={description ? descriptionId : undefined}
       className={cx('ds-menu', className)}
       style={style}
       onKeyDown={event => {
@@ -277,6 +283,7 @@ function MenuList({
         }
       }}
     >
+      {description && <p className="ds-menu-description">{description}</p>}
       {items.map((item, index) =>
         item.separator ? (
           <hr key={item.id ?? `separator-${index}`} className="ds-menu-separator" />
@@ -293,7 +300,7 @@ function MenuList({
             onMouseEnter={() => setActive(index)}
             onClick={() => choose(item)}
           >
-            <span className="ds-menu-icon" aria-hidden="true">{item.checked ? '✓' : item.icon ?? ''}</span>
+            <span className="ds-menu-icon" aria-hidden="true"><Icon value={item.checked ? '✓' : item.icon ?? ''} size={16} /></span>
             <span className="ds-menu-label">{item.label}</span>
             {item.shortcut ? <kbd>{item.shortcut}</kbd> : null}
           </button>
@@ -349,15 +356,18 @@ export function MenuButton({
   className,
   active = false,
   align = 'left',
+  description,
 }: {
   label: React.ReactNode;
   items: MenuItem[];
   className?: string;
   active?: boolean;
   align?: 'left' | 'right';
+  description?: string;
 }) {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
+  const descriptionId = useId();
   const close = useCallback(() => {setOpen(false); trigger.current?.focus()}, []);
   return (
     <div className={cx('ds-menu-button', className)}>
@@ -367,13 +377,15 @@ export function MenuButton({
         className={cx('ds-menubar-item', (open || active) && 'ds-active')}
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-describedby={description ? descriptionId : undefined}
         onClick={() => setOpen(value => !value)}
         onKeyDown={event => {if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {event.preventDefault();setOpen(true)}}}
       >
         {label}
       </button>
+      {description && <span id={descriptionId} hidden>{description}</span>}
       <Popover anchorRef={trigger} open={open} onClose={close} className={cx('ds-menu-popover', align === 'right' && 'ds-align-right')}>
-        <MenuList items={items} onClose={close} autoFocus ariaLabel={typeof label === 'string' ? label : undefined} />
+        <MenuList items={items} onClose={close} autoFocus ariaLabel={typeof label === 'string' ? label : undefined} description={description} descriptionId={descriptionId} />
       </Popover>
     </div>
   );
@@ -570,7 +582,7 @@ export function Progress({value, max = 100, label}: {value: number; max?: number
 export function EmptyState({icon = '◇', title, description, action}: {icon?: React.ReactNode; title: React.ReactNode; description?: React.ReactNode; action?: React.ReactNode}) {
   return (
     <div className="ds-empty">
-      <b aria-hidden="true">{icon}</b>
+      <b aria-hidden="true"><Icon value={icon} size={32} /></b>
       <strong>{title}</strong>
       {description ? <p>{description}</p> : null}
       {action}
@@ -595,7 +607,7 @@ export function ErrorState({
 }) {
   return (
     <div className={cx('ds-error')} role="alert">
-      <b aria-hidden="true">!</b>
+      <b aria-hidden="true"><Icon value="error" size={18} /></b>
       <div>
         <strong>{title}</strong>
         <p>{message}</p>

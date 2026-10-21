@@ -144,7 +144,8 @@ export function toDesktopApp(entry: RegistryApp): DesktopApp {
     minSize: [480, 360],
     singleton: entry.singleton ?? true,
     dock: false,
-    description: entry.origin,
+    description: entry.description || entry.origin,
+    plugin_id: entry.plugin_id,
   };
 }
 

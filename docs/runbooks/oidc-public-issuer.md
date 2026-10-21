@@ -68,6 +68,27 @@ mapping and rejects payloads that differ from the shared policy; it updates
 only the two issuer maps and this role-map variable in each service env, while
 preserving all other entries and file metadata.
 
+## Realm roles and account-tree adoption
+
+The shared policy defines two realm roles. `platform-admin` keeps the full
+scope set; `embedding-admin` maps to `desktop:read embedding:read
+embedding:write` so an operator can provision an Embedding administrator by
+assigning that realm role in Keycloak. Assigning a realm role only takes effect
+after the guarded role-map rollout above has staged and loaded the updated
+`OIDC_ROLE_SCOPES_JSON` in every service.
+
+Realm roles never widen a registered managed account: identities registered in
+the account tree resolve their effective scopes from account grants only, and
+a root's grants are the snapshot taken at bootstrap. When a release adds new
+scopes to a role (theorem scopes in the original policy, embedding scopes
+later), existing roots must explicitly adopt them before children can be
+granted them: sign in as the human root, open the account panel on the root
+account where `root-scope-candidates` lists the not-yet-adopted scopes, save
+the updated grants, then grant the scopes to child accounts. Grant requests
+that exceed the parent tree fail with `PERMISSION_ESCALATION`, which names the
+exact scopes that are not grantable. Never widen a role map to work around a
+missing adoption.
+
 Never put client secrets, signing private keys, or tokens in these maps or in
 source control. The existing `OIDC_PUBLIC_KEY`, audience, CA, and private
 credential-file handling remain separate.

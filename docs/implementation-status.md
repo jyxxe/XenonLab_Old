@@ -255,3 +255,7 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #85 修复（zcode 本地交付）
 
 分支 `zcode/issue-85-issues-toolbar`（基于 `754ff27`）：`.ds-tabs` 的 `flex-shrink:0` 使任务页状态筛选条在 390px 视口撑宽 `.issues-app`（实测 scrollWidth 523 > clientWidth 380）并裁切筛选选项。修复限定在 `.issues-toolbar` 作用域：`ds-tabs` 允许 `flex-wrap:wrap;flex-shrink:1;min-width:0`，表格保留自身横向滚动。新增 390×844 合成 fixture 与浏览器验收（app/toolbar 无横向溢出、每个筛选选项完整落在视口内、截图 `runtime/acceptance-artifacts/issue-85-issues-toolbar-390x844.png`）。全前端 45 项测试与构建通过。
+
+### Issue #96 修复（zcode 本地交付）
+
+分支 `zcode/issue-96-blocked-claim`（基于 `754ff27`）：blocked 状态的 work 项不再渲染必然 409 的「领取」按钮，操作列改为「来源冲突 · 不可领取」提示（`work-state.ts` 新增 `isBlockedWorkItem`）；work 浏览器验收新增 blocked 行无按钮断言。全前端 45 项测试与构建通过。
