@@ -9,6 +9,7 @@ await fs.mkdir(evidence,{recursive:true});
 const fixture=path.join(app,'tests/.column-order-fixture.tsx'), html=path.join(app,'tests/.column-order-fixture.html');
 let vite,browser; const checks=[],errors=[];
 const push = checks.push.bind(checks); checks.push = (...values) => { console.log(...values); return push(...values); };
+function parseTSV(text){const rows=[];let row=[],cell='',quoted=false;for(let i=0;i<text.length;i++){const char=text[i];if(char==='"'){if(quoted&&text[i+1]==='"'){cell+='"';i++;}else quoted=!quoted;}else if(!quoted&&char==='\t'){row.push(cell);cell='';}else if(!quoted&&char==='\r'&&text[i+1]==='\n'){row.push(cell);rows.push(row);row=[];cell='';i++;}else cell+=char;}row.push(cell);rows.push(row);return rows;}
 try {
  let text=await fs.readFile(path.join(app,'tests/library-fixture.tsx'),'utf8');
  // Only synthetic fixture data is extended; actual LibraryApp/TableView remain unchanged.
@@ -19,8 +20,9 @@ try {
  await fs.writeFile(html,'<!doctype html><html><head><meta charset="UTF-8"></head><body><div id="root"></div><script type="module" src="/tests/.column-order-fixture.tsx"></script></body></html>');
  vite=await createServer({root:app,configFile:false,server:{host:'127.0.0.1',port:0,watch:null},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  const port=vite.httpServer.address().port;
- browser=await chromium.launch({headless:true,executablePath:'/usr/bin/google-chrome',args:['--no-sandbox','--disable-dev-shm-usage']});
+ browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_BIN||'/usr/bin/google-chrome',args:['--no-sandbox','--disable-dev-shm-usage']});
  const page=await browser.newPage({viewport:{width:1440,height:900}});page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
+ await page.addInitScript(()=>{window.tsvCopies=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.tsvCopies.push(text)}}});});
  await page.goto(`http://127.0.0.1:${port}/tests/.column-order-fixture.html`);
  async function open(name){await page.locator('.library-tree-table').filter({hasText:name}).click();await page.getByRole('heading',{name:new RegExp('/'+name+'$')}).waitFor();await page.locator('.library-table tbody tr[data-row-id]').first().waitFor();}
  const headers=()=>page.locator('.library-table thead .library-sort').allTextContents();
@@ -37,6 +39,16 @@ try {
  assert.equal(await page.locator('.library-table thead th').last().textContent(),'状态');
  const filesBounds=await page.locator('th').filter({has:page.locator('button[title="按 files 排序"]')}).boundingBox(),gridBounds=await page.getByRole('grid').boundingBox();assert.ok(filesBounds.x >= gridBounds.x && filesBounds.x+filesBounds.width <= gridBounds.x+gridBounds.width);
  await page.screenshot({path:path.join(evidence,'files-first-with-inspector.png'),fullPage:true});checks.push('actual keyboard four moves place files first; header/value binding, fixed system/status columns, Inspector and no API requests');
+ // The base now ships PR #148's actual copySelected; exercise TSV copy under the reordered list.
+ await page.locator('tr[data-row-id="row-001"] .library-td-select input[type="checkbox"]').check();
+ const callsBeforeCopy=await page.evaluate(()=>window.libraryFixture.calls.length);
+ await page.getByRole('button',{name:/复制已选记录为 TSV/}).click();
+ await page.waitForFunction(()=>window.tsvCopies&&window.tsvCopies.length===1);
+ const tsv=parseTSV(await page.evaluate(()=>window.tsvCopies[0]));
+ assert.deepEqual(tsv[0],['Row ID','更新时间','files','title','body','type','confidence','状态']);
+ assert.equal(tsv[1][0],'row-001');assert.ok(tsv[1][2].includes('proof.pdf'));assert.equal(tsv[1][3],'一致收敛定义');assert.ok(tsv[1].at(-1).includes('附件'));
+ assert.equal(await page.evaluate(()=>window.libraryFixture.calls.length),callsBeforeCopy,'copy must not fetch records');
+ await page.screenshot({path:path.join(evidence,'tsv-reordered-order.png'),fullPage:true});checks.push('reordered display order drives TSV headers and cells through the single gridColumns contract; fixed system/status columns and no API fetch');
  await page.reload();await open('uniform-convergence');await expectHeaders(reordered);checks.push('same-table localStorage order survives actual browser reload');
  await open('notes');await expectHeaders(['Row ID','更新时间','note','tag']);await page.locator('.library-column-order summary').click();await page.getByRole('button',{name:'将 tag 前移',exact:true}).click();await expectHeaders(['Row ID','更新时间','tag','note']);
  await open('uniform-convergence');await expectHeaders(reordered);await open('notes');await expectHeaders(['Row ID','更新时间','tag','note']);
@@ -61,5 +73,5 @@ try {
  await page.evaluate(()=>localStorage.setItem('xeonolab.library.column-order.t1','invalid-json'));await open('notes');await expectHeaders(['Row ID','更新时间','tag','note']);await open('uniform-convergence');await expectHeaders(['Row ID','更新时间','title','type','confidence','files','new_field']);assert.equal(await page.evaluate(()=>localStorage.getItem('xeonolab.library.column-order.t1')),'invalid-json');checks.push('invalid stored preference falls back to schema without hydration rewriting storage or affecting another table');
  assert.deepEqual(errors,[]);
  const sourceHashes={};for(const name of ['src/library/TableView.tsx','src/library/logic.js','src/library/library.css'])sourceHashes[name]=createHash('sha256').update(await fs.readFile(path.join(app,name))).digest('hex');
- const result={source,baseline:'f705776e60cfef881ac53dc6e6a48e3f77b956fc',sourceHashes,checks,pageErrors:errors,saved,calls:await page.evaluate(()=>window.libraryFixture.calls),scope:'Actual LibraryApp/TableView/styles in Chrome; repository fixture 100 synthetic rows and modified two-table schema; all API and identity responses synthetic. localStorage actual browser persistence. No real backend/OIDC/production.'};await fs.writeFile(path.join(evidence,'browser-report.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+ const result={source,baseline:'3af21d3b6e8e4a23aa18ea05ddcad8140645f875',sourceHashes,checks,pageErrors:errors,saved,calls:await page.evaluate(()=>window.libraryFixture.calls),scope:'Actual LibraryApp/TableView/styles in Chrome; repository fixture 100 synthetic rows and modified two-table schema; all API and identity responses synthetic. localStorage actual browser persistence. No real backend/OIDC/production.'};await fs.writeFile(path.join(evidence,'browser-report.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
 }finally{if(browser)await browser.close();if(vite)await vite.close();await Promise.all([fixture,html].map(p=>fs.rm(p,{force:true})));}
