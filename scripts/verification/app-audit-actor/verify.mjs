@@ -81,8 +81,8 @@ try {
   await page.getByLabel('应用来源').fill(`http://127.0.0.1:${apiPort}`);
   await page.getByLabel('入口路径').fill('/');
   await page.getByRole('button',{name:'保存应用'}).click();
-  await page.locator('.registry-panel [role=status]').waitFor();
-  if(!((await page.locator('.registry-panel [role=status]').innerText()).includes('应用目录已更新')))throw new Error('Create status: '+await page.locator('.registry-panel [role=status]').innerText()+'; requests='+JSON.stringify(requests)+'; responses='+JSON.stringify(apiResponses));
+  // The panel shows a busy status while saving; wait for the settled success message.
+  await page.getByRole('status').filter({hasText:'应用目录已更新'}).waitFor();
   await page.evaluate(()=>window.r35SetActor('r35-admin-b-token'));
   await page.getByRole('button',{name:/R35 合成研究入口/}).click();
   await page.getByLabel('名称').fill('R35 合成研究入口 已审核');
