@@ -1,3 +1,4 @@
+import {stringifyExactJSON} from './json.js';
 import React, {useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton} from '../design-system/primitives';
 import {describeError, relativeTime} from './logic.js';
@@ -167,15 +168,15 @@ export function TheoremView({
             <>
               <section>
                 <h4>Evidence</h4>
-                {relations?.evidence?.length ? <ul>{relations.evidence.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有 evidence_refs。</p>}
+                {relations?.evidence?.length ? <ul>{relations.evidence.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : stringifyExactJSON(item)}</li>)}</ul> : <p className="muted">没有 evidence_refs。</p>}
               </section>
               <section>
                 <h4>Dependencies</h4>
-                {relations?.dependencies?.length ? <ul>{relations.dependencies.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录依赖。</p>}
+                {relations?.dependencies?.length ? <ul>{relations.dependencies.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : stringifyExactJSON(item)}</li>)}</ul> : <p className="muted">没有记录依赖。</p>}
               </section>
               <section>
                 <h4>Dependents</h4>
-                {relations?.dependents?.length ? <ul>{relations.dependents.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : JSON.stringify(item)}</li>)}</ul> : <p className="muted">没有记录被依赖项。</p>}
+                {relations?.dependents?.length ? <ul>{relations.dependents.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : stringifyExactJSON(item)}</li>)}</ul> : <p className="muted">没有记录被依赖项。</p>}
               </section>
             </>
           )}

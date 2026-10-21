@@ -108,6 +108,9 @@ test('Work browser acceptance uses synthetic cursor pages and discards stale res
     assert.match(expired.status,/领取已过期.*可重领/);
     assert.match(expired.action,/重新领取/);
     assert.match(await cdp.evaluate("[...document.querySelectorAll('tbody tr')][5].cells[1].innerText"),/blocked/);
+    const blockedRow=await cdp.evaluate("({action:[...document.querySelectorAll('tbody tr')][5].cells[3].innerText,buttons:[...document.querySelectorAll('tbody tr')][5].cells[3].querySelectorAll('button').length})");
+    assert.equal(blockedRow.buttons,0,'blocked rows offer no claim button (#96)');
+    assert.match(blockedRow.action,/来源冲突 · 不可领取/);
     await cdp.evaluate("[...document.querySelectorAll('button')].find(button=>button.textContent.includes('加载更多'))?.click()");
     await waitFor(()=>cdp.evaluate("document.querySelectorAll('tbody tr').length===194"),'second page and duplicate filtering');
     const twoPages=await cdp.evaluate("({rows:document.querySelectorAll('tbody tr').length,ids:[...document.querySelectorAll('tbody tr')].map(row=>row.dataset.workId),loaded:document.querySelector('small')?.textContent})");
