@@ -1,0 +1,9 @@
+# Single source of truth for the security headers both edges must send (#94).
+# Each config imports this file at the top level (which defines the snippet)
+# and then expands `import security_headers` inside its site block, so the
+# LAN desktop site and the public Cloudflare origin cannot drift apart.
+(security_headers) {
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy no-referrer
+	header Strict-Transport-Security "max-age=300"
+}

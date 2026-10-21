@@ -1,8 +1,9 @@
+import security-headers.caddy
+
 (xeonolab-desktop) {
   tls internal
   encode zstd gzip
-  header X-Content-Type-Options nosniff
-  header Referrer-Policy no-referrer
+  import security_headers
   @embedding_api path /api/v1/embed/*
   handle @embedding_api {
     reverse_proxy 192.168.0.107:8104
