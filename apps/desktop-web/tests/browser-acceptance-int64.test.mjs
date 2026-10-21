@@ -37,10 +37,12 @@ test('production Library entry preserves complete int64 values through the real 
   let startupError;
   apiProcess.once('error', error => { startupError = error; });
   apiProcess.stderr.on('data', data => {stderr += data.toString();});
-  let server, browser, page;
+  let server, browser, context, page;
   const requests = [];
   const pageErrors = [];
   const external = [];
+  const pendingRoutes = new Set();
+  let tearingDown = false;
   try {
     let ready = false;
     for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -56,9 +58,10 @@ test('production Library entry preserves complete int64 values through the real 
     const viteOrigin = new URL(server.resolvedUrls.local[0]).origin;
     const browserOrigin = `http://library.xenon.lan:${server.httpServer.address().port}`;
     browser = await chromium.launch({executablePath, headless: true});
-    const context = await browser.newContext({viewport: {width: 1440, height: 1050}});
+    context = await browser.newContext({viewport: {width: 1440, height: 1050}});
     let malformedRows = false;
-    await context.route('**/*', async route => {
+    const forwardRoute = async route => {
+      if (tearingDown) return route.abort();
       const request = route.request();
       const url = new URL(request.url());
       if (url.origin !== browserOrigin) {external.push(request.url()); return route.abort();}
@@ -71,6 +74,11 @@ test('production Library entry preserves complete int64 values through the real 
       // virtual hostname selects the unchanged production main.tsx Library entry.
       const response = await route.fetch({url: `${viteOrigin}${url.pathname}${url.search}`});
       return route.fulfill({response});
+    };
+    await context.route('**/*', async route => {
+      const pending = forwardRoute(route);
+      pendingRoutes.add(pending);
+      try { await pending; } finally { pendingRoutes.delete(pending); }
     });
     page = await context.newPage();
     page.on('pageerror', error => pageErrors.push(error.message));
@@ -213,13 +221,33 @@ test('production Library entry preserves complete int64 values through the real 
     }
     throw error;
   } finally {
-    await browser?.close();
-    await server?.close();
-    if (apiProcess.pid && apiProcess.exitCode === null && apiProcess.signalCode === null) {
-      const closed = new Promise(resolve => apiProcess.once('close', resolve));
-      apiProcess.kill('SIGTERM');
-      await closed;
+    // Drain with the handler still registered: unrouteAll can otherwise clear
+    // interception as one callback finishes while another still needs fulfill.
+    // New teardown requests are aborted and tracked, never forwarded externally.
+    tearingDown = true;
+    try {
+      while (pendingRoutes.size) await Promise.all([...pendingRoutes]);
+      // Keep interception in place while closing the only page. A final app
+      // request between the first drain and unrouteAll is then aborted locally
+      // and tracked instead of escaping the virtual hostname to the network.
+      await page?.close();
+      while (pendingRoutes.size) await Promise.all([...pendingRoutes]);
+      await context?.unrouteAll({behavior: 'wait'});
     }
-    await fs.rm(temp, {recursive: true, force: true});
+    finally {
+      try { await browser?.close(); }
+      finally {
+        try { await server?.close(); }
+        finally {
+          try {
+            if (apiProcess.pid && apiProcess.exitCode === null && apiProcess.signalCode === null) {
+              const closed = new Promise(resolve => apiProcess.once('close', resolve));
+              apiProcess.kill('SIGTERM');
+              await closed;
+            }
+          } finally { await fs.rm(temp, {recursive: true, force: true}); }
+        }
+      }
+    }
   }
 });

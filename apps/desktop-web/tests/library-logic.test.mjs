@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  SEARCH_LIMIT_OPTIONS,
+  searchResultSummary,
   ancestorPaths,
+  clampColumnWidth,
+  keyboardColumnWidth,
   buildPathTree,
   changedFields,
   classifySchemaChange,
@@ -18,6 +22,7 @@ import {
   recentEntryPresentation,
   parseFieldFilters,
   rowHasAttachment,
+  rowSelectionRange,
   searchWarnings,
   sortRows,
   toggleFavorite,
@@ -109,6 +114,35 @@ test('virtualWindow keeps a bounded render window with padding', () => {
   assert.deepEqual(filtered, {start: 0, end: 2, padTop: 0, padBottom: 0, totalHeight: 68});
 });
 
+test('Shift ranges follow sorted filtered result order in either direction', () => {
+  const rows = [
+    {_row_id:'a',values:{title:'keep-z'}},
+    {_row_id:'hidden',values:{title:'hide'}},
+    {_row_id:'b',values:{title:'keep-a'}},
+    {_row_id:'c',values:{title:'keep-m'}},
+  ];
+  const visible = sortRows(filterRows(rows,'keep-'),'title').map(row=>row._row_id);
+  assert.deepEqual(visible,['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'b','a'),['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'a','b'),['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'c','a'),['c','a']);
+  assert.deepEqual(rowSelectionRange([...visible].reverse(),'a','c'),['a','c']);
+  assert.deepEqual(visible,['b','c','a'],'selection does not mutate the view');
+});
+
+test('Shift range with an absent anchor falls back to the clicked visible row', () => {
+  assert.deepEqual(rowSelectionRange(['a','b'],'hidden','b'),['b']);
+  assert.deepEqual(rowSelectionRange(['a','b'],null,'b'),['b']);
+  assert.deepEqual(rowSelectionRange(['a','b'],'a','a'),['a']);
+  assert.deepEqual(rowSelectionRange(['a','b'],'a','hidden'),[]);
+  assert.deepEqual(rowSelectionRange([],null,'b'),[]);
+});
+
+test('Shift range includes loaded virtual rows between the endpoints', () => {
+  const ids = Array.from({length:120},(_,index)=>`row-${index}`);
+  assert.deepEqual(rowSelectionRange(ids,'row-5','row-105'),ids.slice(5,106));
+});
+
 test('classifySchemaChange separates safe additions from destructive edits', () => {
   const current = [
     {name: 'title', type: 'string', nullable: false, default_value: null},
@@ -139,7 +173,7 @@ test('classifySchemaChange separates safe additions from destructive edits', () 
 
 test('parseFieldFilters reads exact-match lines and reports malformed input', () => {
   const parsed = parseFieldFilters('type = theorem\nconfidence = 0.91\n\nbroken');
-  assert.deepEqual(parsed.filters, {type: 'theorem', confidence: '0.91'});
+  assert.deepEqual(parsed.filters, {type: 'theorem', confidence: 0.91});
   assert.equal(parsed.errors.length, 1);
   assert.deepEqual(parseFieldFilters('').filters, {});
 });
@@ -218,6 +252,24 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
 });
 
 
+test('field filters retain JSON types and explicitly quoted numeric strings', () => {
+  const parsed = parseFieldFilters('n = 0.91\ns = "0.91"\nb = true\nnone = null\narr = [1,"2"]\nobj = {"n":3}\nempty = ""\nwords = theorem');
+  assert.deepEqual(parsed, {filters: {n: 0.91, s: '0.91', b: true, none: null, arr: [1, '2'], obj: {n: 3}, empty: '', words: 'theorem'}, errors: []});
+  assert.deepEqual(parseFieldFilters('n = -2.5e-3').filters, {n: -0.0025});
+  assert.deepEqual(parseFieldFilters('key = first\nkey = second').filters, {key: 'second'});
+  const named = parseFieldFilters('__proto__ = {"n":1}').filters;
+  assert.equal(Object.getPrototypeOf(named), Object.prototype);
+  assert.equal(JSON.stringify(named), '{"__proto__":{"n":1}}');
+});
+
+test('malformed and unrepresentable typed filters report errors rather than changing values', () => {
+  for (const value of ['01', '+1', '.91', '1e309', '9007199254740993', 'NaN', 'Infinity', '{bad}', '[1,]', '"unclosed', '{"n":1e309}']) {
+    const parsed = parseFieldFilters(`n = ${value}`);
+    assert.deepEqual(parsed.filters, {}, value);
+    assert.equal(parsed.errors.length, 1, value);
+  }
+});
+
 test('filtered tree reveals matching deep tables without changing saved expansion', () => {
   const tree = buildPathTree(tables);
   const saved = new Set(['/计算机']);
@@ -234,4 +286,30 @@ test('filtered path matches reveal descendants and support transient explicit co
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered, collapsed)).filter(item => item.kind === 'table'), []);
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id).sort(), ['a', 'b']);
   assert.deepEqual([...collapsed], ['/数学']);
+});
+
+test('search limit options stay aligned with the API contract and default', () => {
+  assert.deepEqual(SEARCH_LIMIT_OPTIONS, [25, 50, 100]);
+});
+
+test('searchResultSummary distinguishes the requested maximum from the returned count', () => {
+  assert.equal(searchResultSummary(50, 50), '最多 50 条 · 返回 50 条');
+  assert.equal(searchResultSummary(100, 60), '最多 100 条 · 返回 60 条');
+  assert.equal(searchResultSummary(null, 60), null, 'no summary before a result set exists');
+  assert.equal(searchResultSummary(50, 0), null, 'an empty result set keeps its dedicated empty state');
+  assert.equal(searchResultSummary(Number.NaN, 5), null);
+  assert.equal(searchResultSummary(50, Number.NaN), null);
+});
+
+test('column resize shares limits and keyboard steps without treating grid keys as resize', () => {
+  assert.equal(clampColumnWidth(40), 80);
+  assert.equal(clampColumnWidth(600), 520);
+  assert.equal(clampColumnWidth(NaN), 160);
+  assert.equal(keyboardColumnWidth(137, 'ArrowRight'), 147);
+  assert.equal(keyboardColumnWidth(137, 'ArrowLeft', true), 97);
+  assert.equal(keyboardColumnWidth(85, 'ArrowLeft'), 80);
+  assert.equal(keyboardColumnWidth(515, 'ArrowRight', true), 520);
+  assert.equal(keyboardColumnWidth(137, 'Home'), 80);
+  assert.equal(keyboardColumnWidth(137, 'End'), 520);
+  for (const key of ['ArrowDown', 'Enter', 'Escape', 'Tab']) assert.equal(keyboardColumnWidth(137, key), null);
 });

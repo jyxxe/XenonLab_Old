@@ -208,8 +208,16 @@ def install(app):
             raise APIError(403, "ACCOUNT_MANAGEMENT_REQUIRED", "account management permission required")
 
     def validate(grants, available):
-        if not set(grants) <= SCOPES or not set(grants) <= available:
-            raise APIError(403, "PERMISSION_ESCALATION", "grants must be a subset of inherited permissions")
+        requested = set(grants)
+        if not requested <= SCOPES or not requested <= available:
+            # Name the exact scopes so an operator can see whether the parent
+            # lacks them or the request contains unknown scope names.
+            missing = sorted((requested - SCOPES) | (requested - available))
+            raise APIError(
+                403,
+                "PERMISSION_ESCALATION",
+                "grants must be a subset of inherited permissions; not grantable: " + ", ".join(missing),
+            )
 
     def request_scopes(actor):
         # Keep validated token claims distinct from active account grants so

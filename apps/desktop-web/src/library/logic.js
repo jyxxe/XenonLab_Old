@@ -9,6 +9,15 @@ export function formatNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
 }
 
+/** Inclusive range in the current loaded view, independent of virtual mounting. */
+export function rowSelectionRange(visibleIds, anchorId, targetId) {
+  const to = visibleIds.indexOf(targetId);
+  if (to < 0) return [];
+  const from = visibleIds.indexOf(anchorId);
+  if (from < 0) return [targetId];
+  return visibleIds.slice(Math.min(from, to), Math.max(from, to) + 1);
+}
+
 export function formatBytes(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
   if (value < 1024) return `${value} B`;
@@ -213,9 +222,9 @@ export function classifySchemaChange(current = [], draft = []) {
   };
 }
 
-/** Parse `field = value` lines used by search filters into an exact-match dict. */
+/** Parse exact-match filters: JSON literals retain types; ordinary text is a string. */
 export function parseFieldFilters(text) {
-  const filters = {};
+  const entries = [];
   const errors = [];
   for (const line of String(text || '').split(/\n+/)) {
     const trimmed = line.trim();
@@ -225,9 +234,36 @@ export function parseFieldFilters(text) {
       errors.push(`无法解析「${trimmed}」，请使用 字段 = 值`);
       continue;
     }
-    filters[match[1]] = match[2];
+    const raw = match[2];
+    let value = raw;
+    if (/^(?:"|\[|\{|[+-]?(?:\d|\.\d)|true$|false$|null$|NaN$|[+-]?Infinity$)/.test(raw)) {
+      try {
+        value = JSON.parse(raw);
+        const pending = [value];
+        while (pending.length) {
+          const item = pending.pop();
+          if (typeof item === 'number' && (!Number.isFinite(item) || (Number.isInteger(item) && !Number.isSafeInteger(item)))) {
+            throw new Error('数值必须有限，整数必须在 JavaScript 安全整数范围内');
+          }
+          if (item && typeof item === 'object') pending.push(...Object.values(item));
+        }
+      } catch (cause) {
+        errors.push(`字段「${match[1]}」的 JSON 值无效：${cause.message}；字符串请使用双引号`);
+        continue;
+      }
+    }
+    entries.push([match[1], value]);
   }
-  return {filters, errors};
+  return {filters: Object.fromEntries(entries), errors};
+}
+
+/** Choices offered for the search `limit` field; the API contract caps at 100. */
+export const SEARCH_LIMIT_OPTIONS = [25, 50, 100];
+
+export function searchResultSummary(limit, hitCount) {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) return null;
+  if (typeof hitCount !== 'number' || !Number.isFinite(hitCount) || hitCount < 1) return null;
+  return `最多 ${limit} 条 · 返回 ${hitCount} 条`;
 }
 
 export function searchWarnings(meta = {}) {
@@ -508,4 +544,18 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
     lines.push(`问题：${String(question || '').trim() || '（请在发送前补充你的问题）'}`);
   }
   return lines.join('\n');
+}
+
+/** Shared pixel preference limits for both pointer and keyboard column resizing. */
+export function clampColumnWidth(width) {
+  return Math.max(80, Math.min(520, Number.isFinite(width) ? width : 160));
+}
+
+export function keyboardColumnWidth(width, key, shift = false) {
+  if (key === 'Home') return 80;
+  if (key === 'End') return 520;
+  const step = shift ? 40 : 10;
+  if (key === 'ArrowLeft') return clampColumnWidth(width - step);
+  if (key === 'ArrowRight') return clampColumnWidth(width + step);
+  return null;
 }

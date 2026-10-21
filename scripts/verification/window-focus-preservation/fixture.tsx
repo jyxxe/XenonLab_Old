@@ -1,0 +1,14 @@
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import '../src/design-system/tokens.css';
+import '../src/design-system/primitives.css';
+import '../src/shell/shell.css';
+import '../src/style.css';
+import {ToastProvider} from '../src/design-system/primitives';
+import {DesktopShell} from '../src/shell/DesktopShell';
+import {apiErrorFromResponse} from '../src/api-error.js';
+const token='round32-local-synthetic-token';
+const apiRaw=async(path:string,init:RequestInit={})=>{const headers=new Headers(init.headers);headers.set('Authorization',`Bearer ${token}`);if(init.body&&typeof init.body==='string'&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');return fetch(`/api/v1${path}`,{...init,headers})};
+const apiPage=async(path:string,init:RequestInit={})=>{const response=await apiRaw(path,init);let payload:any=null;try{payload=await response.json()}catch{}if(!response.ok)throw apiErrorFromResponse(response,payload);return payload};
+const api=async(path:string,init:RequestInit={})=>(await apiPage(path,init)).data;
+createRoot(document.getElementById('root')!).render(<ToastProvider><DesktopShell api={api as any} apiPage={apiPage as any} apiRaw={apiRaw as any} onLogout={async()=>{}} /></ToastProvider>);
