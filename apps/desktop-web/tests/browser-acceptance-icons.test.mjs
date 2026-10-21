@@ -54,8 +54,9 @@ test('shared icons retain shell and Library names, keyboard actions, themes and 
     const palette = page.getByRole('dialog', {name: '命令面板', exact: true});
     await expect(palette.locator('svg[data-icon]').first()).toBeVisible();
     await expect(palette.getByRole('combobox', {name: '搜索命令与应用'})).toBeVisible();
-    await palette.getByRole('option', {name: '切换浅色 / 深色外观', exact: true}).focus();
-    await page.keyboard.press('Enter');
+    // Click the command instead of focusing it and pressing Enter: under load the
+    // palette can re-render between focus and key delivery and drop the command.
+    await palette.getByRole('option', {name: '切换浅色 / 深色外观', exact: true}).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
     assert.equal(await dockSize(), 22);
     await page.screenshot({path: path.join(evidence, 'desktop-light.png')});

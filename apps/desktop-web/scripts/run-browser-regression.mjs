@@ -23,6 +23,7 @@ const tests = [
   'tests/browser-acceptance-window-arrangement.test.mjs',
   'tests/browser-acceptance-issues-narrow.test.mjs',
   'tests/browser-acceptance-query-drafts.test.mjs',
+  'tests/browser-acceptance-search-return.test.mjs',
   'tests/browser-acceptance-session-cache.test.mjs',
   'tests/browser-acceptance-account-patch.test.mjs',
   'tests/browser-acceptance-account-filter.test.mjs',

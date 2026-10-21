@@ -1,10 +1,12 @@
 import {Icon} from '../design-system/Icon';
-import React, {useMemo, useState} from 'react';
+import React, {useMemo} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton, Tabs, Textarea} from '../design-system/primitives';
 import {SEARCH_LIMIT_OPTIONS, describeError, isKeywordResult, parseFieldFilters, searchResultSummary, searchWarnings} from './logic.js';
 import type {SearchHit, SearchMeta, SearchMode} from './types';
 
 export function SearchView({
+  showFilters,
+  onShowFilters,
   mode,
   onMode,
   kind,
@@ -28,6 +30,8 @@ export function SearchView({
   onOpenHit,
   tableName,
 }: {
+  showFilters: boolean;
+  onShowFilters: (value: boolean) => void;
   mode: SearchMode;
   onMode: (mode: SearchMode) => void;
   kind: 'semantic' | 'keyword';
@@ -51,7 +55,6 @@ export function SearchView({
   onOpenHit: (hit: SearchHit) => void;
   tableName: (tableId: string) => string;
 }) {
-  const [showFilters, setShowFilters] = useState(false);
   const parsed = useMemo(() => parseFieldFilters(filterText), [filterText]);
   const warnings = useMemo(() => searchWarnings(meta), [meta]);
   const errorInfo = error ? describeError(error, '搜索') : null;
@@ -114,7 +117,7 @@ export function SearchView({
       )}
 
       <div className="library-search-filters">
-        <button type="button" className="library-link" onClick={() => setShowFilters(value => !value)}>
+        <button type="button" className="library-link" onClick={() => onShowFilters(!showFilters)}>
           {showFilters ? '收起过滤条件' : '过滤条件'}
         </button>
         {showFilters && (

@@ -288,12 +288,14 @@ export function useSearch(apiPage: APIPage) {
   const [running, setRunning] = useState(false);
   const [ran, setRan] = useState(false);
   const generation = useRef(0);
+  const [resultVersion, setResultVersion] = useState(0);
 
   const run = useCallback(
     async (overrides: {query?: string; path?: string; filters?: Record<string, string>; kind?: 'semantic' | 'keyword'} = {}) => {
       const text = (overrides.query ?? query).trim();
       const scope = (overrides.path ?? path).trim() || '/**';
       const request = ++generation.current;
+      setResultVersion(version => version + 1);
       if (!text) {
         setError(new Error('请输入搜索内容'));
         setRan(true);
@@ -336,6 +338,7 @@ export function useSearch(apiPage: APIPage) {
     setMode(next);
     if (next === 'quality') setKind('semantic');
     ++generation.current;
+    setResultVersion(version => version + 1);
     setRunning(false);
     setHits([]);
     setMeta({});
@@ -346,6 +349,7 @@ export function useSearch(apiPage: APIPage) {
 
   const reset = useCallback(() => {
     ++generation.current;
+    setResultVersion(version => version + 1);
     setRunning(false);
     setHits([]);
     setMeta({});
@@ -354,7 +358,7 @@ export function useSearch(apiPage: APIPage) {
     setRan(false);
   }, []);
 
-  return {mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, limit, setLimit, hits, meta, resultLimit, error, running, ran, run, reset};
+  return {resultVersion, mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, limit, setLimit, hits, meta, resultLimit, error, running, ran, run, reset};
 }
 
 export function useQueryConsole(apiPage: APIPage, subject: string | null, identityVerified = Boolean(subject), authEpoch = 0) {

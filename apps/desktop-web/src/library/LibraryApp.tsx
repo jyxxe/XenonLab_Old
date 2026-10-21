@@ -92,6 +92,19 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const rowNavigation = useRef(0);
+  const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
+  const content = useRef<HTMLElement>(null);
+  const searchReturn = useRef<{version: number; top: number} | null>(null);
+
+  // Restore the search results scroll position only when returning from a hit of
+  // the same result set; any newer search invalidates the remembered position.
+  useLayoutEffect(() => {
+    if (searchReturn.current?.version !== search.resultVersion) searchReturn.current = null;
+    if (view === 'search') {
+      if (content.current) content.current.scrollTop = searchReturn.current?.top ?? 0;
+      searchReturn.current = null;
+    }
+  }, [view, search.resultVersion]);
   const [tableTarget, setTableTarget] = useState<{id: string; loading: boolean; error: unknown} | null>(null);
 
   const canWrite = scopes.includes('xelibrary:write');
@@ -123,6 +136,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   }, [notice]);
 
   function openTable(next: Table, expandPath = true) {
+    searchReturn.current = null;
     ++rowNavigation.current;
     setTableTarget(null);
     setView('library');
@@ -158,13 +172,15 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   }
 
   function selectView(next: LibraryViewKind) {
+    if (next !== 'search') searchReturn.current = null;
     ++rowNavigation.current;
     setTableTarget(null);
     setView(next);
     if (next === 'theorems' && !theorems.items.length && !theorems.loading) void theorems.load();
   }
 
-  async function openRow(tableId: string, rowId: string, remember = true) {
+  async function openRow(tableId: string, rowId: string, remember = true, fromSearch = false) {
+    if (!fromSearch) searchReturn.current = null;
     const request = ++rowNavigation.current;
     setTableTarget(null);
     const known = catalogue.tables.find(item => item.id === tableId) || (await api(`/tables/${tableId}`).catch(() => null));
@@ -192,7 +208,9 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   }
 
   async function openHit(hit: SearchHit) {
-    await openRow(hit.table_id, hit.row_id);
+    const position = {version: search.resultVersion, top: content.current?.scrollTop ?? 0};
+    searchReturn.current = position;
+    await openRow(hit.table_id, hit.row_id, true, true);
   }
 
   function openEntry(entry: RecentEntry) {
@@ -204,6 +222,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
       const [tableId, rowId] = entry.id.split(':');
       void openRow(tableId, rowId);
     } else if (entry.kind === 'theorem') {
+      searchReturn.current = null;
       ++rowNavigation.current;
       setTableTarget(null);
       setView('theorems');
@@ -226,6 +245,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   }
 
   function onSelectRow(rowId: string, event: React.MouseEvent, visibleRowIds: string[]) {
+    searchReturn.current = null;
     ++rowNavigation.current;
     setActiveRowId(rowId);
     setInspectorOpen(true);
@@ -484,7 +504,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
         theoremCount={theorems.items.length || null}
       />
 
-      <main className="knowledge-content" aria-label="知识库主区域">
+      <main ref={content} className="knowledge-content" aria-label="知识库主区域">
         {notice && (
           <div className={`library-toast library-toast-${notice.tone}`} role={notice.tone === 'danger' ? 'alert' : 'status'}>
             <div className="library-toast-content">
@@ -498,6 +518,8 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
 
         {view === 'search' && (
           <SearchView
+            showFilters={searchFiltersOpen}
+            onShowFilters={setSearchFiltersOpen}
             mode={search.mode}
             onMode={search.setMode}
             kind={search.kind}
