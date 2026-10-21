@@ -266,3 +266,4 @@ a.job-table:hover{text-decoration:underline}
 .plugin-check input{width:auto}
 .plugin-publish{margin-top:var(--spacing-5);padding-top:var(--spacing-3);border-top:1px solid var(--border-subtle)}
 .plugin-publish textarea{display:block;width:100%;min-height:220px;margin:var(--spacing-3) 0;padding:var(--spacing-3);border:1px solid var(--border);border-radius:var(--radius-control);background:var(--surface-sunken);color:var(--text-primary);font-family:var(--font-mono);font-size:var(--font-size-sm);resize:vertical}
+.widget-order{padding:0;list-style:none}.widget-order li{display:flex;align-items:center;gap:8px;margin:8px 0}.widget-order li span{flex:1;min-width:0}

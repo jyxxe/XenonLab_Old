@@ -3,6 +3,7 @@ import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
 import type {APIRaw, DesktopApp, PreferenceApplyOptions, UserPreferences, WallpaperMode} from './shell/types';
 import {customWallpaperStyle} from './wallpaper.js';
+import {moveWidget} from './widget-order.js';
 
 export type Preferences = UserPreferences;
 export const defaultPreferences: UserPreferences = {
@@ -278,6 +279,16 @@ export function DesktopPreferences({
             </label>
           ))}
         </fieldset>
+        <p className="muted">已启用组件显示顺序；关闭后再次启用会追加到末尾。</p>
+        <ol className="widget-order" aria-label="已启用组件顺序">
+          {(preferences.widgets || []).map((id, index) => {
+            const title = widgetOptions.find(([key]) => key === id)?.[1] || id;
+            return <li key={id}><span>{title}</span>
+              <Button size="sm" aria-label={`上移${title}`} disabled={index === 0} onClick={() => void update({widgets: moveWidget(preferences.widgets, id, -1)})}>上移</Button>
+              <Button size="sm" aria-label={`下移${title}`} disabled={index === preferences.widgets.length - 1} onClick={() => void update({widgets: moveWidget(preferences.widgets, id, 1)})}>下移</Button>
+            </li>;
+          })}
+        </ol>
         {(preferences.widgets || []).includes('app-shortcuts') && <fieldset className="widget-shortcut-options">
           <legend>快捷入口应用</legend>
           <p className="muted">只显示当前账户已授权且可打开的应用；未选择时显示前四个可用应用。</p>
