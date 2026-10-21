@@ -288,3 +288,29 @@ release, all native jobs, target versions and Gateway unresolved states. Release
 only a demonstrably owned lease through the normal API; an uncertain or foreign
 lease requires separate operator recovery. This helper does not recover staging,
 activation, rollback failures or interrupted deployments.
+
+## Validation worktree retention — 2026-10-21
+
+Each protected preflight creates `/var/lib/devagent/worktrees/validate-<task>`
+with a full dependency checkout. On 2026-10-21, 213 leftover worktrees reached
+32 GB and pushed the VM111 root filesystem to 81%; `hf_cache` evaluates the real
+`shutil.disk_usage`, so the 80/85/90 percent watermarks made nine unrelated
+`tests/test_hf_cache.py` cases fail and blocked every protected preflight
+(Issue #276). The tests now inject low pressure by default, and orphaned trees
+are pruned by `devagent-worktree-prune.timer` (`infra/devagent/`), which removes
+`validate-*` directories older than 48 hours as the `devagent` user.
+
+Install as root on VM111 after a reviewed release:
+
+```sh
+install -m 755 /opt/xeonolab/current/infra/devagent/prune-validation-worktrees.sh \
+  /usr/local/libexec/devagent-prune-worktrees
+install -m 644 /opt/xeonolab/current/infra/devagent/devagent-worktree-prune.service \
+  /opt/xeonolab/current/infra/devagent/devagent-worktree-prune.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now devagent-worktree-prune.timer
+systemctl start devagent-worktree-prune.service   # one manual run, check journal
+```
+
+The same `hf_cache` disk-pressure rule means the protected host must stay below
+80% root usage; check `df -h /` after large validation batches.
