@@ -58,7 +58,7 @@ export function TableView({
   onSort: (key: string) => void;
   selection: Set<string>;
   activeRowId: string | null;
-  onSelectRow: (rowId: string, event: React.MouseEvent) => void;
+  onSelectRow: (rowId: string, event: React.MouseEvent, visibleRowIds: string[]) => void;
   onActivateRow: (rowId: string) => void;
   onSelectionChange: (next: Set<string>) => void;
   onLoadMore: () => void;
@@ -86,6 +86,7 @@ export function TableView({
     const filtered = filterRows(rows, filter);
     return sort ? sortRows(filtered, sort.key, sort.direction) : filtered;
   }, [rows, filter, sort]);
+  const visibleRowIds = useMemo(() => visibleRows.map(row => row._row_id), [visibleRows]);
 
   const selectedVisibleRows = visibleRows.filter(row => selection.has(row._row_id));
 
@@ -228,7 +229,7 @@ export function TableView({
   // unselected row upgrades it to that row first so the draft always matches
   // what the user is looking at.
   function rowsForAI(row: Row): Row[] {
-    if (selection.has(row._row_id)) return rows.filter(item => selection.has(item._row_id));
+    if (selection.has(row._row_id)) return selectedVisibleRows;
     return [row];
   }
 
@@ -279,7 +280,7 @@ export function TableView({
           <>
             <Badge tone="accent">已选 {selection.size} 行</Badge>
             <Button size="sm" loading={copyBusy} disabled={!selectedVisibleRows.length} onClick={() => void copySelected()}>复制已选记录为 TSV（{selectedVisibleRows.length} 行）</Button>
-            <Button size="sm" variant="ghost" onClick={() => onAskAI(rows.filter(item => selection.has(item._row_id)))}>Ask AI about selection</Button>
+            <Button size="sm" variant="ghost" onClick={() => onAskAI(selectedVisibleRows)}>Ask AI about selection</Button>
             <Button size="sm" variant="ghost" onClick={() => onSelectionChange(new Set())}>清除选择</Button>
           </>
         )}
@@ -403,7 +404,7 @@ export function TableView({
                     data-row-id={row._row_id}
                     aria-selected={selected}
                     style={{height: ROW_HEIGHT}}
-                    onClick={event => onSelectRow(row._row_id, event)}
+                    onClick={event => onSelectRow(row._row_id, event, visibleRowIds)}
                     onDoubleClick={() => onActivateRow(row._row_id)}
                     onContextMenu={event => {
                       event.preventDefault();

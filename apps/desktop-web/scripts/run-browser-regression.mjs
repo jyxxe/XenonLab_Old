@@ -26,6 +26,7 @@ const tests = [
   'tests/browser-acceptance-account-patch.test.mjs',
   'tests/browser-acceptance-account-filter.test.mjs',
   'tests/browser-acceptance-embedding-table.test.mjs',
+  'tests/browser-acceptance-selection.test.mjs',
   'tests/browser-acceptance-int64.test.mjs',
   'tests/browser-acceptance-attachment-picker.test.mjs',
   'tests/browser-acceptance-icons.test.mjs',
