@@ -36,3 +36,23 @@ No production deployment, real OIDC, screen-reader or all-navigation acceptance 
 The first frozen candidate exposed an intermittent stale dirty-status handle under rapid single-field editing; combined attachment selection made it visible in a realistic flow. Independent actual Chrome evidence showed a matching source row/columns and visible changed title, but the previously published dirty flag remained false. This was an Inspector status-publication bug, not an attachment binding or API mutation failure. The reset's clean publication and next input can retain the same changed-field count; adding the draft object to hook dependencies fixes that publication.
 
 Negative and one-line positive controls are retained under runtime/verification/issue245-draft-status-diagnosis. The pure one-line repair, without getters/console, passes the actual combined Library/picker/API scenario and the complete Inspector acceptance. A separate getter-only native Chrome diagnostic captures the false status after rapid B→A edit with no picker or tab change. Current authored regression uses native pointer and Playwright input fill; no DOM-event batching control is substituted for pointer acceptance. Final corrected hashes/gates are recorded in runtime/issue245-source-manifest.json and runtime/correction-report.md.
+
+## Coordinator integration (2026-10-22)
+
+The branch was refreshed onto release base `816bc427`. The base has since adopted
+the identity-fenced `LibraryApp`/`LibraryWorkspace` structure (props object,
+`apiPage`-based envelope, request lifetimes), so the draft-confirmation changes
+were re-applied to that structure instead of taking the branch's older monolith
+text: the pending-row-switch context/fence, pointer-down focus capture,
+continue-editing focus restoration after the modal trap, the discard path and the
+confirmation Modal all live in `LibraryWorkspace`, and `Inspector` keeps both the
+new `draftStateRef` and the base's `identityKey`/server index status.
+
+The existing browser acceptance now answers the account-preferences sync endpoint
+(LibraryApp syncs recents/favourites) and scopes its "no PATCH" assertions to row
+paths, because the preference sync is unrelated to record writes.
+
+Final gates: 576 pytest, full-repository Ruff, OpenAPI no diff, frontend unit
+tests, `tsc --noEmit` + Vite build, the inspector-drafts acceptance and the full
+66/66 browser regression. Exact-head CI, protected preflight, approval and
+deployment evidence are recorded on the PR.

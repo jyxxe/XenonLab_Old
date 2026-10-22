@@ -1,7 +1,11 @@
+import {Icon} from './design-system/Icon';
+import {readableErrorMessage} from './api-error.js';
+import {SHORTCUT_LIMIT, shortcutLimitHint, toggleShortcutApp} from './desktop-shortcut-limit.js';
 import React, {useRef, useState} from 'react';
 import {Badge, Button, Input, Panel, Select, Switch} from './design-system/primitives';
 import type {APIRaw, DesktopApp, PreferenceApplyOptions, UserPreferences, WallpaperMode} from './shell/types';
 import {customWallpaperStyle} from './wallpaper.js';
+import {moveWidget} from './widget-order.js';
 
 export type Preferences = UserPreferences;
 export const defaultPreferences: UserPreferences = {
@@ -16,6 +20,7 @@ export const defaultPreferences: UserPreferences = {
   wallpaper_dim: 0,
   timezone: 'system',
   widgets: ['clock', 'status'],
+  plugin_widgets: [],
   shortcut_apps: [],
   notes: '',
   dock_size: 'medium',
@@ -24,6 +29,10 @@ export const defaultPreferences: UserPreferences = {
   animations: true,
   reduced_motion: false,
 };
+
+// Reset appearance without submitting user-authored content or a stale note snapshot.
+const defaultAppearancePreferences: Partial<UserPreferences> = {...defaultPreferences};
+delete defaultAppearancePreferences.notes;
 
 const widgetOptions: Array<[UserPreferences['widgets'][number], string]> = [
   ['clock', '时钟与日期'],
@@ -68,7 +77,7 @@ export function DesktopPreferences({
     const version=++changeVersion.current;
     setMessage('保存中…');
     try {await apply(patch);if(version===changeVersion.current)setMessage('已应用并保存')}
-    catch (error) {if(version===changeVersion.current)setMessage('保存失败：'+String(error))}
+    catch (error) {if(version===changeVersion.current)setMessage('保存失败：'+readableErrorMessage(error))}
   };
 
   const sliderDragging = useRef<HTMLInputElement | null>(null);
@@ -105,7 +114,7 @@ export function DesktopPreferences({
       if (generation !== sliderGeneration.current || request !== sliderRequest.current) return;
       if (!Object.keys(patch).some(key => sliderEdits.current[key as keyof UserPreferences] !== undefined && sliderEdits.current[key as keyof UserPreferences] === edits[key as keyof UserPreferences])) return;
       sliderPatch.current = {...sliderUnconfirmed.current};
-      setSliderMessage('壁纸保存失败：'+String(error));setSliderFailed(true);
+      setSliderMessage('壁纸保存失败：'+readableErrorMessage(error));setSliderFailed(true);
     }
   };
   const flushRef = useRef(flushSlider);
@@ -124,7 +133,7 @@ export function DesktopPreferences({
     sliderUnconfirmed.current = {...sliderUnconfirmed.current, ...patch};
     sliderPatch.current = {...sliderUnconfirmed.current};
     setSliderFailed(false);setSliderMessage('待保存…');
-    void apply(patch, {previewOnly: true}).catch(error => {if (generation === sliderGeneration.current && version === changeVersion.current) {cancelSliderTimer();sliderPatch.current = {};sliderUnconfirmed.current = {};sliderEdits.current = {};setSliderMessage('');setMessage('保存失败：'+String(error));}});
+    void apply(patch, {previewOnly: true}).catch(error => {if (generation === sliderGeneration.current && version === changeVersion.current) {cancelSliderTimer();sliderPatch.current = {};sliderUnconfirmed.current = {};sliderEdits.current = {};setSliderMessage('');setMessage('保存失败：'+readableErrorMessage(error));}});
     cancelSliderTimer();
     if (!sliderDragging.current) sliderTimer.current = setTimeout(() => void flushRef.current(), 350);
   };
@@ -155,7 +164,7 @@ export function DesktopPreferences({
       await apply({wallpaper: 'custom', wallpaper_mode: 'image'});
       setMessage('自定义壁纸已保存到此账户');
     } catch (error) {
-      setMessage(`壁纸上传失败：${String(error)}`);
+      setMessage(`壁纸上传失败：${readableErrorMessage(error)}`);
     } finally {
       setWallpaperBusy(false);
     }
@@ -171,7 +180,7 @@ export function DesktopPreferences({
       await apply({wallpaper: result.data.wallpaper});
       setMessage('自定义壁纸已移除');
     } catch (error) {
-      setMessage(`移除壁纸失败：${String(error)}`);
+      setMessage(`移除壁纸失败：${readableErrorMessage(error)}`);
     } finally {
       setWallpaperBusy(false);
     }
@@ -272,25 +281,46 @@ export function DesktopPreferences({
             </label>
           ))}
         </fieldset>
-        {(preferences.widgets || []).includes('app-shortcuts') && <fieldset className="widget-shortcut-options">
-          <legend>快捷入口应用</legend>
-          <p className="muted">只显示当前账户已授权且可打开的应用；未选择时显示前四个可用应用。</p>
-          {apps.map(app => <label key={app.id}>
-            <input
-              type="checkbox"
-              checked={(preferences.shortcut_apps || []).includes(app.id)}
-              onChange={event => {
-                const current = preferences.shortcut_apps || [];
-                const next = event.target.checked
-                  ? [...current, app.id].slice(-12)
-                  : current.filter(id => id !== app.id);
-                void update({shortcut_apps: next});
-              }}
-            />
-            {app.icon} {app.title}
-          </label>)}
-          {!apps.length && <p className="muted">当前没有可用的授权应用。</p>}
-        </fieldset>}
+        <p className="muted">已启用组件显示顺序；关闭后再次启用会追加到末尾。</p>
+        <ol className="widget-order" aria-label="已启用组件顺序">
+          {(preferences.widgets || []).map((id, index) => {
+            const title = widgetOptions.find(([key]) => key === id)?.[1] || id;
+            return <li key={id}><span>{title}</span>
+              <Button size="sm" aria-label={`上移${title}`} disabled={index === 0} onClick={() => void update({widgets: moveWidget(preferences.widgets, id, -1)})}>上移</Button>
+              <Button size="sm" aria-label={`下移${title}`} disabled={index === preferences.widgets.length - 1} onClick={() => void update({widgets: moveWidget(preferences.widgets, id, 1)})}>下移</Button>
+            </li>;
+          })}
+        </ol>
+        {(preferences.widgets || []).includes('app-shortcuts') && (() => {
+          const selectedShortcuts = preferences.shortcut_apps || [];
+          const shortcutsFull = selectedShortcuts.length >= SHORTCUT_LIMIT;
+          return <fieldset className="widget-shortcut-options">
+            <legend>快捷入口应用</legend>
+            <p className="muted">只显示当前账户已授权且可打开的应用；未选择时显示前四个可用应用。</p>
+            <p className="muted" data-testid="shortcut-limit-hint">{shortcutLimitHint(selectedShortcuts)}</p>
+            {apps.map(app => {
+              const checked = selectedShortcuts.includes(app.id);
+              return <label key={app.id}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={!checked && shortcutsFull}
+                  onChange={event => {
+                    const result = toggleShortcutApp(selectedShortcuts, app.id);
+                    if (result.blocked) {
+                      setMessage(`快捷入口最多 ${SHORTCUT_LIMIT} 项，请先取消一个已选应用`);
+                      return;
+                    }
+                    void update({shortcut_apps: result.selected});
+                  }}
+                />
+                <Icon value={app.icon} size={16} /> {app.title}
+              </label>;
+            })}
+            {shortcutsFull && <p className="muted">已达到 {SHORTCUT_LIMIT} 项上限：取消一个已选应用后才能添加新的快捷入口。</p>}
+            {!apps.length && <p className="muted">当前没有可用的授权应用。</p>}
+          </fieldset>;
+        })()}
         {preferences.widgets.includes('notes') && <p className="muted">便签最多 4,000 字；编辑后自动同步，失去焦点或离开页面时会尝试提交。未显示“已保存”的修改尚未确认写入服务器。</p>}
         <div className="preference-switch">
           <span>
@@ -337,15 +367,15 @@ export function DesktopPreferences({
             const index = dockIds.indexOf(app.id);
             return <li key={app.id}>
               <label><input type="checkbox" checked={index >= 0} onChange={() => togglePin(app.id)} />{app.title}</label>
-              <Button size="sm" aria-label={`向前移动 ${app.title}`} disabled={index <= 0} onClick={() => movePinned(app.id, -1)}>↑</Button>
-              <Button size="sm" aria-label={`向后移动 ${app.title}`} disabled={index < 0 || index === dockIds.length - 1} onClick={() => movePinned(app.id, 1)}>↓</Button>
+              <Button size="sm" aria-label={`向前移动 ${app.title}`} disabled={index <= 0} onClick={() => movePinned(app.id, -1)}><Icon value="arrow-up" size={16} /></Button>
+              <Button size="sm" aria-label={`向后移动 ${app.title}`} disabled={index < 0 || index === dockIds.length - 1} onClick={() => movePinned(app.id, 1)}><Icon value="arrow-down" size={16} /></Button>
             </li>;
           })}
         </ul>
       </Panel>
 
       <div className="preference-actions">
-        <Button onClick={() => update(defaultPreferences)}>恢复默认外观</Button>
+        <Button onClick={() => update(defaultAppearancePreferences)}>恢复默认外观</Button>
       </div>
 
       <Panel title="窗口布局" actions={<Badge tone="accent">自动保存</Badge>}>
@@ -356,7 +386,7 @@ export function DesktopPreferences({
               await saveLayout();
               setMessage('当前窗口位置、大小与 Dock 已保存');
             } catch (error) {
-              setMessage(String(error));
+              setMessage(readableErrorMessage(error));
             }
           }}
         >

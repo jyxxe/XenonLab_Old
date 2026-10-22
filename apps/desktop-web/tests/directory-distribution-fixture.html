@@ -1,0 +1,30 @@
+<!doctype html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<link rel="stylesheet" href="/src/design-system/tokens.css"/><link rel="stylesheet" href="/src/design-system/primitives.css"/>
+<link rel="stylesheet" href="/src/style.css"/><title>Directory distribution acceptance fixture</title></head>
+<body><div id="root" style="height:95vh;max-width:1080px;margin:auto"></div><script type="module">
+import React from 'react';
+import {createRoot} from 'react-dom/client';
+import {Dashboard} from '/src/Dashboard.tsx';
+const mode = new URLSearchParams(location.search).get('mode') || 'eight';
+const names = ['数学基础课程线性代数', '数学基础课程高等代数', '计算机科学算法设计', '计算机科学数据结构', '科学实验', '人文课程', '自然观察', '艺术课程'];
+const row = (name, index) => ({id: `table-${index}`, name: `Synthetic ${index}`, path: `/${name}/nested`});
+let tables = names.map(row);
+if (mode === 'six') tables = names.slice(0, 6).map(row);
+if (mode === 'zero') tables = [];
+if (mode === 'long') tables = names.slice(0, 5).map((name, index) => row(`公共课程长期学习项目-${name}-${'知识基础'.repeat(8)}`, index))
+  .concat([row('公共课程长期学习项目-artificial-intelligence-and-machine-learning-foundations-deep-learning-transformer-architecture-notes', 5)]);
+if (mode === 'truncated') tables = Array.from({length: 1000}, (_, index) => row(names[index % names.length], index));
+if (mode === 'arbitrary') tables = ['Other', '其他', '其他（汇总）', '__proto__', 'constructor', 'toString', 'x', 'y']
+  .flatMap((name, index) => Array.from({length: index < 3 ? 10 - index : 1}, (_, count) => row(name, `${index}-${count}`)));
+window.__directoryFixture = {tables, calls: [], opened: []};
+const originalFetch = window.fetch;
+window.fetch = (input, init) => input === '/health/ready' ? Promise.resolve(new Response(JSON.stringify({service: 'synthetic desktop'}), {headers: {'Content-Type': 'application/json'}})) : originalFetch(input, init);
+async function apiPage(path) {
+  window.__directoryFixture.calls.push(path);
+  if (path === '/tables?limit=1000') return {data: tables, meta: {next_cursor: mode === 'truncated' ? 'synthetic-more' : null}};
+  if (path.startsWith('/work') || path.startsWith('/jobs')) return {data: [], meta: {}};
+  throw Error(`Unexpected fixture request: ${path}`);
+}
+createRoot(document.getElementById('root')).render(React.createElement(Dashboard, {apiPage, openApp: id => window.__directoryFixture.opened.push(id)}));
+</script></body></html>

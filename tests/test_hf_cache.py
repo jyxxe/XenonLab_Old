@@ -21,6 +21,23 @@ from .conftest import auth
 REV = "a" * 40
 
 
+@pytest.fixture(autouse=True)
+def low_disk_pressure(monkeypatch):
+    """Keep hf-cache tests independent of the host filesystem.
+
+    hf_cache reads the real ``shutil.disk_usage`` in development mode, so a
+    validation host above the 80/85/90 percent watermarks used to change
+    prefetch/speculative behaviour and fail unrelated tests. Tests that need a
+    specific watermark still override this in their own ``monkeypatch``.
+    """
+
+    monkeypatch.setattr(
+        hf_cache.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=1000, used=100, free=900),
+    )
+
+
 def local_download(repo_type, repo_id, revision, destination, allow_patterns, ignore_patterns, max_bytes):
     assert revision in (REV, "b" * 40), "downloader must receive an immutable resolved commit SHA"
     destination.mkdir(parents=True)
@@ -504,17 +521,74 @@ def write_pool_metrics(path, *, pool="aux-10t", total=10_000, used=1_000, observ
 
 
 def test_root_fed_pool_metrics_schema_owner_and_freshness(tmp_path):
-    path = write_pool_metrics(tmp_path / "pool.json")
+    observed = datetime.now(timezone.utc)
+    path = write_pool_metrics(tmp_path / "pool.json", observed_at=observed)
     owners = []
     result = hf_cache.read_pool_metrics(
         path,
         expected_pool="aux-10t",
         owner_validator=lambda info: owners.append(info.st_uid) or info.st_uid == os.getuid(),
     )
-    assert result == {"pool": "aux-10t", "total": 10_000, "used": 1_000, "free": 9_000}
+    assert result == {
+        "pool": "aux-10t",
+        "total": 10_000,
+        "used": 1_000,
+        "free": 9_000,
+        "observed_at": observed.isoformat(),
+    }
     assert owners == [os.getuid()]
     with pytest.raises(APIError, match="STORAGE_TELEMETRY_UNAVAILABLE"):
         hf_cache.read_pool_metrics(path, owner_validator=lambda _info: False)
+
+
+def test_storage_endpoint_reports_verified_sampling_time(settings):
+    observed = "2026-10-03T08:00:00+00:00"
+
+    def pool_usage(_path):
+        return SimpleNamespace(pool="aux-10t", total=1_000, used=100, free=900, observed_at=observed)
+
+    app = hf_cache.create_app(
+        settings,
+        download_backend=local_download,
+        revision_resolver=lambda *_args: REV,
+        storage_usage_provider=pool_usage,
+    )
+    with TestClient(app) as api:
+        status = api.get("/api/v1/cache/storage", headers=auth()).json()["data"]
+        assert status["sampled_at"] == observed
+        assert "path" not in status
+
+
+def test_storage_provider_without_verified_sampling_time_reports_null(settings):
+    def pool_usage(_path):
+        return {"pool": "aux-10t", "total": 1_000, "used": 100, "free": 900}
+
+    app = hf_cache.create_app(
+        settings,
+        download_backend=local_download,
+        revision_resolver=lambda *_args: REV,
+        storage_usage_provider=pool_usage,
+    )
+    with TestClient(app) as api:
+        status = api.get("/api/v1/cache/storage", headers=auth()).json()["data"]
+        assert status["sampled_at"] is None
+        assert "path" not in status
+
+
+def test_non_string_sampling_time_fails_closed(settings):
+    def pool_usage(_path):
+        return {"pool": "aux-10t", "total": 1_000, "used": 100, "free": 900, "observed_at": 17}
+
+    app = hf_cache.create_app(
+        settings,
+        download_backend=local_download,
+        revision_resolver=lambda *_args: REV,
+        storage_usage_provider=pool_usage,
+    )
+    with TestClient(app) as api:
+        response = api.get("/api/v1/cache/storage", headers=auth())
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "STORAGE_TELEMETRY_UNAVAILABLE"
 
 
 @pytest.mark.parametrize("fault", ["stale", "wrong_pool", "inconsistent", "tampered", "writable", "symlink"])
@@ -570,6 +644,8 @@ def test_root_pool_watermarks_and_guest_free_space_are_both_enforced(settings, m
         assert status["watermark"] == "stop_prefetch"
         assert status["pool_free_bytes"] == 2_000 and status["guest_free_bytes"] == 5
         assert status["free_bytes"] == 5 and status["used_percent"] == 80
+        assert status["sampled_at"] == json.loads(metrics.read_text())["observed_at"]
+        assert "path" not in status, "server-local cache paths must not reach the desktop"
         rejected = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload(priority="low"))
         assert rejected.status_code == 507
         rejected = api.post("/api/v1/cache/ensure", headers=auth(), json=ensure_payload())

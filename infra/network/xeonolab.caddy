@@ -3,17 +3,30 @@
   encode zstd gzip
   header X-Content-Type-Options nosniff
   header Referrer-Policy no-referrer
+  header Strict-Transport-Security "max-age=300"
+  # Vite asset names are content-hashed, so they can be cached immutably: without
+  # an explicit policy browsers revalidate the ~0.6 MB bundle on every navigation
+  # (issue #293: Xenon Panel intranet access speed). The SPA entry stays
+  # revalidated so a new release is picked up on the next load.
+  @immutable_assets path /assets/*
+  header @immutable_assets Cache-Control "public, max-age=31536000, immutable"
+  @spa_entry path / /index.html
+  header @spa_entry Cache-Control "no-cache"
   @embedding_api path /api/v1/embed/*
   handle @embedding_api {
     reverse_proxy 192.168.0.107:8104
   }
-  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/*
+  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/* /api/v1/plugins*
   handle @desktop_api {
     reverse_proxy 127.0.0.1:8101
   }
   @work_api path /api/v1/work* /api/v1/issues/*
   handle @work_api {
     reverse_proxy 192.168.0.111:8106
+  }
+  @embedding_queue_api path /api/v1/embedding/queue* /api/v1/embedding/requests*
+  handle @embedding_queue_api {
+    reverse_proxy 192.168.0.107:8104
   }
   handle /api/v1/* {
     reverse_proxy 192.168.0.104:8100
@@ -25,6 +38,13 @@
     root * /var/lib/xeonolab/public
     file_server
   }
+  # Agent prompt catalogue (docs/agent-prompts in the active release). Served
+  # from the LAN edge so intranet agents can fetch the current prompts at any
+  # time; the panel also bundles the same files.
+  handle_path /agent-prompts/* {
+    root * /opt/xeonolab/current/docs/agent-prompts
+    file_server
+  }
   handle {
     root * /opt/xeonolab/current/apps/desktop-web/dist
     try_files {path} /index.html
@@ -32,6 +52,9 @@
   }
 }
 https://xenon.lan, https://192.168.0.101:9443 {
+  handle /harness* {
+    reverse_proxy 192.168.0.111:4097
+  }
   import xeonolab-desktop
 }
 https://library.xenon.lan {
@@ -41,7 +64,7 @@ https://library.xenon.lan {
 https://auth.xenon.lan, https://192.168.0.101:9444 {
   tls internal
   reverse_proxy 192.168.0.109:8180 {
-    header_up X-Forwarded-Host {host}
+    header_up X-Forwarded-Host {http.request.hostport}
     header_up X-Forwarded-Proto https
   }
 }
@@ -63,4 +86,10 @@ https://192.168.0.101:9445 {
   }
   tls internal
   reverse_proxy 192.168.0.110:3000
+}
+
+https://chat.xenon.lan {
+  tls internal
+  reverse_proxy 192.168.0.100:3000
+  header Content-Security-Policy "frame-ancestors https://xenon.lan https://192.168.0.101:9443"
 }

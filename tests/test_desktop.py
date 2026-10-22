@@ -128,6 +128,53 @@ def test_preferences_merge_isolate_and_survive_restart(settings):
     assert restarted.get(url, headers=auth()).json()["data"] == changed
 
 
+def test_preferences_etag_guards_concurrent_writes(settings):
+    """Issue #72 review: multi-device writers must be able to detect lost
+    updates instead of silently overwriting each other."""
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/preferences"
+    fresh = client.get(url, headers=auth())
+    etag = fresh.headers["etag"]
+    assert etag.startswith('"revision:')
+    stale_write = client.patch(url, headers=auth(), json={"accent": "blue"})
+    assert stale_write.status_code == 200  # legacy clients without If-Match keep working
+    current = client.get(url, headers=auth())
+    assert current.headers["etag"] != etag
+    lost = client.patch(url, headers=auth(**{"If-Match": etag}), json={"accent": "green"})
+    assert lost.status_code == 412 and lost.json()["error"]["code"] == "STALE_REVISION"
+    ok = client.patch(
+        url, headers=auth(**{"If-Match": current.headers["etag"]}), json={"accent": "green"}
+    )
+    assert ok.status_code == 200 and ok.json()["data"]["accent"] == "green"
+
+
+def test_preferences_favorite_tombstones_roundtrip(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/preferences"
+    saved = client.patch(
+        url,
+        headers=auth(),
+        json={
+            "library_favorites": [{"kind": "table", "id": "t1", "title": "T", "at": 10}],
+            "library_favorite_tombstones": [
+                {"kind": "table", "id": "t2", "at": 20},
+                {"kind": "table", "id": "bad", "deleted": "yes"},
+                {"nonsense": True},
+            ],
+        },
+    )
+    assert saved.status_code == 200
+    data = saved.json()["data"]
+    assert data["library_favorites"][0]["id"] == "t1"
+    # The cleaner normalises tombstones and forces the deletion marker.
+    assert data["library_favorite_tombstones"] == [
+        {"kind": "table", "id": "t2", "at": 20, "deleted": True},
+        {"kind": "table", "id": "bad", "at": 0, "deleted": True},
+    ]
+
+
 def test_layout_remembers_explicitly_empty_dock(settings):
     settings.dev_tokens["alice"]["scope"] += " desktop:read"
     client = TestClient(create_app("desktop-web", settings))
@@ -137,6 +184,104 @@ def test_layout_remembers_explicitly_empty_dock(settings):
     assert saved.json()["data"]["dock_initialized"] is True
     restarted = TestClient(create_app("desktop-web", settings))
     assert restarted.get(url, headers=auth()).json()["data"]["dock_initialized"] is True
+
+
+def test_preferences_persist_library_recents_and_favorites(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/preferences"
+    recents = [
+        {"kind": "table", "id": "t1", "title": "表一", "at": 20},
+        {"kind": "row", "id": "t1:row-2", "title": "行二", "at": 10},
+        {"junk": True},
+        {"kind": "", "id": "x", "title": "dropped", "at": 5},
+    ]
+    favorites = [{"kind": "table", "id": "t9", "title": "x" * 500, "at": 7}]
+    patch = client.patch(url, headers=auth(), json={"library_recents": recents, "library_favorites": favorites})
+    assert patch.status_code == 200, patch.text
+    stored = patch.json()["data"]
+    assert stored["library_recents"] == [
+        {"kind": "table", "id": "t1", "title": "表一", "at": 20},
+        {"kind": "row", "id": "t1:row-2", "title": "行二", "at": 10},
+    ]
+    assert stored["library_favorites"][0]["title"] == "x" * 200
+    assert len(client.patch(url, headers=auth(), json={
+        "library_favorites": [{"kind": "table", "id": f"t{i}", "title": "x", "at": i} for i in range(80)],
+    }).json()["data"]["library_favorites"]) == 50
+    restarted = TestClient(create_app("desktop-web", settings))
+    assert restarted.get(url, headers=auth()).json()["data"]["library_recents"][0]["id"] == "t1"
+    # another account stays isolated
+    settings.dev_tokens["bob"]["scope"] += " desktop:read"
+    assert restarted.get(url, headers=auth("bob")).json()["data"]["library_recents"] == []
+
+
+def test_preferences_etag_guards_multi_device_writes(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/preferences"
+    first = client.get(url, headers=auth())
+    assert first.status_code == 200
+    etag_before = first.headers["ETag"]
+    assert etag_before == '"revision:0"'
+    written = client.patch(
+        url,
+        headers=auth(),
+        json={"library_recents": [{"kind": "table", "id": "t1", "title": "A", "at": 3}]},
+    )
+    assert written.status_code == 200
+    etag_after = written.headers["ETag"]
+    assert etag_after != etag_before, "the PATCH response carries the new content revision"
+    assert client.get(url, headers=auth()).headers["ETag"] == etag_after
+
+    # Device B still holds the stale content revision: its write must be rejected
+    # instead of silently overwriting device A's newer state.
+    stale = client.patch(
+        url,
+        headers=auth(**{"If-Match": etag_before}),
+        json={"library_recents": [{"kind": "table", "id": "t2", "title": "B", "at": 4}]},
+    )
+    assert stale.status_code == 412
+    assert stale.json()["error"]["code"] == "STALE_REVISION"
+
+    # After refreshing, the same device can apply its merged state.
+    refreshed = client.get(url, headers=auth()).headers["ETag"]
+    applied = client.patch(
+        url,
+        headers=auth(**{"If-Match": refreshed}),
+        json={"library_favorites": [{"kind": "table", "id": "t9", "at": 9}]},
+    )
+    assert applied.status_code == 200
+    assert client.get(url, headers=auth()).json()["data"]["library_favorites"][0]["id"] == "t9"
+
+
+def test_preferences_tombstones_suppress_stale_device_favorites(settings):
+    settings.dev_tokens["alice"]["scope"] += " desktop:read"
+    client = TestClient(create_app("desktop-web", settings))
+    url = "/api/v1/users/me/preferences"
+    favorite = {"kind": "table", "id": "t1", "title": "A", "at": 1}
+    assert client.patch(url, headers=auth(), json={"library_favorites": [favorite]}).status_code == 200
+
+    # Device A deletes the favorite: an empty list plus a newer deletion marker.
+    tombstone = {"kind": "table", "id": "t1", "title": "A", "at": 10, "deleted": True}
+    deleted = client.patch(
+        url,
+        headers=auth(),
+        json={"library_favorites": [], "library_favorite_tombstones": [tombstone]},
+    )
+    assert deleted.status_code == 200
+    state = client.get(url, headers=auth()).json()["data"]
+    assert state["library_favorites"] == []
+    # The server normalises tombstones to kind/id/at/deleted (titles are not needed
+    # to suppress a stale cached favourite).
+    assert state["library_favorite_tombstones"] == [
+        {"kind": "table", "id": "t1", "at": 10, "deleted": True}
+    ]
+
+    # A device that recorded a recent while offline uploads it on remount; a later
+    # read from another device sees it, so a third device can converge.
+    offline_recent = {"kind": "row", "id": "t1:row-1", "title": "离线记录", "at": 11}
+    assert client.patch(url, headers=auth(), json={"library_recents": [offline_recent]}).status_code == 200
+    assert client.get(url, headers=auth()).json()["data"]["library_recents"][0]["id"] == "t1:row-1"
 
 
 def test_custom_wallpaper_is_validated_persistent_and_account_scoped(settings):

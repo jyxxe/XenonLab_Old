@@ -67,6 +67,9 @@ test('ordinary row clicks protect Inspector drafts without changing the real API
       const json = value => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(value)});
       if (url.pathname === '/api/v1/auth/session/token') return json({token: manifest.token, expires: 600});
       if (url.pathname === '/api/v1/users/me') return json({data: {subject: 'issue245-fixture-owner', scopes: ['xelibrary:read', 'xelibrary:write', 'xelibrary:query', 'xelibrary:attach']}, meta: {}});
+      // LibraryApp also syncs the account preferences; answer it so the shell
+      // does not fall back to the SPA HTML and keep it out of the row checks.
+      if (url.pathname === '/api/v1/users/me/preferences') return json({data: {}, meta: {}});
       return route.fulfill({response: await route.fetch({url: `${viteOrigin}${url.pathname}${url.search}`})});
     });
     page = await context.newPage();
@@ -74,7 +77,7 @@ test('ordinary row clicks protect Inspector drafts without changing the real API
     const row = id => page.locator(`tr[data-row-id="${id}"]`);
     const field = name => page.locator('.inspector-field').filter({has: page.locator('.inspector-field-name').filter({hasText: new RegExp(`^${name}`)})}).locator('input,textarea,select');
     const modal = page.getByRole('dialog', {name: '未保存的字段修改', exact: true});
-    const patches = () => requests.filter(request => request.method === 'PATCH');
+    const patches = () => requests.filter(request => request.method === 'PATCH' && request.path.includes('/tables/'));
     const active = id => expect(row(id)).toHaveClass(/is-active/);
     const save = async status => {
       const pending = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === rowPath(a));

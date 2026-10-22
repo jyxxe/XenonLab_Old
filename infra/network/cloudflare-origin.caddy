@@ -1,12 +1,25 @@
-http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
+# Public origin for the desktop, Forgejo and the chat app. The first-level
+# `chat.jyxxe.com` host is covered by the zone's Universal SSL certificate; the
+# second-level `chat.xenon.jyxxe.com` needs Total TLS / an advanced certificate.
+# Both hostnames are accepted here so either tunnel ingress choice works.
+http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080, http://chat.jyxxe.com:8080 {
   bind 192.168.0.101
+  header X-Content-Type-Options nosniff
+  header Referrer-Policy no-referrer
+  header Strict-Transport-Security "max-age=300"
+  # Same static-asset policy as the LAN edge: hashed assets are immutable, the SPA
+  # entry is always revalidated (issue #293).
+  @immutable_assets path /assets/*
+  header @immutable_assets Cache-Control "public, max-age=31536000, immutable"
+  @spa_entry path / /index.html
+  header @spa_entry Cache-Control "no-cache"
   @outside not remote_ip 192.168.0.105 192.168.0.101
   handle @outside {
     respond "Tunnel connector required" 403
   }
   handle_path /auth/* {
     reverse_proxy 192.168.0.109:8180 {
-      header_up X-Forwarded-Host {host}
+      header_up X-Forwarded-Host {http.request.hostport}
       header_up X-Forwarded-Proto https
       header_up X-Forwarded-Prefix /auth
     }
@@ -20,7 +33,7 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
   @auth host auth.xenon.jyxxe.com
   handle @auth {
     reverse_proxy 192.168.0.109:8180 {
-      header_up X-Forwarded-Host {host}
+      header_up X-Forwarded-Host {http.request.hostport}
       header_up X-Forwarded-Proto https
     }
   }
@@ -30,11 +43,26 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
       header_up X-Forwarded-Proto https
     }
   }
+  @chat host chat.xenon.jyxxe.com chat.jyxxe.com
+  handle @chat {
+    reverse_proxy 192.168.0.100:3000 {
+      header_up X-Forwarded-Proto https
+      header_up X-Forwarded-Host {http.request.hostport}
+    }
+  }
+
+  # DeepSeek Harness launcher (LAN-only target). The launcher and the Harness UI
+  # stay on the lab intranet; a remote public visitor cannot complete the
+  # LAN-only second hop, while a same-intranet browser on the public desktop can.
+  @harness path /harness*
+  handle @harness {
+    reverse_proxy 192.168.0.111:4097
+  }
   @embedding_api path /api/v1/embed/*
   handle @embedding_api {
     reverse_proxy 192.168.0.107:8104
   }
-  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/*
+  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/* /api/v1/plugins*
   handle @desktop_api {
     reverse_proxy 127.0.0.1:8101
   }
@@ -42,11 +70,22 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
   handle @work_api {
     reverse_proxy 192.168.0.111:8106
   }
+  @embedding_queue_api path /api/v1/embedding/queue* /api/v1/embedding/requests*
+  handle @embedding_queue_api {
+    reverse_proxy 192.168.0.107:8104
+  }
   handle /api/v1/* {
     reverse_proxy 192.168.0.104:8100
   }
   handle /health/* {
     reverse_proxy 127.0.0.1:8101
+  }
+  # Agent prompt catalogue (docs/agent-prompts in the active release). Reached
+  # through the tunnel only; contains no credentials and is safe to publish so
+  # WAN agents can read the same prompts as the LAN panel.
+  handle_path /agent-prompts/* {
+    root * /opt/xeonolab/current/docs/agent-prompts
+    file_server
   }
   handle {
     root * /opt/xeonolab/current/apps/desktop-web/dist
