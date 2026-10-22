@@ -160,3 +160,36 @@ Do not remove the explicit legacy IP issuer from service validation until the
 operator has verified session migration/expiry and approved a separate cleanup.
 No live discovery, browser, Keycloak, firewall or production acceptance was
 performed as part of this local implementation.
+
+## Forwarded host must keep the port
+
+Keycloak derives the advertised issuer from the trusted `X-Forwarded-Host`
+header. Caddy's `{host}` placeholder strips the port, while
+`{http.request.hostport}` keeps it (and equals the plain host for default-port
+hosts). Both edges must therefore send:
+
+```caddyfile
+header_up X-Forwarded-Host {http.request.hostport}
+header_up X-Forwarded-Proto https
+```
+
+Observed failure (2026-10-22): after the operator-managed LAN include was synced
+with `header_up X-Forwarded-Host {host}`, a direct-IP request to
+`https://192.168.0.101:9444` made Keycloak advertise
+`https://192.168.0.101/realms/xeonolab`. The deploy gateway validates the exact
+`OIDC_ISSUER=https://192.168.0.101:9444/realms/xeonolab`, so release creation
+returned `401 Unauthorized` and the deployment failed in the preflight/staging
+phase before any gateway record existed. Restoring `{http.request.hostport}` and
+reloading Caddy made discovery advertise the ported issuer again.
+
+After any Caddy change on either edge, verify the issuer before publishing:
+
+```sh
+curl -sS -k https://192.168.0.101:9444/realms/xeonolab/.well-known/openid-configuration \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["issuer"])'
+# must print https://192.168.0.101:9444/realms/xeonolab
+```
+
+The public edge is covered by activation; the LAN include is operator-synced, so
+this check belongs to the LAN sync procedure in
+[`cloudflare-caddy-include.md`](cloudflare-caddy-include.md).
