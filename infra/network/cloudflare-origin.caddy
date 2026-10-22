@@ -1,4 +1,8 @@
-http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
+# Public origin for the desktop, Forgejo and the chat app. The first-level
+# `chat.jyxxe.com` host is covered by the zone's Universal SSL certificate; the
+# second-level `chat.xenon.jyxxe.com` needs Total TLS / an advanced certificate.
+# Both hostnames are accepted here so either tunnel ingress choice works.
+http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080, http://chat.jyxxe.com:8080 {
   bind 192.168.0.101
   header X-Content-Type-Options nosniff
   header Referrer-Policy no-referrer
@@ -33,7 +37,7 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
       header_up X-Forwarded-Proto https
     }
   }
-  @chat host chat.xenon.jyxxe.com
+  @chat host chat.xenon.jyxxe.com chat.jyxxe.com
   handle @chat {
     reverse_proxy 192.168.0.100:3000 {
       header_up X-Forwarded-Proto https
