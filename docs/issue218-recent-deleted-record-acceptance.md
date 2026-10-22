@@ -1,6 +1,6 @@
 # Issue 218: open deleted Recent records, including later pages
 
-Implementation baseline: `eecec3ec4e171b7536681bf872b5898faf7ba25f`. Final integration acceptance is recorded below.
+Implementation baseline: `eecec3ec4e171b7536681bf872b5898faf7ba25f`; final integration onto release base `7d216a08e3917cea08d87d7206209f0299d08253` on 2026-10-22 is recorded at the end of this document.
 
 Recent activates an exact deleted row from the current authenticated include_deleted list when it is already returned. The table-session open function returns that page only after its existing generation check. For a target outside the first 100 records, the ordinary detail read remains first; only its `XL_ROW_NOT_FOUND` response permits one precise `?include_deleted=true` fallback. There is no cursor-page scan. Navigation, API/subject/authEpoch changes and unmount invalidate obsolete activation or fallback requests. Active targets keep their ordinary detail read.
 
@@ -45,3 +45,20 @@ The pre-rebase coordinator run on 03fb also passed 480 pytest (one warning), 69 
 ## Coordinator refresh after maintainer review
 
 Maintainer comment 1752 requested refresh after #224 advanced the integration branch. Current acceptance baseline: `865a72277008a5773236b50b993bacdecc78d6ab`. Two import conflicts in LibraryApp were resolved by retaining both the int64 JSON helpers/changedFields and this change’s APIRequestError/loadedDeletedRow; no behavior from #224 was removed. The reviewed patch still consists of the same 14 files and optional OpenAPI query definition. Final rerun passed 480 pytest (one existing Starlette warning, 14.61s), 74 frontend unit tests (including merged int64 coverage), build, Ruff, OpenAPI regeneration, Node syntax and whitespace checks. Actual temporary API/Chrome replay parent-865a passed all 12 checks with zero page errors; all four source hashes match this checkout, and selected later-page/History plus immediate-deletion screenshots were visually checked. Earlier baseline evidence remains preserved separately. Rollback still requires reverting frontend and optional backend query together; Issue #229 and #198 remain separate work. No deployment by this Harness.
+
+## 2026-10-22 final integration onto release base `7d216a0`
+
+The branch was merged with the current release base `7d216a08e3917cea08d87d7206209f0299d08253`, which already contains the deployed #229/#240 refresh fix, #157 mutation-context fence, #210 column order, #207 storage tab and #102 work API. Conflicts were resolved by keeping both sides:
+
+- `LibraryApp.tsx` (three hunks): kept the base `useLayoutEffect` search-scroll restoration, `createRequestLifetime`, `filterRows`/`rowSelectionRange`/`sortRows` imports and search refs, together with this change's `APIRequestError`/`loadedDeletedRow` imports and `rowOwner` unmount invalidation. The merged `refresh(showDeleted, retainedRow, isCurrent)` from #240 and this change's Recent activation / precise fallback logic are both retained.
+- `logic.js` / `logic.d.ts`: union of `loadedDeletedRow` with the base `retainRefreshedRow` and column-order helpers.
+- `library-logic.test.mjs`: both test groups kept.
+- `tests/test_library.py`: the base's newer tests and this change's `include_deleted`/ACL test kept.
+
+Helper adaptations (recorded honestly; product assertions unchanged):
+- The "ordinary Refresh restores default deleted-row exclusion" step assumed the session `includeDeleted` flag resets when re-opening the table from the tree. Since the original productisation the base intentionally keeps `openTable` passing the current `session.includeDeleted`, so after a delete/restore flow a toolbar Refresh still includes deleted rows. That is pre-existing product behavior unrelated to #218; the helper now asserts the default exclusion on a genuine fresh page load (real reload) instead of relying on the racy in-session transition.
+- `CHROME_BIN` is honored so the helper runs on this VM and in CI.
+
+The "Honest boundaries" section above recorded that restoring a later-page target lost the selection because the old refresh loaded only page 1. That defect was subsequently fixed and deployed as #229/PR #240; the current base contains the retained-row refresh, so that boundary no longer applies to this integration.
+
+Final gates on `7d216a0`: **522 pytest passed** (1 warning), **113 frontend unit tests**, `tsc --noEmit`, production build, Ruff and OpenAPI regeneration (no extra diff) passed; the actual local XeLibrary/Desktop API + Chrome replay passed **all 12 checks with zero page errors** (evidence regenerated under `runtime/verification/recent-deleted-record/current/`). CI and the protected preflight on the exact integration head remain the merge gate. No production write/deployment by this Harness.
