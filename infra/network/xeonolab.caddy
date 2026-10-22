@@ -30,6 +30,13 @@
     root * /var/lib/xeonolab/public
     file_server
   }
+  # Agent prompt catalogue (docs/agent-prompts in the active release). Served
+  # from the LAN edge so intranet agents can fetch the current prompts at any
+  # time; the panel also bundles the same files.
+  handle_path /agent-prompts/* {
+    root * /opt/xeonolab/current/docs/agent-prompts
+    file_server
+  }
   handle {
     root * /opt/xeonolab/current/apps/desktop-web/dist
     try_files {path} /index.html
