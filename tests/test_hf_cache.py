@@ -21,6 +21,23 @@ from .conftest import auth
 REV = "a" * 40
 
 
+@pytest.fixture(autouse=True)
+def low_disk_pressure(monkeypatch):
+    """Keep hf-cache tests independent of the host filesystem.
+
+    hf_cache reads the real ``shutil.disk_usage`` in development mode, so a
+    validation host above the 80/85/90 percent watermarks used to change
+    prefetch/speculative behaviour and fail unrelated tests. Tests that need a
+    specific watermark still override this in their own ``monkeypatch``.
+    """
+
+    monkeypatch.setattr(
+        hf_cache.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=1000, used=100, free=900),
+    )
+
+
 def local_download(repo_type, repo_id, revision, destination, allow_patterns, ignore_patterns, max_bytes):
     assert revision in (REV, "b" * 40), "downloader must receive an immutable resolved commit SHA"
     destination.mkdir(parents=True)

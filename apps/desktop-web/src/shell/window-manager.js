@@ -40,6 +40,27 @@ export function workArea(viewport) {
   return {x: WINDOW_MARGIN, y: MENUBAR_HEIGHT + WINDOW_MARGIN, width, height};
 }
 
+/** Half-screen placement uses measured chrome bounds, without inflating a small viewport. */
+export function halfScreenPlacement(viewport, minSize, side, bounds) {
+  const unavailable = reason => ({rect: null, reason});
+  if (!bounds || ![viewport.width, viewport.height, minSize.width, minSize.height, bounds.menuBottom, bounds.dockTop].every(Number.isFinite)
+    || !['left', 'right'].includes(side) || minSize.width <= 0 || minSize.height <= 0
+    || bounds.menuBottom < 0 || bounds.dockTop > viewport.height || bounds.dockTop <= bounds.menuBottom) {
+    return unavailable('unmeasured');
+  }
+  // Matches the compact CSS mode, which overrides ordinary window geometry.
+  if (viewport.width < 1024) return unavailable('compact');
+  const x = WINDOW_MARGIN;
+  const y = bounds.menuBottom + WINDOW_MARGIN;
+  const availableWidth = viewport.width - WINDOW_MARGIN * 3;
+  const leftWidth = Math.floor(availableWidth / 2);
+  const width = side === 'left' ? leftWidth : availableWidth - leftWidth;
+  const height = Math.min(viewport.height - WINDOW_MARGIN, bounds.dockTop - WINDOW_MARGIN) - y;
+  if (width < minSize.width) return unavailable('width');
+  if (height < minSize.height) return unavailable('height');
+  return {rect: {x: side === 'left' ? x : x + leftWidth + WINDOW_MARGIN, y, width, height}, reason: null};
+}
+
 /** Maximize fills the viewport below the menu bar; the Dock hides temporarily. */
 export function maximizedRect(viewport) {
   return {x: 0, y: MENUBAR_HEIGHT, width: Math.max(0, viewport.width), height: Math.max(0, viewport.height - MENUBAR_HEIGHT)};
@@ -124,6 +145,11 @@ export function toggleMaximize(win, viewport) {
     restore: {x: win.x, y: win.y, width: win.width, height: win.height},
     ...area,
   };
+}
+
+/** Keep DOM order independent of stacking: moving an iframe node reloads its document. */
+export function stableWindowOrder(windows) {
+  return [...windows].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
 /** Move the referenced window to the top of the stack (end of the array). */
