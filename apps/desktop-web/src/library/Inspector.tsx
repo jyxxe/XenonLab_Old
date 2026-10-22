@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import {normalizeRowValues, parseExactJSON, stringifyExactJSON} from './json.js';
 import React, {useEffect, useMemo, useState} from 'react';
 import {Badge, Button, ErrorState, IconButton, Input, Select, Skeleton, Spinner, StatusDot, Tabs, Textarea} from '../design-system/primitives';
@@ -41,8 +42,13 @@ export function Inspector({
   onReloadRow,
   onToggleFavorite,
   onClose,
+  tab: controlledTab,
+  onTabChange,
   uploadStore,
+  identityKey = '',
 }: {
+  tab?: InspectorTab;
+  onTabChange?: (tab: InspectorTab) => void;
   table: Table;
   columns: Column[];
   row: Row | null;
@@ -65,8 +71,14 @@ export function Inspector({
   onToggleFavorite: () => void;
   onClose: () => void;
   uploadStore?: UploadStore;
+  identityKey?: string;
 }) {
-  const [tab, setTab] = useState<InspectorTab>('overview');
+  const [localTab, setLocalTab] = useState<InspectorTab>('overview');
+  const tab = controlledTab ?? localTab;
+  const setTab = (next: InspectorTab) => {
+    setLocalTab(next);
+    onTabChange?.(next);
+  };
   const [draft, setDraft] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -228,17 +240,18 @@ export function Inspector({
                 <div><dt>Deleted</dt><dd>{row._deleted_at ? <Badge tone="danger">已软删除</Badge> : '有效'}</dd></div>
               </dl>
             )}
-            <Button size="sm" onClick={onToggleFavorite}>★ 收藏此表</Button>
+            <Button size="sm" icon="favorite" onClick={onToggleFavorite}>收藏此表</Button>
             {row && (
               <Attachments
                 uploadStore={uploadStore}
-                key={`overview:${table.id}:${row._row_id}`}
+                key={`overview:${identityKey}:${table.id}:${row._row_id}`}
                 tableId={table.id}
                 rowId={row._row_id}
                 api={api}
                 apiPage={apiPage}
                 apiRaw={apiRaw}
                 canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
                 onChanged={async () => undefined}
               />
             )}
@@ -296,13 +309,14 @@ export function Inspector({
           row ? (
             <Attachments
               uploadStore={uploadStore}
-              key={`${table.id}:${row._row_id}`}
+              key={`${identityKey}:${table.id}:${row._row_id}`}
               tableId={table.id}
               rowId={row._row_id}
               api={api}
               apiPage={apiPage}
               apiRaw={apiRaw}
               canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
               onChanged={async () => undefined}
             />
           ) : (

@@ -1,5 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
-import {isExpiredWorkClaim} from './work-state';
+import {isBlockedWorkItem, isExpiredWorkClaim} from './work-state';
 import {forgejoIssueUrl} from './shell/forgejo-links.js';
 type Item={id:string;repository:string;issue_id:number;title:string;status:string;holder:string|null;expires:number;epoch:number;claim_active:boolean};
 type API=(path:string,init?:RequestInit)=>Promise<any>;
@@ -57,7 +57,7 @@ export function Work({api,apiPage}:{api:API;apiPage:APIPage}){
    <table><thead><tr><th>任务</th><th>状态</th><th>领取身份</th><th>操作</th></tr></thead><tbody>{visible.map(item=>{
      const href=forgejoIssueUrl(item.repository,item.issue_id);
      return <tr key={item.id} data-work-id={item.id}><td>{href?<a href={href} target="_blank" rel="noopener noreferrer">#{item.issue_id} {item.title}</a>:<>#{item.issue_id} {item.title}</>}</td><td>{isExpiredWorkClaim(item)?'领取已过期 · 可重领':`${item.status}${item.claim_active?' · 领取有效':''}`}</td><td>{item.holder||'—'}</td>
-       <td>{item.status!=='completed'&&!item.claim_active&&<button disabled={actionId===item.id} onClick={()=>void action(item,'claim')}>{isExpiredWorkClaim(item)?'重新领取':'领取'}</button>}
+       <td>{isBlockedWorkItem(item)?<span className="ds-muted">来源冲突 · 不可领取</span>:item.status!=='completed'&&!item.claim_active&&<button disabled={actionId===item.id} onClick={()=>void action(item,'claim')}>{isExpiredWorkClaim(item)?'重新领取':'领取'}</button>}
        {item.claim_active&&item.holder===subject&&<><button disabled={actionId===item.id} onClick={()=>void action(item,'release')}>释放</button><button disabled={actionId===item.id} onClick={()=>void action(item,'release',true)}>标记完成</button></>}</td>
      </tr>;
    })}</tbody></table>

@@ -1,19 +1,27 @@
-import React, {useState} from 'react';
+import React, {useLayoutEffect, useRef, useState} from 'react';
 import {Button, ErrorState, Input, Modal} from '../design-system/primitives';
 import {initialColumns, SchemaEditor, type Column} from '../SchemaEditor';
 import {describeError} from './logic.js';
 
 export function NewTableDialog({
   open,
+  initialPath = '/知识',
   onClose,
   onCreate,
 }: {
   open: boolean;
+  initialPath?: string;
   onClose: () => void;
   onCreate: (payload: {path: string; name: string; columns: Column[]}) => Promise<void>;
 }) {
   const [name, setName] = useState('');
-  const [path, setPath] = useState('/知识');
+  const [path, setPath] = useState(initialPath);
+  const wasOpen = useRef(false);
+  useLayoutEffect(() => {
+    // A new opening gets its current context; edits during an opening stay editable.
+    if (open && !wasOpen.current) setPath(initialPath);
+    wasOpen.current = open;
+  }, [open, initialPath]);
   const [columns, setColumns] = useState<Column[]>(initialColumns.map(column => ({...column})));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);

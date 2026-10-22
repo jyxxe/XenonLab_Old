@@ -47,10 +47,14 @@ test('account edits omit unchanged grants and remove revoked grants only on expl
     assert.equal(await page.getByRole('status').filter({hasText: '账号已更新'}).count(), 1);
 
     // Root-only signed candidates are visible but never preselected; a child
-    // remains limited to the parent's active grants.
-    assert.equal(await page.getByLabel('读取向量').count(), 0);
+    // remains limited to the parent's active grants. Unadopted candidates show
+    // as locked entries so operators can see why a grant is impossible.
+    const lockedEmbedding = page.locator('.account-detail .scope-grid').first().getByLabel('读取向量');
+    await lockedEmbedding.waitFor();
+    assert.equal(await lockedEmbedding.count(), 1, 'unadopted candidates stay visible for children');
+    assert.equal(await lockedEmbedding.isDisabled(), true, 'unadopted candidates cannot be checked for a child');
     await page.getByRole('button', {name: /Root/}).click();
-    const embeddingRead = page.getByLabel('读取向量');
+    const embeddingRead = page.locator('.scope-grid label:not([title])', {hasText: '读取向量'}).locator('input');
     await embeddingRead.waitFor();
     await page.waitForTimeout(100); // Let the selection effect load this account's grants.
     assert.equal(await embeddingRead.isChecked(), false);
