@@ -218,3 +218,4 @@
 .library-column-order li .ds-button {margin-right: 4px;}
 .library-copy-boundary,.library-copy-error{margin:4px 12px;font-size:var(--font-size-xs)}
 .library-copy-error{color:var(--danger)}
+.history-compare label{display:flex;flex-direction:column;gap:4px;margin:8px 0}.history-diff>div{min-width:0}.history-diff small{display:block;color:var(--text-muted);margin-bottom:4px}

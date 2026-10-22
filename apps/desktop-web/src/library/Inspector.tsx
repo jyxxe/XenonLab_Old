@@ -86,6 +86,13 @@ export function Inspector({
   const [history, setHistory] = useState<Row[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [compare, setCompare] = useState<Row | null>(null);
+  const [compareRevision, setCompareRevision] = useState<number | null>(null);
+  const comparison = history.find(item => item._revision === compareRevision) || row;
+
+  useEffect(() => {
+    setCompare(null);
+    setCompareRevision(null);
+  }, [table.id, row?._row_id]);
   const [acl, setAcl] = useState<{table: any; path: any; row: any} | null>(null);
   const [aclError, setAclError] = useState<unknown>(null);
 
@@ -372,23 +379,34 @@ export function Inspector({
                     </li>
                   ))}
                 </ol>
-                {compare && (
+                {compare && comparison && (
                   <div className="history-compare">
-                    <h4>r{compare._revision} 与当前 r{row._revision} 的差异</h4>
-                    {changedFields(compare.values, row.values).length ? (
+                    <h4>r{compare._revision} 与{comparison._revision === row._revision ? '当前' : '历史'} r{comparison._revision} 的差异</h4>
+                    <label>查看版本
+                      <Select aria-label="查看版本" value={String(compare._revision)} onChange={event => setCompare(history.find(item => item._revision === Number(event.target.value)) || row)}>
+                        {history.map(item => <option key={item._revision} value={item._revision}>r{item._revision}（{item._revision === row._revision ? '当前' : '历史'}）</option>)}
+                      </Select>
+                    </label>
+                    <label>对照版本
+                      <Select aria-label="对照版本" value={compareRevision === null ? 'current' : String(compareRevision)} onChange={event => setCompareRevision(event.target.value === 'current' ? null : Number(event.target.value))}>
+                        <option value="current">当前 r{row._revision}</option>
+                        {history.filter(item => item._revision !== row._revision).map(item => <option key={item._revision} value={item._revision}>历史 r{item._revision}</option>)}
+                      </Select>
+                    </label>
+                    {changedFields(compare.values, comparison.values).length ? (
                       <ul>
-                        {changedFields(compare.values, row.values).map(name => (
+                        {changedFields(compare.values, comparison.values).map(name => (
                           <li key={name}>
                             <strong>{name}</strong>
                             <div className="history-diff">
-                              <pre>{stringifyExactJSON(compare.values[name] ?? null, 2)}</pre>
-                              <pre>{stringifyExactJSON(row.values[name] ?? null, 2)}</pre>
+                              <div><small>查看：{compare._revision === row._revision ? '当前' : '历史'} r{compare._revision}</small><pre>{stringifyExactJSON(compare.values[name] ?? null, 2)}</pre></div>
+                              <div><small>对照：{comparison._revision === row._revision ? '当前' : '历史'} r{comparison._revision}</small><pre>{stringifyExactJSON(comparison.values[name] ?? null, 2)}</pre></div>
                             </div>
                           </li>
                         ))}
                       </ul>
                     ) : (
-                      <p className="muted">字段内容与当前 revision 相同（revision 变更可能来自删除/恢复）。</p>
+                      <p className="muted">两端字段内容相同（revision 变更可能来自删除/恢复）。</p>
                     )}
                     <p className="muted">恢复操作会新增一个 revision，并完整保留当前历史。</p>
                   </div>
