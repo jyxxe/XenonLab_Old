@@ -1,6 +1,7 @@
+import {Icon} from '../design-system/Icon';
 import React, {useMemo, useState} from 'react';
 import {Badge, Button, IconButton, Input, Spinner} from '../design-system/primitives';
-import {ancestorPaths, buildPathTree, filterTree, flattenTree} from './logic.js';
+import {ancestorPaths, buildPathTree, filterTree, filteredTreeExpansion, flattenTree, recentEntryPresentation} from './logic.js';
 import type {RecentEntry, Table} from './types';
 
 export type LibraryViewKind = 'welcome' | 'library' | 'search' | 'query' | 'theorems';
@@ -36,7 +37,7 @@ export function LibrarySidebar({
   expanded: Set<string>;
   onToggleExpand: (path: string) => void;
   onSetView: (view: LibraryViewKind) => void;
-  onOpenTable: (table: Table) => void;
+  onOpenTable: (table: Table, expandPath?: boolean) => void;
   onLoadMore: () => void;
   onRetry: () => void;
   onCreateTable: () => void;
@@ -47,12 +48,23 @@ export function LibrarySidebar({
   theoremCount: number | null;
 }) {
   const [filter, setFilter] = useState('');
+  const [filterCollapsed, setFilterCollapsed] = useState<Set<string>>(new Set());
+  const filtering = Boolean(filter.trim());
   const [showRecent, setShowRecent] = useState(true);
   const tree = useMemo(() => buildPathTree(tables), [tables]);
-  const visible = useMemo(() => {
-    const filtered = filterTree(tree, filter);
-    return filtered ? flattenTree(filtered, expanded) : [];
-  }, [tree, filter, expanded]);
+  const filteredTree = useMemo(() => filterTree(tree, filter), [tree, filter]);
+  const effectiveExpanded = useMemo(() => filtering ? filteredTreeExpansion(filteredTree, filterCollapsed) : expanded, [filtering, filteredTree, filterCollapsed, expanded]);
+  const visible = useMemo(() => filteredTree ? flattenTree(filteredTree, effectiveExpanded) : [], [filteredTree, effectiveExpanded]);
+
+  function togglePath(path: string) {
+    if (!filtering) return onToggleExpand(path);
+    setFilterCollapsed(current => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
 
   return (
     <aside className="knowledge-sidebar" aria-label="知识库导航">
@@ -74,7 +86,7 @@ export function LibrarySidebar({
             aria-pressed={view === id}
             onClick={() => onSetView(id as LibraryViewKind)}
           >
-            <span aria-hidden="true">{icon}</span>
+            <span aria-hidden="true"><Icon value={icon} size={18} /></span>
             <span>{label}</span>
             {id === 'theorems' && theoremCount != null ? <Badge>{theoremCount}</Badge> : null}
           </button>
@@ -91,7 +103,7 @@ export function LibrarySidebar({
             {favorites.map(entry => (
               <li key={`${entry.kind}:${entry.id}`}>
                 <button type="button" onClick={() => onOpenEntry(entry)} title={entry.title}>
-                  ★ {entry.title}
+                  <Icon value="favorite" size={16} /> {entry.title}
                 </button>
                 <IconButton label={`取消收藏 ${entry.title}`} size="sm" onClick={() => onToggleFavorite(entry)}>✕</IconButton>
               </li>
@@ -113,13 +125,17 @@ export function LibrarySidebar({
         {showRecent &&
           (recent.length ? (
             <ul className="library-mini-list">
-              {recent.slice(0, 6).map(entry => (
-                <li key={`${entry.kind}:${entry.id}`}>
-                  <button type="button" onClick={() => onOpenEntry(entry)} title={entry.title}>
-                    {entry.kind === 'table' ? '▤' : entry.kind === 'row' ? '≡' : entry.kind === 'theorem' ? '⊢' : '⌂'} {entry.title}
-                  </button>
-                </li>
-              ))}
+              {recent.slice(0, 6).map(entry => {
+                const {title, identifier, label} = recentEntryPresentation(entry, recent);
+                return (
+                  <li key={`${entry.kind}:${entry.id}`}>
+                    <button type="button" className={entry.kind === 'theorem' ? 'library-recent-theorem' : undefined} onClick={() => onOpenEntry(entry)} title={label}>
+                      <span className="library-recent-title"><Icon value={entry.kind === 'table' ? 'library' : entry.kind === 'row' ? 'rows' : entry.kind === 'theorem' ? 'theorem' : 'home'} size={16} /> {title}</span>
+                      {identifier && <span className="library-recent-identifier"> · {identifier}</span>}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
             <p className="library-sidebar-empty">还没有打开过任何对象。</p>
@@ -129,14 +145,14 @@ export function LibrarySidebar({
       <div className="library-sidebar-section library-tree-section">
         <div className="library-sidebar-section-head">
           <strong>路径</strong>
-          <Button size="sm" variant="ghost" onClick={onCreateTable} title="新建知识表">＋</Button>
+          <Button size="sm" variant="ghost" onClick={onCreateTable} title="新建知识表" aria-label="新建知识表"><Icon value="plus" size={16} /></Button>
         </div>
         <Input
           type="search"
           aria-label="筛选知识表"
           placeholder="搜索路径或表名"
           value={filter}
-          onChange={event => setFilter(event.target.value)}
+          onChange={event => { setFilter(event.target.value); setFilterCollapsed(new Set()); }}
         />
         {loading && !tables.length ? (
           <p className="library-sidebar-empty" role="status">
@@ -155,7 +171,7 @@ export function LibrarySidebar({
           <ul className="library-tree" role="tree">
             {visible.map(item => {
               if (item.kind === 'node') {
-                const isOpen = expanded.has(item.path);
+                const isOpen = effectiveExpanded.has(item.path);
                 return (
                   <li key={`node:${item.path}`} role="treeitem" aria-expanded={isOpen}>
                     <button
@@ -163,9 +179,9 @@ export function LibrarySidebar({
                       disabled={loading}
                       className="library-tree-node"
                       style={{paddingLeft: 8 + item.depth * 14}}
-                      onClick={() => onToggleExpand(item.path)}
+                      onClick={() => togglePath(item.path)}
                     >
-                      <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+                      <span aria-hidden="true"><Icon value={isOpen ? 'chevron-down' : 'chevron-right'} size={14} /></span>
                       <span>{item.path === '/' ? '全部' : item.name}</span>
                       <small>{item.count}</small>
                     </button>
@@ -180,7 +196,7 @@ export function LibrarySidebar({
                     type="button"
                     className={`library-tree-table${active ? ' active' : ''}`}
                     style={{paddingLeft: 8 + item.depth * 14}}
-                    onClick={() => onOpenTable(table)}
+                    onClick={() => onOpenTable(table, !filtering)}
                     onContextMenu={event => {
                       event.preventDefault();
                       onToggleFavorite({kind: 'table', id: table.id, title: table.name, at: Date.now()});
