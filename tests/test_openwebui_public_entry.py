@@ -70,7 +70,9 @@ def test_chat_matcher_routes_both_hosts_to_openwebui():
     handler = _block_after(text, "@chat host")
     assert f"reverse_proxy {CHAT_UPSTREAM}" in handler
     assert "header_up X-Forwarded-Proto https" in handler
-    assert "header_up X-Forwarded-Host {host}" in handler
+    # The base release requires the port-preserving placeholder so Keycloak keeps
+    # its ported issuer; the chat proxy must follow the same forwarded-host rule.
+    assert "header_up X-Forwarded-Host {http.request.hostport}" in handler
     assert "X-Frame-Options" not in handler, "the iframe origin must stay embeddable"
 
 

@@ -27,6 +27,7 @@ const tests = [
   'tests/browser-acceptance-session-cache.test.mjs',
   'tests/browser-acceptance-account-patch.test.mjs',
   'tests/browser-acceptance-directory-distribution.test.mjs',
+  'tests/browser-acceptance-account-create.test.mjs',
   'tests/browser-acceptance-account-filter.test.mjs',
   'tests/browser-acceptance-embedding-table.test.mjs',
   'tests/browser-acceptance-embedding-queue.test.mjs',
@@ -45,6 +46,7 @@ const tests = [
   'tests/browser-acceptance-search-limit.test.mjs',
   'tests/browser-acceptance-harness-shortcut.test.mjs',
   'tests/browser-acceptance-issue201-storage.test.mjs',
+  'tests/browser-acceptance-agent-prompts.test.mjs',
 ];
 const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...tests], {
   cwd: appRoot,

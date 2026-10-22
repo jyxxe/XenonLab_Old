@@ -13,7 +13,7 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080, http://chat.jyxxe.co
   }
   handle_path /auth/* {
     reverse_proxy 192.168.0.109:8180 {
-      header_up X-Forwarded-Host {host}
+      header_up X-Forwarded-Host {http.request.hostport}
       header_up X-Forwarded-Proto https
       header_up X-Forwarded-Prefix /auth
     }
@@ -27,7 +27,7 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080, http://chat.jyxxe.co
   @auth host auth.xenon.jyxxe.com
   handle @auth {
     reverse_proxy 192.168.0.109:8180 {
-      header_up X-Forwarded-Host {host}
+      header_up X-Forwarded-Host {http.request.hostport}
       header_up X-Forwarded-Proto https
     }
   }
@@ -41,7 +41,7 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080, http://chat.jyxxe.co
   handle @chat {
     reverse_proxy 192.168.0.100:3000 {
       header_up X-Forwarded-Proto https
-      header_up X-Forwarded-Host {host}
+      header_up X-Forwarded-Host {http.request.hostport}
     }
   }
 
@@ -73,6 +73,13 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080, http://chat.jyxxe.co
   }
   handle /health/* {
     reverse_proxy 127.0.0.1:8101
+  }
+  # Agent prompt catalogue (docs/agent-prompts in the active release). Reached
+  # through the tunnel only; contains no credentials and is safe to publish so
+  # WAN agents can read the same prompts as the LAN panel.
+  handle_path /agent-prompts/* {
+    root * /opt/xeonolab/current/docs/agent-prompts
+    file_server
   }
   handle {
     root * /opt/xeonolab/current/apps/desktop-web/dist

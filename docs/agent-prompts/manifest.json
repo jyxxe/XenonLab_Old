@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "updated": "2026-10-22",
+  "note": "XeonoLab Agent prompt catalogue. These prompts contain no credentials; each agent reads its own private 0600 identity file. Served in Xenon Panel (System → 提示词) and as /agent-prompts/<file>.md over LAN and the public edge.",
+  "prompts": [
+    {
+      "id": "codex",
+      "title": "Codex 协调器提示词",
+      "audience": "Codex 协调器（工作租约、验收、远端写入、生产发布）",
+      "network": "lan",
+      "file": "codex.md",
+      "summary": "协调器职责：Work 租约与验收、代为执行远端写入、PR 创建；release → 独立审批 → 排他租约 → 固定 executor 发布，发布后核实 5 目标 / 7 readiness / 网关并记录证据，不直接 SSH 生产。"
+    },
+    {
+      "id": "dsh",
+      "title": "DeepSeek Harness 维护与发布提示词",
+      "audience": "DSH 维护 / 发布 Agent（devagent-maintainer）",
+      "network": "lan",
+      "file": "dsh.md",
+      "summary": "使用 devctl 与受保护 host helper / root broker 完成评审、精确 head 合并门禁、部署与终态核实；publication 证据写入 maintainer.sqlite 与 admin-runlog.md，不绕过 Deploy Gateway。"
+    },
+    {
+      "id": "opencode",
+      "title": "OpenCode 开发 Agent 提示词",
+      "audience": "OpenCode 开发 Harness（本地实现与回归）",
+      "network": "lan",
+      "file": "opencode.md",
+      "summary": "用自己私有身份文件中的 OIDC client_credentials 与 Forgejo 账号做本地实现与回归验证；写入请求 / 交付报告交协调器，默认不自合并、不发布、不关闭 Issue。"
+    },
+    {
+      "id": "general-agent-lan",
+      "title": "通用 Agent 提示词（内网 / LAN）",
+      "audience": "通用 Bug 搜寻与 Issue 处理 Agent（内网）",
+      "network": "lan",
+      "file": "general-agent-lan.md",
+      "summary": "内网直连 192.168.0.x 与 LAN CA；Work claim/renew/release 语义、合成 fixture 复现、回归测试与附证据 PR；只读诊断，不自合并、不发布。"
+    },
+    {
+      "id": "general-agent-wan",
+      "title": "通用 Agent 提示词（外网 / WAN）",
+      "audience": "通用 Bug 搜寻与 Issue 处理 Agent（公网）",
+      "network": "wan",
+      "file": "general-agent-wan.md",
+      "summary": "仅公网域名与公共 CA，禁止 192.168.0.x、devctl 与生产 SSH；经 Forgejo REST 用自己的账号提交 Issue / 分支 / PR 并附证据，请求维护者合并与发布。"
+    }
+  ]
+}

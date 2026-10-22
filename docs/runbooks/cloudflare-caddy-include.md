@@ -105,3 +105,38 @@ returned the configured issuer for both exact origins when called with its
 required `origin` query parameter. Anonymous `/api/v1/apps` returned 401, as
 expected. A full interactive PKCE login and browser session renewal were not
 part of this acceptance run.
+
+## LAN include (`/etc/caddy/xeonolab.caddy`) is operator-synced
+
+Activation installs only `cloudflare-origin.caddy`. The LAN site snippet lives
+in `/etc/caddy/xeonolab.caddy`, which the activation helper does not replace, so
+a release that changes `infra/network/xeonolab.caddy` (for example the
+`/agent-prompts/*` static catalogue or a new `/api/v1/...` route) keeps serving
+the previous LAN routes until an operator syncs the file. Observed on
+2026-10-22: the LAN include was several releases behind and was missing the auth
+proxy `X-Forwarded-Host/Proto` headers and the embedding queue route.
+
+After such a release, the operator must:
+
+1. Compare the live include with the release copy:
+   `sha256sum /etc/caddy/xeonolab.caddy /opt/xeonolab/releases/<commit>/infra/network/xeonolab.caddy`.
+2. Back up the live file with a timestamp suffix under `/etc/caddy/` (for
+   example `xeonolab.caddy.pre-<change>-<UTC timestamp>`).
+3. Install the release copy with the live file's mode (`0644`, root-owned) and
+   run `/usr/local/bin/caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile`.
+   Do not reload when validation fails; restore the backup instead.
+4. Reload Caddy, confirm `systemctl is-active caddy`, then verify the affected
+   routes with the correct Host/SNI (connect to `https://192.168.0.101:9443`,
+   not `127.0.0.1`, which has no matching site certificate) and confirm the
+   unchanged routes still answer.
+5. Record the backup path, the validated SHA-256 values, the reload result and
+   the route checks in the deployment or PR evidence.
+
+The public include is handled by activation; only the LAN include needs this
+manual step.
+
+After syncing the LAN include, also verify that Keycloak still advertises the
+ported issuer (`https://192.168.0.101:9444/realms/xeonolab`), otherwise the
+deploy gateway rejects its own release token with 401. The auth block must use
+`header_up X-Forwarded-Host {http.request.hostport}`; Caddy's `{host}` strips
+the port. See [`oidc-public-issuer.md`](oidc-public-issuer.md#forwarded-host-must-keep-the-port).
