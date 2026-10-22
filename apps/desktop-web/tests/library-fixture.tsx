@@ -175,6 +175,11 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   if (clean === '/tables/t1/schema' && method === 'PATCH') {
     return {data: {schema_revision: 3, table_revision: 13}, meta: {}};
   }
+  if (/^\/tables\/[^/]+\/index-status$/.test(clean)) {
+    const statusTableId = clean.split('/')[2] || 't1';
+    if (state.delayJobsTable === statusTableId) await new Promise(resolve => setTimeout(resolve, 450));
+    return {data: {table_id: statusTableId, state: 'ready', row_count: 100, embedded_rows: 100, missing_rows: 0, pending_rows: 0, chunk_count: 137, last_job: {job_id: statusTableId === 't2' ? 'job-t2' : 'job-9', owner: 'fixture-user', table_id: statusTableId, status: 'completed', created_at: '2026-09-30T00:00:00Z', updated_at: '2026-09-30T00:05:00Z'}}, meta: {}};
+  }
   if (clean === '/jobs') {
     const jobTableId = url.searchParams.get('table_id') || 't1';
     if (state.delayJobsTable === jobTableId) await new Promise(resolve => setTimeout(resolve, 450));

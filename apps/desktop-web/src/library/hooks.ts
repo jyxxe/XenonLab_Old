@@ -2,7 +2,7 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage} from '../shell/types';
 import {libraryPrefsStorageKey, mergeRecent, retainRefreshedRow, parseFieldFilters, SEARCH_LIMIT_OPTIONS, toggleFavorite} from './logic.js';
 import {addQueryRecent, QUERY_EXPRESSION_LIMIT, queryDraftsStorageKey, readQueryDrafts, writeQueryDrafts} from './query-drafts.js';
-import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
+import type {IndexStatus, Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
 /** Default UI cap for search results; users may raise it through SEARCH_LIMIT_OPTIONS. */
 export const SEARCH_LIMIT = SEARCH_LIMIT_OPTIONS[0];
@@ -774,6 +774,55 @@ export function useJobs(apiPage: APIPage, tableId: string, enabled: boolean) {
   }, [load]);
   return {
     jobs: enabled && jobsTableId === tableId ? jobs : null,
+    error: enabled && errorTableId === tableId ? error : null,
+    reload: load,
+  };
+}
+
+export function useIndexStatus(apiPage: APIPage, tableId: string, enabled: boolean) {
+  const [status, setStatus] = useState<IndexStatus | null>(null);
+  const [statusTableId, setStatusTableId] = useState('');
+  const [error, setError] = useState<unknown>(null);
+  const [errorTableId, setErrorTableId] = useState('');
+  const generation = useRef(0);
+  const load = useCallback(async () => {
+    if (!enabled || !tableId) {
+      generation.current += 1;
+      setStatus(null);
+      setStatusTableId(tableId);
+      setError(null);
+      setErrorTableId(tableId);
+      return;
+    }
+    const request = ++generation.current;
+    setError(null);
+    try {
+      const page = await apiPage(`/tables/${encodeURIComponent(tableId)}/index-status`);
+      if (request === generation.current) {
+        setStatus(page.data as IndexStatus);
+        setStatusTableId(tableId);
+      }
+    } catch (cause) {
+      if (request === generation.current) {
+        setStatus(null);
+        setStatusTableId(tableId);
+        setError(cause);
+        setErrorTableId(tableId);
+      }
+    }
+  }, [apiPage, enabled, tableId]);
+  useEffect(() => {
+    setStatus(null);
+    setStatusTableId('');
+    setError(null);
+    setErrorTableId('');
+    void load();
+    return () => {
+      generation.current += 1;
+    };
+  }, [load]);
+  return {
+    status: enabled && statusTableId === tableId ? status : null,
     error: enabled && errorTableId === tableId ? error : null,
     reload: load,
   };

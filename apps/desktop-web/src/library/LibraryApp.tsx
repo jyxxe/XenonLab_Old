@@ -14,8 +14,8 @@ import {SearchView} from './SearchView';
 import {QueryConsole} from './QueryConsole';
 import {TheoremView} from './TheoremView';
 import {NewTableDialog} from './NewTableDialog';
+import {useCatalogue, useIndexStatus, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {AskAIDialog} from './AskAIDialog';
-import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {createRequestLifetime} from './request-lifetime.js';
 import {ancestorPaths, changedFields, classifySchemaChange, describeError, filterRows, loadedDeletedRow, rowSelectionRange, sortRows} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
@@ -123,6 +123,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   }
   useEffect(() => () => { ++rowMutationContext.current.generation; }, []);
   const {jobs, error: jobsError, reload: reloadJobs} = useJobs(apiPage, table?.id ?? '', canAdmin && view === 'library' && Boolean(table));
+  const {status: indexStatus, error: indexStatusError, reload: reloadIndexStatus} = useIndexStatus(apiPage, table?.id ?? '', view === 'library' && Boolean(table));
 
   const movePaths = useMemo(() => [...new Set(['/', ...catalogue.tables.flatMap(item => ancestorPaths(item.path))])].sort((left, right) => left.localeCompare(right, 'zh')), [catalogue.tables]);
 
@@ -446,7 +447,8 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
     try {
       await apiPage('/index/reindex', {method: 'POST', body: stringifyExactJSON({table_id: table.id})});
       setNotice({tone: 'success', message: '索引任务已排队，等待 Embedding worker。'});
-      await reloadJobs();
+      // Refresh both sources so the Index tab reflects queued/running immediately.
+      await Promise.all([reloadJobs(), reloadIndexStatus()]);
     } catch (cause) {
       const info = describeError(cause, '重建索引');
       setNotice({tone: 'danger', message: info.message, code: info.code, requestId: info.requestId});
@@ -742,8 +744,11 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
           scopes={scopes}
           jobs={jobs}
           jobsError={jobsError}
+          indexStatus={indexStatus}
+          indexStatusError={indexStatusError}
           canAdmin={canAdmin}
           onReloadJobs={() => void reloadJobs()}
+          onReloadIndexStatus={() => void reloadIndexStatus()}
           onReindex={() => void reindex()}
           conflict={conflict}
           onSave={saveRow}

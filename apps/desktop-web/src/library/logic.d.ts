@@ -1,4 +1,4 @@
-import type {Column, Job, Row, Table, Theorem} from './types';
+import type {Column, IndexStatus, IndexStatusLastJob, Job, Row, Table, Theorem} from './types';
 
 export function formatNumber(value: unknown): string;
 export function formatBytes(value: unknown): string;
@@ -45,6 +45,16 @@ export function searchWarnings(meta?: Record<string, unknown>): string[];
 export function isKeywordResult(scoreType: unknown): boolean;
 export const INDEX_STATES: Record<string, {label: string; tone: string}>;
 export function indexStatusFromJobs(jobs?: Job[]): {state: string; detail: string; latest?: Job};
+export function indexStatusFromServer(status: IndexStatus | null | undefined): {
+  state: string;
+  tone: 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
+  label: string;
+  detail: string;
+  rows: number;
+  embedded: number;
+  pending: number;
+  last_job: IndexStatusLastJob | null;
+};
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];
 export function recentEntryPresentation(entry: {kind: string; id: string; title?: string}, list?: Array<{kind: string; id: string; title?: string}>): {title: string; identifier: string; label: string};
 export function toggleFavorite(list: any[], entry: any): any[];

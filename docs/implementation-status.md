@@ -246,6 +246,12 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
 
+### Issue #72 每表索引状态 API 增量（已集成部署）
+
+分支 `zcode/issue-72-index-status`（worktree `runtime/agent-worktrees/issue-72-index-status`，基于 `24ee54e`）。补齐 #72 交付报告列出的首要缺口「每表 Index Status API 缺失，普通用户无 `xelibrary:admin` 读不到任务」：新增 `GET /api/v1/tables/{tid}/index-status`（scope `xelibrary:read` + 既有表读 ACL），从表文件本身推导真实覆盖——`row_count`（未删除行）、`embedded_rows`/`missing_rows`（`__xl_vectors` 按行当前 `_revision` 联结统计）、`pending_rows`（`__xl_changes` 中 `revision > indexed_revision` 的去重行数）、`chunk_count`、`last_job`（最近一条索引任务，不限 owner），并派生 `state`：queued/indexing/failed（最近任务）、empty（无行）、not_indexed（从未嵌入）、stale（有待索引变更或部分覆盖）、ready（全部覆盖）。模型/分词器升级导致的过期块不并入计数（搜索结果已单独提示）。前端 `library/hooks.ts` 新增 `useIndexStatus`（generation 守卫防串表），`logic.js` 新增 `indexStatusFromServer` 纯映射，Inspector「索引」标签改为优先展示真实覆盖统计与最近任务，无此 API 的旧后端或无权限时回退原 jobs 视图/提示；重建索引按钮与刷新语义不变。验证：新增 3 项后端测试（空表/未索引/ready/stale 推导、失败任务、401/403 ACL），全库 282 项通过；改动文件 Ruff 通过；OpenAPI 重新导出仅 xelibrary.openapi.json 增加一路径；前端 49 项测试通过（`indexStatusFromServer` 6 断言组 + library 浏览器验收新增已索引行/向量块计数断言），tsc+vite build 通过；合成数据截图 `runtime/acceptance-artifacts/issue-72-index-status-1440x900.png`。未做真实登录态浏览器验收；自动索引流水线（行变更后自动排队）涉及成本与触发策略决策，另行提案，不在本增量。
+
+Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release base `887bd14`（唯一冲突为本文档同点插入，已按双方段落并集解决），并补齐评审 non-blocking nit：Inspector「最近任务」仅在 `job_id` 存在时渲染 id（共享表读者的最小摘要不再显示前导 `·`），客户端 `IndexStatus.last_job` 类型同时允许该最小摘要（`job_id`/`owner` 可选）。验证：后端 528 项 pytest、Ruff 全通过、OpenAPI 重新导出无 diff；前端 117 项单测、TypeScript/Vite build 与 XeLibrary 浏览器验收通过；随后走精确 head CI、受保护 preflight、独立审批、合并与发布验证。仍未做真实登录态生产浏览器验收；自动索引流水线（行变更自动排队）不在本增量。
+
 ### Issue #94 修复（zcode 本地交付）
 
 公网边缘（`cloudflare-origin.caddy` 站点块）补齐与 LAN `(xeonolab-desktop)` snippet 一致的安全头——`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，并按 Issue 建议的灰度值在两侧同时加 `Strict-Transport-Security "max-age=300"`（公网源站为 HTTP，经 Cloudflare HTTPS 边缘下发后浏览器按 HTTPS 响应生效；max-age 短窗灰度，可后续调大）。

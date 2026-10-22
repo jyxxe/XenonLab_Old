@@ -4,8 +4,8 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, ErrorState, IconButton, Input, Select, Skeleton, Spinner, StatusDot, Tabs, Textarea} from '../design-system/primitives';
 import type {UploadStore} from '../upload-state.js';
 import {Attachments} from '../Attachments';
-import {changedFields, describeError, indexStatusFromJobs, relativeTime} from './logic.js';
-import type {Column, Job, Row, Table} from './types';
+import {changedFields, describeError, indexStatusFromJobs, indexStatusFromServer, relativeTime} from './logic.js';
+import type {Column, IndexStatus, Job, Row, Table} from './types';
 
 export type InspectorTab = 'overview' | 'fields' | 'attachments' | 'history' | 'permissions' | 'index';
 
@@ -31,8 +31,11 @@ export function Inspector({
   scopes,
   jobs,
   jobsError,
+  indexStatus,
+  indexStatusError,
   canAdmin,
   onReloadJobs,
+  onReloadIndexStatus,
   onReindex,
   conflict,
   onSave,
@@ -59,8 +62,11 @@ export function Inspector({
   scopes: string[];
   jobs: Job[] | null;
   jobsError: unknown;
+  indexStatus: IndexStatus | null;
+  indexStatusError: unknown;
   canAdmin: boolean;
   onReloadJobs: () => void;
+  onReloadIndexStatus: () => void;
   onReindex: () => void;
   conflict: ConflictInfo | null;
   onSave: (values: Record<string, any>, revision: number) => Promise<void>;
@@ -152,7 +158,8 @@ export function Inspector({
   }, [tab, canAdmin, api, table.id, table.path, row]);
 
   const changed = row ? changedFields(row.values, draft) : [];
-  const indexStatus = useMemo(() => indexStatusFromJobs(jobs || []), [jobs]);
+  const jobsIndexStatus = useMemo(() => indexStatusFromJobs(jobs || []), [jobs]);
+  const serverStatus = useMemo(() => (indexStatus ? indexStatusFromServer(indexStatus) : null), [indexStatus]);
 
   function setValue(column: Column, raw: string) {
     let value: any = raw;
@@ -450,10 +457,38 @@ export function Inspector({
 
         {tab === 'index' && (
           <div className="inspector-index">
-            {!canAdmin ? (
+            {indexStatusError ? (
+              <ErrorState
+                title="每表索引状态读取失败"
+                requestId={describeError(indexStatusError).requestId} errorCode={describeError(indexStatusError).code}
+                message={describeError(indexStatusError).message}
+                onRetry={onReloadIndexStatus}
+              />
+            ) : serverStatus ? (
+              <>
+                <dl className="inspector-meta">
+                  <div><dt>状态</dt><dd><Badge tone={serverStatus.tone}>{serverStatus.label}</Badge></dd></div>
+                  <div><dt>说明</dt><dd>{serverStatus.detail}</dd></div>
+                  <div><dt>数据行</dt><dd>{indexStatus!.row_count}</dd></div>
+                  <div><dt>已索引行</dt><dd>{indexStatus!.embedded_rows}</dd></div>
+                  <div><dt>待索引行</dt><dd>{indexStatus!.pending_rows}</dd></div>
+                  <div><dt>向量块</dt><dd>{indexStatus!.chunk_count}</dd></div>
+                  {indexStatus!.last_job && <div><dt>最近任务</dt><dd className="mono">{indexStatus!.last_job.job_id ? `${indexStatus!.last_job.job_id} · ` : ''}{relativeTime(indexStatus!.last_job.updated_at || indexStatus!.last_job.created_at)}</dd></div>}
+                  {indexStatus!.last_job?.error && <div><dt>最近错误</dt><dd>{indexStatus!.last_job.error}</dd></div>}
+                </dl>
+                <p className="muted">
+                  覆盖统计来自表内 __xl_vectors 与 __xl_changes 的真实数据（按行当前 revision 计）；
+                  模型或分词器升级导致的过期向量块会在搜索结果中单独提示，不并入此处计数。
+                </p>
+                <div className="ds-button-row">
+                  <Button size="sm" onClick={() => { onReloadIndexStatus(); onReloadJobs(); }}>刷新索引状态</Button>
+                  {canAdmin && <Button size="sm" variant="primary" onClick={onReindex} disabled={Boolean(indexStatus!.last_job && (indexStatus!.last_job.status === 'queued' || indexStatus!.last_job.status === 'running'))}>重建 Embedding 索引</Button>}
+                </div>
+              </>
+            ) : !canAdmin ? (
               <div className="library-notice" role="status">
                 <strong>索引状态不可用</strong>
-                <p>GET /api/v1/jobs 需要 xelibrary:admin 权限；当前身份无法读取该表的索引任务。这里不会显示推测的索引状态。</p>
+                <p>该部署不提供每表索引状态 API，且 GET /api/v1/jobs 需要 xelibrary:admin 权限。这里不会显示推测的索引状态。</p>
               </div>
             ) : jobsError ? (
               <ErrorState
@@ -465,10 +500,10 @@ export function Inspector({
             ) : (
               <>
                 <dl className="inspector-meta">
-                  <div><dt>状态</dt><dd><Badge tone={indexStatus.state === 'ready' ? 'success' : indexStatus.state === 'failed' ? 'danger' : indexStatus.state === 'not_indexed' ? 'neutral' : 'warning'}>{indexStatus.state}</Badge></dd></div>
-                  <div><dt>说明</dt><dd>{indexStatus.detail}</dd></div>
-                  {indexStatus.latest && <div><dt>最近任务</dt><dd className="mono">{indexStatus.latest.job_id}</dd></div>}
-                  {indexStatus.latest && <div><dt>更新时间</dt><dd>{relativeTime(indexStatus.latest.updated_at || indexStatus.latest.created_at)}</dd></div>}
+                  <div><dt>状态</dt><dd><Badge tone={jobsIndexStatus.state === 'ready' ? 'success' : jobsIndexStatus.state === 'failed' ? 'danger' : jobsIndexStatus.state === 'not_indexed' ? 'neutral' : 'warning'}>{jobsIndexStatus.state}</Badge></dd></div>
+                  <div><dt>说明</dt><dd>{jobsIndexStatus.detail}</dd></div>
+                  {jobsIndexStatus.latest && <div><dt>最近任务</dt><dd className="mono">{jobsIndexStatus.latest.job_id}</dd></div>}
+                  {jobsIndexStatus.latest && <div><dt>更新时间</dt><dd>{relativeTime(jobsIndexStatus.latest.updated_at || jobsIndexStatus.latest.created_at)}</dd></div>}
                 </dl>
                 <p className="muted">
                   当前平台只暴露任务级索引信息（GET /api/v1/jobs?table_id=...），没有每表 chunk 进度与 indexed_revision API；
@@ -476,7 +511,7 @@ export function Inspector({
                 </p>
                 <div className="ds-button-row">
                   <Button size="sm" onClick={onReloadJobs}>刷新索引任务</Button>
-                  {canAdmin && <Button size="sm" variant="primary" onClick={onReindex} disabled={Boolean(indexStatus.latest && (indexStatus.latest.status === 'queued' || indexStatus.latest.status === 'running'))}>重建 Embedding 索引</Button>}
+                  {canAdmin && <Button size="sm" variant="primary" onClick={onReindex} disabled={Boolean(jobsIndexStatus.latest && (jobsIndexStatus.latest.status === 'queued' || jobsIndexStatus.latest.status === 'running'))}>重建 Embedding 索引</Button>}
                 </div>
               </>
             )}
