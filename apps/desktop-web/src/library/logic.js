@@ -380,6 +380,28 @@ export function indexStatusFromServer(status) {
   return {...base, tone: 'neutral', label: state || '—', detail: '索引状态未知。'};
 }
 
+/** Maximum visible Recent entries in the sidebar before an explicit expand. */
+export const RECENT_VISIBLE_LIMIT = 6;
+
+/**
+ * Sidebar Recent display state (issue #255): the count shows every saved entry,
+ * so when more than RECENT_VISIBLE_LIMIT exist offer an accessible "show all"
+ * control instead of silently hiding them. Consumes only the in-memory recent
+ * list; no request or server history claim is added.
+ */
+export function recentListDisplay(recent, showAll = false) {
+  const list = Array.isArray(recent) ? recent : [];
+  const collapsed = list.length > RECENT_VISIBLE_LIMIT;
+  const expanded = Boolean(showAll) && collapsed;
+  return {
+    visible: expanded ? list : list.slice(0, RECENT_VISIBLE_LIMIT),
+    expanded,
+    toggle: collapsed,
+    hidden: collapsed && !expanded ? list.length - RECENT_VISIBLE_LIMIT : 0,
+    label: collapsed ? (expanded ? '收起到 6 项' : `显示全部 ${list.length} 项`) : '',
+  };
+}
+
 export function mergeRecent(list, entry, limit = 8) {
   const filtered = list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
   return [entry, ...filtered].slice(0, limit);

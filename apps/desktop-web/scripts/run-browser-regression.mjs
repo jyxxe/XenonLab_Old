@@ -40,6 +40,7 @@ const tests = [
   'tests/browser-acceptance-agent-prompts.test.mjs',
   'tests/browser-acceptance-app-drafts.test.mjs',
   'tests/browser-acceptance-attachment-picker.test.mjs',
+  'tests/browser-acceptance-recent-list.test.mjs',
   'tests/browser-acceptance-harness-shortcut.test.mjs',
   'tests/browser-acceptance-icons.test.mjs',
   'tests/browser-acceptance-inspector-drafts.test.mjs',
