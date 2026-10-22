@@ -18,9 +18,16 @@ app registry or desktop preferences.
   Caddy serves only on the LAN desktop vhost (`https://xenon.lan`,
   `https://192.168.0.101:9443`) by proxying to `192.168.0.111:4097`.
 - Token source: `dsh-harness-launch` (root systemd service on VM111) reads the
-  current per-process launch token from the harness service journal and answers
-  `302 http://192.168.0.111:4096/?token=…` with `Cache-Control: no-store`.
-  Tokens rotate whenever the harness service restarts; no copy is persisted.
+  current per-process launch token from the harness service journal, exchanges
+  it for the Harness browser-session cookie server-side (single-use launch
+  tokens would otherwise be consumed by the first visitor), and serves a tiny
+  VM111 page that sets that cookie and refreshes to the Harness UI. The cookie
+  is scoped to the Harness host and accepted over the same-site refresh;
+  tokens rotate whenever the harness service restarts and no copy is persisted.
+- First hop: the LAN desktop's `/harness` request is answered with a `302` to
+  `http://192.168.0.111:4097/launch` so the cookie-setting page is served from
+  the Harness host itself; a direct `302` to the token URL would lose the
+  `SameSite=Strict` session cookie on the cross-site redirect chain.
 - Network gate: the launcher binds `192.168.0.111:4097`, and
   `infra/devagent/web-firewall.nft` accepts that port only from loopback and
   `192.168.0.0/24` while rejecting other sources (same pattern as 4096). The
