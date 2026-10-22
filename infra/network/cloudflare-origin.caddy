@@ -70,6 +70,13 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
   handle /health/* {
     reverse_proxy 127.0.0.1:8101
   }
+  # Agent prompt catalogue (docs/agent-prompts in the active release). Reached
+  # through the tunnel only; contains no credentials and is safe to publish so
+  # WAN agents can read the same prompts as the LAN panel.
+  handle_path /agent-prompts/* {
+    root * /opt/xeonolab/current/docs/agent-prompts
+    file_server
+  }
   handle {
     root * /opt/xeonolab/current/apps/desktop-web/dist
     try_files {path} /index.html
