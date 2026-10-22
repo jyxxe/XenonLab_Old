@@ -15,3 +15,5 @@ experiments/xl-vector-scan/target/
 
 # Private OpenCode instructions containing agent-only credentials
 /Agent.md
+/admin.md
+/.admin-*.tmp

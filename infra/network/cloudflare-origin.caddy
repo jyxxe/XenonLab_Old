@@ -1,5 +1,8 @@
 http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
   bind 192.168.0.101
+  header X-Content-Type-Options nosniff
+  header Referrer-Policy no-referrer
+  header Strict-Transport-Security "max-age=300"
   @outside not remote_ip 192.168.0.105 192.168.0.101
   handle @outside {
     respond "Tunnel connector required" 403
@@ -30,7 +33,26 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
       header_up X-Forwarded-Proto https
     }
   }
-  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/*
+  @chat host chat.xenon.jyxxe.com
+  handle @chat {
+    reverse_proxy 192.168.0.100:3000 {
+      header_up X-Forwarded-Proto https
+      header_up X-Forwarded-Host {host}
+    }
+  }
+
+  # DeepSeek Harness launcher (LAN-only target). The launcher and the Harness UI
+  # stay on the lab intranet; a remote public visitor cannot complete the
+  # LAN-only second hop, while a same-intranet browser on the public desktop can.
+  @harness path /harness*
+  handle @harness {
+    reverse_proxy 192.168.0.111:4097
+  }
+  @embedding_api path /api/v1/embed/*
+  handle @embedding_api {
+    reverse_proxy 192.168.0.107:8104
+  }
+  @desktop_api path /api/v1/apps* /api/v1/users/* /api/v1/auth/* /api/v1/plugins*
   handle @desktop_api {
     reverse_proxy 127.0.0.1:8101
   }

@@ -1,21 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  SEARCH_LIMIT_OPTIONS,
+  searchResultSummary,
   ancestorPaths,
+  clampColumnWidth,
+  keyboardColumnWidth,
   buildPathTree,
   changedFields,
   classifySchemaChange,
   describeError,
   filterRows,
   filterTree,
+  filteredTreeExpansion,
   flattenTree,
   formatBytes,
   indexStatusFromJobs,
+  indexStatusFromServer,
   isKeywordResult,
   libraryPrefsStorageKey,
   mergeRecent,
+  retainRefreshedRow,
+  recentEntryPresentation,
   parseFieldFilters,
   rowHasAttachment,
+  rowSelectionRange,
   searchWarnings,
   sortRows,
   toggleFavorite,
@@ -30,6 +39,30 @@ const tables = [
   {id: 'c', name: 'notes', path: '/计算机'},
   {id: 'd', name: 'root', path: '/'},
 ];
+
+test('theorem recent labels preserve real titles and distinguish generic or duplicate names', () => {
+  const theorem = (id, title) => ({kind: 'theorem', id, title});
+  const distinct = [theorem('thm-1', '一致收敛定理'), theorem('thm-2', '极限唯一性定理')];
+  assert.deepEqual(recentEntryPresentation(distinct[0], distinct), {title: '一致收敛定理', identifier: '', label: '一致收敛定理'});
+  const duplicates = [theorem('uuid-00000001', ' 同名定理 '), theorem('uuid-00000002', '同名定理')];
+  assert.equal(recentEntryPresentation(duplicates[0], duplicates).label, '同名定理 · 00000001');
+  assert.equal(recentEntryPresentation(duplicates[1], duplicates).identifier, '00000002');
+  assert.equal(recentEntryPresentation(theorem('thm-1', '定理')).label, '定理 · thm-1');
+  assert.equal(recentEntryPresentation(theorem('thm-2', '  ')).label, '定理 · thm-2');
+  assert.equal(recentEntryPresentation(theorem('thm-3', undefined)).label, '定理 · thm-3');
+  const table = {kind: 'table', id: 'table-1', title: '同名定理'};
+  assert.equal(recentEntryPresentation(duplicates[1], [duplicates[1], table]).identifier, '', 'other entry kinds do not create theorem title collisions');
+  assert.deepEqual(recentEntryPresentation(table, duplicates), {title: table.title, identifier: '', label: table.title});
+});
+
+test('colliding short theorem IDs fall back to complete stable IDs without altering entries', () => {
+  const entries = ['prefix-a-12345678', 'prefix-b-12345678'].map(id => ({kind: 'theorem', id, title: '定理'}));
+  const before = JSON.stringify(entries);
+  assert.equal(recentEntryPresentation(entries[0], entries).identifier, entries[0].id);
+  assert.equal(recentEntryPresentation(entries[1], entries).identifier, entries[1].id);
+  assert.equal(JSON.stringify(entries), before);
+  assert.equal(recentEntryPresentation(entries[0], [entries[0], {...entries[0]}]).identifier, '12345678', 'same ID is not a different object');
+});
 
 test('buildPathTree groups tables by logical path and counts descendants', () => {
   const tree = buildPathTree(tables);
@@ -83,6 +116,35 @@ test('virtualWindow keeps a bounded render window with padding', () => {
   assert.deepEqual(filtered, {start: 0, end: 2, padTop: 0, padBottom: 0, totalHeight: 68});
 });
 
+test('Shift ranges follow sorted filtered result order in either direction', () => {
+  const rows = [
+    {_row_id:'a',values:{title:'keep-z'}},
+    {_row_id:'hidden',values:{title:'hide'}},
+    {_row_id:'b',values:{title:'keep-a'}},
+    {_row_id:'c',values:{title:'keep-m'}},
+  ];
+  const visible = sortRows(filterRows(rows,'keep-'),'title').map(row=>row._row_id);
+  assert.deepEqual(visible,['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'b','a'),['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'a','b'),['b','c','a']);
+  assert.deepEqual(rowSelectionRange(visible,'c','a'),['c','a']);
+  assert.deepEqual(rowSelectionRange([...visible].reverse(),'a','c'),['a','c']);
+  assert.deepEqual(visible,['b','c','a'],'selection does not mutate the view');
+});
+
+test('Shift range with an absent anchor falls back to the clicked visible row', () => {
+  assert.deepEqual(rowSelectionRange(['a','b'],'hidden','b'),['b']);
+  assert.deepEqual(rowSelectionRange(['a','b'],null,'b'),['b']);
+  assert.deepEqual(rowSelectionRange(['a','b'],'a','a'),['a']);
+  assert.deepEqual(rowSelectionRange(['a','b'],'a','hidden'),[]);
+  assert.deepEqual(rowSelectionRange([],null,'b'),[]);
+});
+
+test('Shift range includes loaded virtual rows between the endpoints', () => {
+  const ids = Array.from({length:120},(_,index)=>`row-${index}`);
+  assert.deepEqual(rowSelectionRange(ids,'row-5','row-105'),ids.slice(5,106));
+});
+
 test('classifySchemaChange separates safe additions from destructive edits', () => {
   const current = [
     {name: 'title', type: 'string', nullable: false, default_value: null},
@@ -113,7 +175,7 @@ test('classifySchemaChange separates safe additions from destructive edits', () 
 
 test('parseFieldFilters reads exact-match lines and reports malformed input', () => {
   const parsed = parseFieldFilters('type = theorem\nconfidence = 0.91\n\nbroken');
-  assert.deepEqual(parsed.filters, {type: 'theorem', confidence: '0.91'});
+  assert.deepEqual(parsed.filters, {type: 'theorem', confidence: 0.91});
   assert.equal(parsed.errors.length, 1);
   assert.deepEqual(parseFieldFilters('').filters, {});
 });
@@ -169,7 +231,7 @@ test('recent/favorites helpers stay bounded and deduplicate', () => {
   assert.equal(favorites.length, 1);
   assert.deepEqual(toggleFavorite(favorites, {kind: 'table', id: 'a', title: 'A', at: 1}), []);
   assert.notEqual(libraryPrefsStorageKey('subject:one', 'recent'), libraryPrefsStorageKey('subject:two', 'recent'));
-  assert.equal(libraryPrefsStorageKey(null, 'favorites'), 'xeonolab.library.anonymous.favorites');
+  assert.equal(libraryPrefsStorageKey(null, 'favorites'), null);
 });
 
 test('changedFields, rowHasAttachment, withOffset, and formatters behave', () => {
@@ -189,4 +251,131 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
   assert.equal(withQueryPagination('FROM "/**"', 100, 20), 'FROM "/**" LIMIT 100 OFFSET 20');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(-1), '—');
+});
+
+test('indexStatusFromServer maps every server state with counts', () => {
+  const ready = indexStatusFromServer({state: 'ready', row_count: 12, embedded_rows: 12, missing_rows: 0, pending_rows: 0, chunk_count: 30, last_job: {job_id: 'j1', status: 'completed'}});
+  assert.equal(ready.tone, 'success');
+  assert.match(ready.detail, /12 行/);
+  const stale = indexStatusFromServer({state: 'stale', row_count: 12, embedded_rows: 10, missing_rows: 2, pending_rows: 3, chunk_count: 25, last_job: null});
+  assert.equal(stale.tone, 'warning');
+  assert.match(stale.detail, /3 行变更/);
+  assert.match(stale.detail, /10\/12/);
+  assert.equal(indexStatusFromServer({state: 'queued'}).tone, 'warning');
+  assert.equal(indexStatusFromServer({state: 'indexing'}).tone, 'warning');
+  const failed = indexStatusFromServer({state: 'failed', row_count: 1, embedded_rows: 0, missing_rows: 1, pending_rows: 1, chunk_count: 0, last_job: {job_id: 'j2', status: 'failed', error: 'worker gone'}});
+  assert.equal(failed.tone, 'danger');
+  assert.match(failed.detail, /worker gone/);
+  assert.equal(indexStatusFromServer({state: 'empty', row_count: 0, embedded_rows: 0, missing_rows: 0, pending_rows: 0, chunk_count: 0, last_job: null}).tone, 'neutral');
+  const missing = indexStatusFromServer({state: 'not_indexed', row_count: 4, embedded_rows: 0, missing_rows: 4, pending_rows: 4, chunk_count: 0, last_job: null});
+  assert.equal(missing.tone, 'neutral');
+  assert.match(missing.detail, /4 行尚未建立向量索引/);
+  assert.equal(indexStatusFromServer(null).state, 'unavailable');
+});
+
+
+test('field filters retain JSON types and explicitly quoted numeric strings', () => {
+  const parsed = parseFieldFilters('n = 0.91\ns = "0.91"\nb = true\nnone = null\narr = [1,"2"]\nobj = {"n":3}\nempty = ""\nwords = theorem');
+  assert.deepEqual(parsed, {filters: {n: 0.91, s: '0.91', b: true, none: null, arr: [1, '2'], obj: {n: 3}, empty: '', words: 'theorem'}, errors: []});
+  assert.deepEqual(parseFieldFilters('n = -2.5e-3').filters, {n: -0.0025});
+  assert.deepEqual(parseFieldFilters('key = first\nkey = second').filters, {key: 'second'});
+  const named = parseFieldFilters('__proto__ = {"n":1}').filters;
+  assert.equal(Object.getPrototypeOf(named), Object.prototype);
+  assert.equal(JSON.stringify(named), '{"__proto__":{"n":1}}');
+});
+
+test('malformed and unrepresentable typed filters report errors rather than changing values', () => {
+  for (const value of ['01', '+1', '.91', '1e309', '9007199254740993', 'NaN', 'Infinity', '{bad}', '[1,]', '"unclosed', '{"n":1e309}']) {
+    const parsed = parseFieldFilters(`n = ${value}`);
+    assert.deepEqual(parsed.filters, {}, value);
+    assert.equal(parsed.errors.length, 1, value);
+  }
+});
+
+test('filtered tree reveals matching deep tables without changing saved expansion', () => {
+  const tree = buildPathTree(tables);
+  const saved = new Set(['/计算机']);
+  const filtered = filterTree(tree, '  ANALYSIS  ');
+  assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id), ['a']);
+  assert.deepEqual([...saved], ['/计算机']);
+  assert.ok(!flattenTree(tree, saved).some(item => item.kind === 'table' && item.table.id === 'a'));
+  assert.deepEqual([...filteredTreeExpansion(filterTree(tree, 'missing'))], []);
+});
+
+test('filtered path matches reveal descendants and support transient explicit collapse', () => {
+  const filtered = filterTree(buildPathTree(tables), '/数学');
+  const collapsed = new Set(['/数学']);
+  assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered, collapsed)).filter(item => item.kind === 'table'), []);
+  assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id).sort(), ['a', 'b']);
+  assert.deepEqual([...collapsed], ['/数学']);
+});
+
+test('deleted Recent candidate is exact authenticated loaded row, not an active/missing or previous row', async () => {
+  const {loadedDeletedRow} = await import('../src/library/logic.js');
+  const deleted = {_row_id:'deleted',_deleted_at:'2026-10-03T00:00:00Z',_revision:4,values:{title:'recoverable'}};
+  const active = {_row_id:'active',_deleted_at:null,_revision:2};
+  const page = [active, deleted];
+  assert.equal(loadedDeletedRow(page,'deleted'),deleted);
+  assert.equal(loadedDeletedRow(page,'active'),null);
+  assert.equal(loadedDeletedRow(page,'missing'),null);
+  assert.equal(loadedDeletedRow([], 'deleted'),null);
+  assert.equal(loadedDeletedRow(undefined,'deleted'),null);
+  assert.deepEqual(page,[active,deleted]);
+});
+
+test('refresh retains an off-page mutation target while preferring current page values', () => {
+  const first = {_row_id: 'first', _revision: 1};
+  const restored = {_row_id: 'target', _revision: 3, _deleted_at: null};
+  const rows = [first];
+  assert.deepEqual(retainRefreshedRow(rows, restored), [first, restored]);
+  assert.deepEqual(rows, [first]);
+  assert.equal(retainRefreshedRow(rows), rows);
+  const newer = {_row_id: 'target', _revision: 4};
+  const page = [first, newer];
+  assert.equal(retainRefreshedRow(page, restored), page);
+});
+
+test('field display order binds original schema objects, appends new fields and ignores removed/duplicate names', async () => {
+  const {orderedColumns} = await import('../src/library/logic.js');
+  const columns = [{name: 'title', type: 'string'}, {name: 'files', type: 'json'}, {name: 'new', type: 'bool'}];
+  const result = orderedColumns(columns, ['files', 'removed', 'files', 3, '_row_id', 'title']);
+  assert.deepEqual(result.map(column => column.name), ['files', 'title', 'new']);
+  assert.equal(result[0], columns[1]);
+  for (const invalid of [null, {}, 'files']) assert.deepEqual(orderedColumns(columns, invalid), columns);
+  assert.deepEqual(orderedColumns(columns, []), columns);
+});
+
+test('moving a field preserves other fields, handles both boundaries and leaves schema unchanged', async () => {
+  const {moveColumn} = await import('../src/library/logic.js');
+  const columns = [{name: 'a'}, {name: 'b'}, {name: 'c'}];
+  assert.deepEqual(moveColumn(columns, [], 'c', -1), ['a', 'c', 'b']);
+  assert.deepEqual(moveColumn(columns, ['c', 'a', 'b'], 'c', 1), ['a', 'c', 'b']);
+  for (const [name, direction] of [['a', -1], ['c', 1], ['missing', 1], ['b', 2]]) assert.deepEqual(moveColumn(columns, [], name, direction), ['a', 'b', 'c']);
+  assert.deepEqual(columns, [{name: 'a'}, {name: 'b'}, {name: 'c'}]);
+});
+
+test('search limit options stay aligned with the API contract and default', () => {
+  assert.deepEqual(SEARCH_LIMIT_OPTIONS, [25, 50, 100]);
+});
+
+test('searchResultSummary distinguishes the requested maximum from the returned count', () => {
+  assert.equal(searchResultSummary(50, 50), '最多 50 条 · 返回 50 条');
+  assert.equal(searchResultSummary(100, 60), '最多 100 条 · 返回 60 条');
+  assert.equal(searchResultSummary(null, 60), null, 'no summary before a result set exists');
+  assert.equal(searchResultSummary(50, 0), null, 'an empty result set keeps its dedicated empty state');
+  assert.equal(searchResultSummary(Number.NaN, 5), null);
+  assert.equal(searchResultSummary(50, Number.NaN), null);
+});
+
+test('column resize shares limits and keyboard steps without treating grid keys as resize', () => {
+  assert.equal(clampColumnWidth(40), 80);
+  assert.equal(clampColumnWidth(600), 520);
+  assert.equal(clampColumnWidth(NaN), 160);
+  assert.equal(keyboardColumnWidth(137, 'ArrowRight'), 147);
+  assert.equal(keyboardColumnWidth(137, 'ArrowLeft', true), 97);
+  assert.equal(keyboardColumnWidth(85, 'ArrowLeft'), 80);
+  assert.equal(keyboardColumnWidth(515, 'ArrowRight', true), 520);
+  assert.equal(keyboardColumnWidth(137, 'Home'), 80);
+  assert.equal(keyboardColumnWidth(137, 'End'), 520);
+  for (const key of ['ArrowDown', 'Enter', 'Escape', 'Tab']) assert.equal(keyboardColumnWidth(137, key), null);
 });
