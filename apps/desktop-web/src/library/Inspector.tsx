@@ -1,6 +1,6 @@
 import {Icon} from '../design-system/Icon';
 import {normalizeRowValues, parseExactJSON, stringifyExactJSON} from './json.js';
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useEffect, useImperativeHandle, useMemo, useRef, useState} from 'react';
 import {Badge, Button, ErrorState, IconButton, Input, Select, Skeleton, Spinner, StatusDot, Tabs, Textarea} from '../design-system/primitives';
 import type {UploadStore} from '../upload-state.js';
 import {Attachments} from '../Attachments';
@@ -19,6 +19,7 @@ const TABS: Array<{id: InspectorTab; label: string}> = [
 ];
 
 export type ConflictInfo = {rowId: string | null; localRevision: number; currentRevision: number; message: string};
+export type InspectorDraftState = {tableId: string; rowId: string | null; dirty: boolean};
 
 export function Inspector({
   table,
@@ -49,6 +50,7 @@ export function Inspector({
   onTabChange,
   uploadStore,
   identityKey = '',
+  draftStateRef,
 }: {
   tab?: InspectorTab;
   onTabChange?: (tab: InspectorTab) => void;
@@ -77,6 +79,7 @@ export function Inspector({
   onToggleFavorite: () => void;
   onClose: () => void;
   uploadStore?: UploadStore;
+  draftStateRef?: React.Ref<InspectorDraftState>;
   identityKey?: string;
 }) {
   const [localTab, setLocalTab] = useState<InspectorTab>('overview');
@@ -86,6 +89,7 @@ export function Inspector({
     onTabChange?.(next);
   };
   const [draft, setDraft] = useState<Record<string, any>>({});
+  const draftSource = useRef({row, columns});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState<unknown>(null);
@@ -119,6 +123,7 @@ export function Inspector({
   const canAttach = scopes.includes('xelibrary:attach');
 
   useEffect(() => {
+    draftSource.current = {row, columns};
     setError(null);
     setCompare(null);
     if (row) setDraft({...row.values});
@@ -158,6 +163,13 @@ export function Inspector({
   }, [tab, canAdmin, api, table.id, table.path, row]);
 
   const changed = row ? changedFields(row.values, draft) : [];
+  // A row reset and its next edit can batch without changing the field count.
+  // Republish for the draft object so a transient clean handle cannot stay stale.
+  useImperativeHandle(draftStateRef, () => ({
+    tableId: table.id,
+    rowId: row?._row_id ?? null,
+    dirty: draftSource.current.row === row && draftSource.current.columns === columns && changed.length > 0,
+  }), [table.id, row, columns, draft, changed.length]);
   const jobsIndexStatus = useMemo(() => indexStatusFromJobs(jobs || []), [jobs]);
   const serverStatus = useMemo(() => (indexStatus ? indexStatusFromServer(indexStatus) : null), [indexStatus]);
 

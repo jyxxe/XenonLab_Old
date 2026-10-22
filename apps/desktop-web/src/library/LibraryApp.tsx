@@ -9,7 +9,7 @@ import {LibrarySidebar, expandAncestors, type LibraryViewKind} from './Sidebar';
 import {TableSnapshotDownload} from './TableSnapshotDownload';
 import {TableView, type SortState} from './TableView';
 import {createUploadStore} from '../upload-state.js';
-import {Inspector, type ConflictInfo, type InspectorTab} from './Inspector';
+import {Inspector, type ConflictInfo, type InspectorDraftState, type InspectorTab} from './Inspector';
 import {SearchView} from './SearchView';
 import {QueryConsole} from './QueryConsole';
 import {TheoremView} from './TheoremView';
@@ -53,6 +53,16 @@ export function LibraryApp(props: LibraryAppProps) {
   // A different epoch hides the old workspace synchronously, even while the
   // next subject is still being verified. All resource/UI state belongs here.
   return <LibraryWorkspace key={JSON.stringify([props.authEpoch ?? 0, identity.subject])} {...props} subject={identity.subject} scopes={identity.scopes} />;
+}
+
+type FieldFocus = {element: HTMLElement; start: number | null; end: number | null; direction: 'forward' | 'backward' | 'none' | null};
+type PendingRowSwitch = {tableId: string; sourceId: string; rowId: string; authEpoch: number; navigation: number; focus: FieldFocus | null};
+
+function currentFieldFocus(): FieldFocus | null {
+  const element = document.activeElement;
+  if (!(element instanceof HTMLElement)) return null;
+  const text = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+  return {element, start: text ? element.selectionStart : null, end: text ? element.selectionEnd : null, direction: text ? element.selectionDirection : null};
 }
 
 function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourceAPIRaw, intent, apps, openApp, notify, authEpoch = 0, subject, scopes}: LibraryAppProps & {subject: string; scopes: string[]}) {
@@ -116,6 +126,22 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const canAdmin = scopes.includes('xelibrary:admin');
   const canReadTheorems = scopes.includes('xelibrary:theorem:read');
   const table = session.table;
+  const inspectorDraft = useRef<InspectorDraftState | null>(null);
+  const rowClickFocus = useRef<FieldFocus | null>(null);
+  const [pendingRowSwitch, setPendingRowSwitch] = useState<PendingRowSwitch | null>(null);
+  const rowSwitchContext = useRef({tableId: table?.id, activeRowId, authEpoch, view, inspectorOpen});
+  rowSwitchContext.current = {tableId: table?.id, activeRowId, authEpoch, view, inspectorOpen};
+
+  function sameRowSwitchContext(request: PendingRowSwitch) {
+    const current = rowSwitchContext.current;
+    return current.tableId === request.tableId && current.activeRowId === request.sourceId &&
+      current.authEpoch === request.authEpoch && current.view === 'library' && current.inspectorOpen &&
+      rowNavigation.current === request.navigation;
+  }
+
+  useEffect(() => {
+    if (pendingRowSwitch && (!sameRowSwitchContext(pendingRowSwitch) || !session.rows.some(row => row._row_id === pendingRowSwitch.rowId))) setPendingRowSwitch(null);
+  }, [pendingRowSwitch, table?.id, activeRowId, authEpoch, view, inspectorOpen, session.rows]);
   const rowMutationContext = useRef({api, apiPage, authEpoch, subject, tableId: table?.id, activeRowId, selection, view, generation: 0});
   const previousMutation = rowMutationContext.current;
   if (previousMutation.api !== api || previousMutation.apiPage !== apiPage || previousMutation.authEpoch !== authEpoch || previousMutation.subject !== subject || previousMutation.tableId !== table?.id || previousMutation.activeRowId !== activeRowId || previousMutation.selection !== selection || previousMutation.view !== view) {
@@ -273,6 +299,18 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   }
 
   function onSelectRow(rowId: string, event: React.MouseEvent, visibleRowIds: string[]) {
+    const draft = inspectorDraft.current;
+    const focus = event.detail ? rowClickFocus.current : currentFieldFocus();
+    rowClickFocus.current = null;
+    if (!event.shiftKey && !event.metaKey && !event.ctrlKey && rowId !== activeRowId &&
+        draft?.dirty && draft.tableId === table?.id && draft.rowId === activeRowId && activeRowId) {
+      setPendingRowSwitch({tableId: draft.tableId, sourceId: activeRowId, rowId, authEpoch, navigation: rowNavigation.current, focus});
+      return;
+    }
+    applyRowSelection(rowId, event, visibleRowIds);
+  }
+
+  function applyRowSelection(rowId: string, event: {shiftKey: boolean; metaKey: boolean; ctrlKey: boolean}, visibleRowIds: string[]) {
     searchReturn.current = null;
     ++rowNavigation.current;
     setActiveRowId(rowId);
@@ -290,6 +328,25 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
       return new Set([rowId]);
     });
     rememberLoadedRow(rowId);
+  }
+
+  function continueEditing() {
+    const request = pendingRowSwitch;
+    setPendingRowSwitch(null);
+    // Run after Modal's focus-trap cleanup, which otherwise restores the click's
+    // blurred initiator instead of the original editor field.
+    requestAnimationFrame(() => {
+      if (!request || !sameRowSwitchContext(request) || !request.focus?.element.isConnected) return;
+      const {element, start, end, direction} = request.focus;
+      element.focus({preventScroll: true});
+      if (start !== null && end !== null && (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) element.setSelectionRange(start, end, direction ?? undefined);
+    });
+  }
+
+  function discardRowDraft() {
+    const request = pendingRowSwitch;
+    setPendingRowSwitch(null);
+    if (request && sameRowSwitchContext(request) && session.rows.some(row => row._row_id === request.rowId)) applyRowSelection(request.rowId, {shiftKey: false, metaKey: false, ctrlKey: false}, session.rows.map(row => row._row_id));
   }
 
   const selectedRow = session.rows.find(row => row._row_id === activeRowId) || null;
@@ -519,7 +576,9 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const tableTargetError = tableTarget?.error ? describeError(tableTarget.error, '打开知识表') : null;
 
   return (
-    <div className="knowledge">
+    <div className="knowledge" onPointerDownCapture={event => {
+      rowClickFocus.current = event.button === 0 && event.target instanceof Element && event.target.closest('tr[data-row-id]') ? currentFieldFocus() : null;
+    }}>
       <LibrarySidebar
         tables={catalogue.tables}
         loading={catalogue.loading}
@@ -730,6 +789,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
 
       {view === 'library' && table && inspectorOpen && (
         <Inspector
+          draftStateRef={inspectorDraft}
           tab={inspectorTab}
           onTabChange={setInspectorTab}
           identityKey={JSON.stringify([subject, authEpoch, identityLoaded])}
@@ -838,6 +898,15 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
         ) : (
           <p>只有真正为空（没有行、附件、向量引用、活动索引任务或上传会话）的表可以删除。这不是 cascade delete；需要后台归档/清理时应创建独立 Core Issue。</p>
         )}
+      </Modal>
+
+      <Modal
+        open={Boolean(pendingRowSwitch && sameRowSwitchContext(pendingRowSwitch))}
+        title="未保存的字段修改"
+        onClose={continueEditing}
+        footer={<><Button variant="primary" onClick={continueEditing}>继续编辑</Button><Button variant="danger" onClick={discardRowDraft}>放弃修改并切换</Button></>}
+      >
+        <p>当前记录有未保存的字段修改。继续编辑会保留草稿；放弃后才会切换到所选记录，不会自动保存。</p>
       </Modal>
     </div>
   );
