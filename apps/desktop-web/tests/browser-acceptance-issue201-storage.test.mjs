@@ -19,7 +19,7 @@ async function port(){
   return value;
 }
 async function waitFor(fn,label){
-  const until=Date.now()+15000;
+  const until=Date.now()+30000;
   while(Date.now()<until){try{const result=await fn();if(result)return result}catch{}await sleep(100)}
   throw new Error(`Timed out waiting for ${label}`);
 }
@@ -72,7 +72,7 @@ test('System storage tab shows the verified HF-cache pool watermark or honest un
   if(!chromePath){t.skip('Chrome/Chromium unavailable; run with CHROME_BIN=/path/to/chrome');return}
   const evidence=path.resolve(appRoot,'../../runtime/verification/issue201-storage');
   const portNumber=await port();
-  const server=await createServer({root:appRoot,server:{host:'127.0.0.1',port:portNumber,strictPort:true,watch:null}});
+  const server=await createServer({root:appRoot,server:{host:'127.0.0.1',port:portNumber,strictPort:true,watch:null},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
   await server.listen();
   const tempDir=await fs.mkdtemp(path.join(os.tmpdir(),'xelonolab-issue201-acceptance-'));
   const chrome=spawn(chromePath,[
