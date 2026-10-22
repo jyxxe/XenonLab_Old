@@ -48,9 +48,13 @@ the automatic watcher changed.
 ### LAN-only XeonoLab shortcut (2026-10-22)
 
 The desktop offers a built-in `DeepSeek Harness` app (LaunchPad; not pinned to
-the Dock) only when the shell itself is loaded from the lab LAN — the client
-checks its own hostname (`localhost`, `*.lan`, RFC1918 addresses) so public
-desktop sessions never receive the shortcut or its target.
+the Dock) from every desktop origin. The shortcut is safe on the public origin
+because the Harness UI and its launcher are not exposed through the Cloudflare
+tunnel: only the LAN ingress `/harness` path proxies to VM111:4097, and the
+launcher's final navigation targets the LAN-only `http://192.168.0.111:4096`.
+A browser on the same intranet can therefore complete the shortcut from either
+the LAN or the public desktop; a remote public visitor sees the entry but the
+LAN-only hop cannot be reached, so no Harness session is exposed.
 
 The shortcut opens the same-origin LAN path `/harness` in a new tab. VM101's LAN
 Caddy proxies that path to the root-owned `dsh-harness-launch` service on
