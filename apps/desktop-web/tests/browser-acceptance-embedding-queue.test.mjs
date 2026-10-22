@@ -74,7 +74,9 @@ test('Embedding queue acceptance renders synthetic queue, history pages and refr
   const server=await createServer({root:appRoot,server:{host:'127.0.0.1',port:portNumber,strictPort:true,watch:null}});
   await server.listen();
   const tempDir=await fs.mkdtemp(path.join(os.tmpdir(),'xeonolab-queue-acceptance-'));
-  const chrome=spawn(chromePath,['--headless=new','--no-first-run','--no-default-browser-check',`--user-data-dir=${path.join(tempDir,'profile')}`,'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1','--remote-allow-origins=*','about:blank'],{stdio:'ignore'});
+  // CI job containers run as root, where Chrome needs --no-sandbox to start; local
+  // operator workstations keep the sandbox. --disable-dev-shm-usage covers small /dev/shm.
+  const chrome=spawn(chromePath,['--headless=new','--disable-dev-shm-usage',...(process.getuid?.()===0?['--no-sandbox']:[]),'--no-first-run','--no-default-browser-check',`--user-data-dir=${path.join(tempDir,'profile')}`,'--remote-debugging-port=0','--remote-debugging-address=127.0.0.1','--remote-allow-origins=*','about:blank'],{stdio:'ignore'});
   let cdp;
   try{
     const endpoint=await waitFor(async()=>{
