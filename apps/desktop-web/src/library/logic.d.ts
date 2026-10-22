@@ -56,10 +56,13 @@ export function indexStatusFromServer(status: IndexStatus | null | undefined): {
   last_job: IndexStatusLastJob | null;
 };
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];
+export function libraryPrefsKey(entry: any): string;
+export function mergeServerPrefs(local: any[] | null | undefined, server: any[] | null | undefined, kind: 'recent' | 'favorites', tombstones?: any[]): any[];
+export function mergeTombstones(local: any[] | null | undefined, server: any[] | null | undefined): any[];
 export function recentEntryPresentation(entry: {kind: string; id: string; title?: string}, list?: Array<{kind: string; id: string; title?: string}>): {title: string; identifier: string; label: string};
-export function toggleFavorite(list: any[], entry: any): any[];
+export function toggleFavorite(list: any[], entry: any, tombstones?: any[], at?: number): {favorites: any[]; tombstones: any[]};
 export function isFavorite(list: any[], entry: any): boolean;
-export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites'): string | null;
+export function libraryPrefsStorageKey(subject: string | null | undefined, section: 'recent' | 'favorites' | 'tombstones'): string | null;
 export function changedFields(before?: Record<string, unknown>, after?: Record<string, unknown>): string[];
 export function rowHasAttachment(row: any, columns?: Column[]): boolean;
 export function isIndexActiveJob(job: Job | undefined): boolean;

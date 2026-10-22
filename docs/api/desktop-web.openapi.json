@@ -2033,6 +2033,51 @@
               }
             ],
             "title": "Reduced Motion"
+          },
+          "library_recents": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Recents"
+          },
+          "library_favorites": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Favorites"
+          },
+          "library_favorite_tombstones": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Favorite Tombstones"
           }
         },
         "additionalProperties": false,

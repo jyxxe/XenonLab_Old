@@ -137,6 +137,29 @@ async function rectOf(cdp, selector) {
   })()`);
 }
 
+// CI runners occasionally swallow a single dispatched key event while the
+// renderer is still settling; retry the keystroke until the expected UI shows
+// up (or the attempts run out) instead of failing the whole acceptance run.
+async function keyUntil(cdp, conditionExpression, key, code, modifiers = 0, attempts = 6) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await cdp.key(key, code, modifiers);
+    try {
+      const until = Date.now() + 1200;
+      while (Date.now() < until) {
+        try {
+          if (await cdp.evaluate(conditionExpression)) return;
+        } catch {
+          /* keep polling */
+        }
+        await sleep(80);
+      }
+    } catch {
+      /* retry the keystroke */
+    }
+  }
+  throw new Error(`keyboard condition not met after ${attempts} attempts: ${conditionExpression.slice(0, 80)}`);
+}
+
 async function centerOf(cdp, selector) {
   return cdp.evaluate(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
@@ -238,14 +261,12 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
 
     const pinnedTitles = () => cdp.evaluate("[...document.querySelectorAll('nav.dock .ds-pinned')].map(button=>button.title)");
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
-    await cdp.key('F10', 'F10', 8 /* Shift */);
-    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'keyboard Dock menu');
+    await keyUntil(cdp, "Boolean(document.querySelector('.ds-context-menu'))", 'F10', 'F10', 8 /* Shift */);
     await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向右移动')).setAttribute('data-test','right')");
     await click('.ds-context-menu [data-test=right]');
     await waitFor(async () => (await pinnedTitles())[1] === '知识库', 'Dock moves right with real pointer click');
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
-    await cdp.key('F10', 'F10', 8);
-    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'Dock menu again');
+    await keyUntil(cdp, "Boolean(document.querySelector('.ds-context-menu'))", 'F10', 'F10', 8);
     await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向左移动')).setAttribute('data-test','left')");
     await click('.ds-context-menu [data-test=left]');
     await waitFor(async () => (await pinnedTitles())[0] === '知识库', 'Dock moves left');

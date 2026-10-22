@@ -20,6 +20,8 @@ import {
   isKeywordResult,
   libraryPrefsStorageKey,
   mergeRecent,
+  mergeServerPrefs,
+  mergeTombstones,
   retainRefreshedRow,
   recentEntryPresentation,
   parseFieldFilters,
@@ -227,11 +229,41 @@ test('recent/favorites helpers stay bounded and deduplicate', () => {
   const updated = mergeRecent(recent, {kind: 'table', id: 'a', title: 'A2', at: 2});
   assert.equal(updated.length, 1);
   assert.equal(updated[0].title, 'A2');
-  const favorites = toggleFavorite([], {kind: 'table', id: 'a', title: 'A', at: 1});
-  assert.equal(favorites.length, 1);
-  assert.deepEqual(toggleFavorite(favorites, {kind: 'table', id: 'a', title: 'A', at: 1}), []);
+  const added = toggleFavorite([], {kind: 'table', id: 'a', title: 'A', at: 1});
+  assert.equal(added.favorites.length, 1);
+  assert.equal(added.tombstones.length, 0);
+  const removed = toggleFavorite(added.favorites, {kind: 'table', id: 'a', title: 'A', at: 1}, added.tombstones, 5);
+  assert.deepEqual(removed.favorites, []);
+  assert.deepEqual(removed.tombstones, [{kind: 'table', id: 'a', title: 'A', at: 5, deleted: true}]);
+  // Re-adding clears the tombstone so future removals stay attributable.
+  const reAdded = toggleFavorite(removed.favorites, {kind: 'table', id: 'a', title: 'A', at: 9}, removed.tombstones, 9);
+  assert.equal(reAdded.favorites.length, 1);
+  assert.equal(reAdded.tombstones.length, 0);
   assert.notEqual(libraryPrefsStorageKey('subject:one', 'recent'), libraryPrefsStorageKey('subject:two', 'recent'));
   assert.equal(libraryPrefsStorageKey(null, 'favorites'), null);
+});
+
+test('mergeServerPrefs honours tombstones and stale cached copies cannot revive deletions', () => {
+  const server = [{kind: 'table', id: 'a', title: 'A', at: 1}];
+  const tombstones = [{kind: 'table', id: 'a', at: 5, deleted: true}];
+  // Device B still holds a stale local copy of the deleted favourite.
+  const revived = mergeServerPrefs(
+    [{kind: 'table', id: 'a', title: 'A', at: 1}],
+    server,
+    'favorites',
+    tombstones,
+  );
+  assert.deepEqual(revived, []);
+  // An entry re-added after the deletion timestamp survives the tombstone.
+  const reAdded = mergeServerPrefs(
+    [],
+    [{kind: 'table', id: 'a', title: 'A', at: 9}],
+    'favorites',
+    tombstones,
+  );
+  assert.equal(reAdded.length, 1);
+  assert.equal(mergeTombstones([{kind: 'table', id: 'a', at: 3, deleted: true}], [{kind: 'table', id: 'a', at: 7, deleted: true}]).length, 1);
+  assert.equal(mergeTombstones([], [{kind: 'table', id: 'a', at: 7, deleted: true}])[0].at, 7);
 });
 
 test('changedFields, rowHasAttachment, withOffset, and formatters behave', () => {
@@ -251,6 +283,28 @@ test('changedFields, rowHasAttachment, withOffset, and formatters behave', () =>
   assert.equal(withQueryPagination('FROM "/**"', 100, 20), 'FROM "/**" LIMIT 100 OFFSET 20');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(-1), '—');
+});
+
+test('mergeServerPrefs unions by kind+id preferring fresher timestamps', () => {
+  const local = [
+    {kind: 'table', id: 't1', title: 'local t1', at: 30},
+    {kind: 'table', id: 't2', title: 'local t2', at: 5},
+    {kind: 'row', id: 't1:row-9', title: 'local row', at: 7},
+  ];
+  const server = [
+    {kind: 'table', id: 't1', title: 'server t1', at: 20},
+    {kind: 'table', id: 't9', title: 'server t9', at: 40},
+  ];
+  const merged = mergeServerPrefs(local, server, 'recent');
+  const byId = Object.fromEntries(merged.map(entry => [entry.id, entry]));
+  assert.equal(byId['t1'].title, 'local t1', 'fresher local entry wins');
+  assert.equal(byId['t2'].title, 'local t2', 'local-only entry kept');
+  assert.equal(byId['t9'].title, 'server t9', 'server-only entry kept');
+  assert.equal(merged[0].id, 't9', 'recents sort by at descending');
+  assert.equal(merged.length, 4, 'union of local and server entries');
+  const favorites = mergeServerPrefs([], server, 'favorites');
+  assert.equal(favorites.length, 2, 'server favorites adopted when local is empty');
+  assert.equal(mergeServerPrefs(null, null, 'favorites').length, 0);
 });
 
 test('indexStatusFromServer maps every server state with counts', () => {

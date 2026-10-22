@@ -72,7 +72,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const search = useSearch(apiPage);
   const query = useQueryConsole(apiPage, subject, identityLoaded && Boolean(subject), authEpoch);
   const theorems = useTheorems(apiPage);
-  const prefs = useLibraryPrefs(subject);
+  const prefs = useLibraryPrefs(subject, api, apiRaw);
   const uploadStore = useMemo(()=>createUploadStore(),[subject,authEpoch]);
   useEffect(()=>()=>uploadStore.dispose(),[uploadStore]);
 

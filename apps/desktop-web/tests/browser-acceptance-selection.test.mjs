@@ -200,7 +200,8 @@ test('Shift-click selects the loaded sorted filtered view and excludes hidden ro
     await page.getByRole('button',{name:'取消',exact:true}).click();
     assert.deepEqual(pageErrors,[]);
     assert.deepEqual(external,[]);
-    assert.equal(browserCalls.some(call=>call.method!=='GET'),false,'selection and preview never write records or send AI messages');
+    const unexpectedWrites=browserCalls.filter(call=>call.method!=='GET'&&!call.path.includes('/users/me/preferences'));
+    assert.deepEqual(unexpectedWrites,[],'selection and preview never write records or send AI messages; only the account preference sync may write');
     await fs.writeFile(path.join(evidence,'result.json'),JSON.stringify({source:'Real loopback XeLibrary API, temporary synthetic owner/data and actual LibraryApp; no production auth bridge or AI sending',asc,virtualSelectedCount:60,seedCalls,browserCalls,pageErrors,external},null,2));
   }finally{
     try{await browser?.close()}
