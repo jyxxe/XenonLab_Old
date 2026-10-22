@@ -880,13 +880,13 @@ PATCH /api/v1/apps/{app_id}        admin only
 DELETE /api/v1/apps/{app_id}       admin only
 ```
 
-应用对象：
+应用对象（这里只登记独立来源的外部应用；内置应用由桌面客户端提供）：
 
 ```json
 {
-  "id": "xelibrary",
-  "title": "XeLibrary",
-  "origin": "https://library.example.internal",
+  "id": "external-app",
+  "title": "External app",
+  "origin": "https://app.example.internal",
   "entry": "/",
   "icon": "library",
   "default_size": [1200, 800],
@@ -899,6 +899,8 @@ DELETE /api/v1/apps/{app_id}       admin only
   }
 }
 ```
+
+历史外部 `xelibrary` 应用入口已由桌面内置的“知识库”替代。不得再由部署验收脚本或默认配置创建该外部入口；遗留 registry 记录通过桌面管理员的应用目录 API 删除，用户布局中的旧 dock/window/recent 引用由客户端迁移到内置 `knowledge` 应用。此入口清理不删除 XeLibrary 服务、API、数据或反向代理路由。
 
 ## 18.2 用户桌面布局
 
@@ -1310,10 +1312,13 @@ DELETE /api/v1/uploads/{upload_id}
 ## 25.2 附件查询
 
 ```text
+GET /api/v1/tables/{table_id}/attachments?limit=25&q=...&cursor=...
 GET /api/v1/attachments/{attachment_id}
 GET /api/v1/attachments/{attachment_id}/content
 GET /api/v1/attachments/{attachment_id}/preview
 ```
+
+表内列表仅返回当前身份可读且未删除来源行的附件元数据，要求 `xelibrary:read` 与表/行 ACL；不读取对象内容。`data[]` 含既有附件元数据与 `source_label`（按 title、name、其余 string/text 列顺序取首个非空字符串的前 256 字符，否则 Row ID）。文件名或该显示标签按去空白、Unicode casefold 子串搜索，`q` 最多 200 字符。`limit` 默认 25、范围 1–100；附件 ID 升序 keyset 游标绑定表与规范化搜索，每页重新鉴权。每页最多检查 500 个引用，因此空页仍可能有 `meta.next_cursor`；客户端需明确已加载范围并允许继续读取，不把已加载数当作总数。绑定仍由既有端点再次检查源读与目标 attach 权限。
 
 ## 25.3 绑定 / 解绑
 

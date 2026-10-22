@@ -1,0 +1,19 @@
+# Issue 158 — Restore search results position on source return
+
+Verified against integration baseline `2aabf623aa88f68c0050774ddb03f2773681abfe` with local synthetic test data. This document describes the UI change and reproducible acceptance evidence for Issue #158.
+
+Implementation captures the actual `知识库主区域` main scrollTop and search result version synchronously when opening a search hit. Returning to that same search restores it in a layout effect, including return before source loading finishes and return after a row-read error. No async source completion writes the snapshot; the existing row-navigation generation rejects abandoned source responses. Unknown-table lookup leaves the search view in place. New search submissions (including identical text, empty input, errors/retries), mode changes and explicit reset start a new result version before awaiting any response, invalidating old positions. Ordinary view/table/recent navigation or selecting another source-table row clears the snapshot; this is a one-source-return affordance, not general browser history. The next search hit captures its own position.
+
+SearchView's existing filter-panel expansion state is held in LibraryApp memory so returning renders the same list height. Otherwise the default collapsed panel removes 198 pixels and physically clamps a bottom-of-list scrollTop. Query, path, filter values and result order remain managed by the existing hook; no persistence or extra API requests were added. Normal new queries retain the current filter expansion behavior. No Inspector change and no dependency on unmerged #153/PR157. Numeric-field filtering #159 is outside this scope; the fixture uses the existing string `type = theorem` contract.
+
+Validation:
+- `uv run pytest`: 429 passed, 19 existing warnings, 13.90 s.
+- `uv run ruff check xeonolab tests`: passed.
+- `uv run python scripts/export_openapi.py`: passed with no OpenAPI diff.
+- Frontend `npm ci`, `npm test`: 62 passed, 0 skipped; `npm run build`: passed after final production source change.
+- `CHROME_BIN=/usr/bin/google-chrome node --test apps/desktop-web/tests/browser-acceptance-search-return.test.mjs`: 1 passed, 0 skipped, no page errors. Actual Chrome renders actual LibraryApp/SearchView through loopback Vite; a test-only transform expands the existing synthetic API fixture to 25 hits and explicit error/empty cases. No live search backend or production identity/data was used. Added to the regular browser regression runner.
+- Actual departure and returned main scrollTop both 2156 pixels with filters expanded; search requests remain 1 across source open/return. Query/path/string field filter/hits and expansion remain intact. Another hit restores its own departure. Same-text/new query and ordinary sidebar navigation reset to the top. Empty input does not send a request; empty results, synthetic 503 retry and Fast/Quality behavior remain intact.
+- Browser-controlled pending-source Promise barrier: row GET marks started and unfinished before return; returning restores the departure position, release marks complete, and search/position remain unchanged. Separate held-source cases verify new query or ordinary navigation prevents a late completion from reviving a snapshot. Row-read failure still returns to the original position; unknown-table failure does not leave or reset the search list.
+- `git diff --check`: passed. Runtime screenshots, browser-report JSON and command logs are under `runtime/verification/issue158-search-return/`.
+
+No new application dependency, backend route or migration. Existing frontend test dependencies and Chrome are needed to re-run the browser test. Roll back by reverting this UI/hook/test/docs change. Real embedding/Qwen workers and production rollout remain outside this local UI delivery; synthetic Quality errors do not demonstrate real worker availability. Production acceptance and deployment were not performed.

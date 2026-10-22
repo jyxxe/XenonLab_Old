@@ -1,5 +1,8 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import {Icon} from '../design-system/Icon';
+import {normalizeRowValues, parseExactJSON, stringifyExactJSON} from './json.js';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, ErrorState, IconButton, Input, Select, Skeleton, Spinner, StatusDot, Tabs, Textarea} from '../design-system/primitives';
+import type {UploadStore} from '../upload-state.js';
 import {Attachments} from '../Attachments';
 import {changedFields, describeError, indexStatusFromJobs, relativeTime} from './logic.js';
 import type {Column, Job, Row, Table} from './types';
@@ -39,7 +42,13 @@ export function Inspector({
   onReloadRow,
   onToggleFavorite,
   onClose,
+  tab: controlledTab,
+  onTabChange,
+  uploadStore,
+  identityKey = '',
 }: {
+  tab?: InspectorTab;
+  onTabChange?: (tab: InspectorTab) => void;
   table: Table;
   columns: Column[];
   row: Row | null;
@@ -56,13 +65,20 @@ export function Inspector({
   conflict: ConflictInfo | null;
   onSave: (values: Record<string, any>, revision: number) => Promise<void>;
   onDelete: (revision: number) => Promise<void>;
-  onRestore: (revision: number, currentRevision: number) => Promise<void>;
-  onCreate: (values: Record<string, any>) => Promise<void>;
+  onRestore: (revision: number, currentRevision: number) => Promise<void | false>;
+  onCreate: (values: Record<string, any>) => Promise<void | false>;
   onReloadRow: () => void;
   onToggleFavorite: () => void;
   onClose: () => void;
+  uploadStore?: UploadStore;
+  identityKey?: string;
 }) {
-  const [tab, setTab] = useState<InspectorTab>('overview');
+  const [localTab, setLocalTab] = useState<InspectorTab>('overview');
+  const tab = controlledTab ?? localTab;
+  const setTab = (next: InspectorTab) => {
+    setLocalTab(next);
+    onTabChange?.(next);
+  };
   const [draft, setDraft] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -73,12 +89,24 @@ export function Inspector({
   const [acl, setAcl] = useState<{table: any; path: any; row: any} | null>(null);
   const [aclError, setAclError] = useState<unknown>(null);
 
+  // A record switch invalidates every pending mutation, even when returning to A.
+  const context = JSON.stringify([table.id, row?._row_id ?? null]);
+  const mutation = useRef({context, generation: 0});
+  if (mutation.current.context !== context) {
+    mutation.current = {context, generation: mutation.current.generation + 1};
+  }
+  useEffect(() => {
+    setBusy(false);
+    setError(null);
+    setMessage('');
+  }, [context]);
+  useEffect(() => () => { mutation.current.generation += 1; }, []);
+
   const canWrite = scopes.includes('xelibrary:write');
   const canAttach = scopes.includes('xelibrary:attach');
 
   useEffect(() => {
     setError(null);
-    setMessage('');
     setCompare(null);
     if (row) setDraft({...row.values});
     else setDraft(Object.fromEntries(columns.map(column => [column.name, column.default_value])));
@@ -121,11 +149,12 @@ export function Inspector({
 
   function setValue(column: Column, raw: string) {
     let value: any = raw;
-    if (['int64', 'float64'].includes(column.type)) value = raw === '' ? null : Number(raw);
+    if (column.type === 'int64') value = raw === '' ? null : raw;
+    if (column.type === 'float64') value = raw === '' ? null : Number(raw);
     if (column.type === 'boolean') value = raw === '' ? null : raw === 'true';
     if (['json', 'attachment_list'].includes(column.type) && raw !== '') {
       try {
-        value = JSON.parse(raw);
+        value = parseExactJSON(raw);
       } catch {
         value = raw;
       }
@@ -134,45 +163,49 @@ export function Inspector({
   }
 
   async function submit() {
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     setMessage('');
     try {
-      if (row) await onSave(draft, row._revision);
-      else await onCreate(draft);
-      setMessage(row ? '已保存' : '记录已创建');
+      const values = normalizeRowValues(columns, draft);
+      if (row) await onSave(values, row._revision);
+      else if (await onCreate(values) === false) return;
+      if (generation === mutation.current.generation) setMessage(row ? '已保存' : '记录已创建');
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
   async function remove() {
     if (!row) return;
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     try {
       await onDelete(row._revision);
-      setMessage('记录已软删除，历史仍然保留');
+      if (generation === mutation.current.generation) setMessage('记录已软删除，历史仍然保留');
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
   async function restore(revision: number) {
     if (!row) return;
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     try {
-      await onRestore(revision, row._revision);
-      setMessage(`已从 r${revision} 恢复；这会创建一个新的 revision，不会覆盖历史`);
+      if (await onRestore(revision, row._revision) === false) return;
+      if (generation === mutation.current.generation) setMessage(`已从 r${revision} 恢复；这会创建一个新的 revision，不会覆盖历史`);
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
@@ -222,16 +255,18 @@ export function Inspector({
                 <div><dt>Deleted</dt><dd>{row._deleted_at ? <Badge tone="danger">已软删除</Badge> : '有效'}</dd></div>
               </dl>
             )}
-            <Button size="sm" onClick={onToggleFavorite}>★ 收藏此表</Button>
+            <Button size="sm" icon="favorite" onClick={onToggleFavorite}>收藏此表</Button>
             {row && (
               <Attachments
-                key={`overview:${table.id}:${row._row_id}`}
+                uploadStore={uploadStore}
+                key={`overview:${identityKey}:${table.id}:${row._row_id}`}
                 tableId={table.id}
                 rowId={row._row_id}
                 api={api}
                 apiPage={apiPage}
                 apiRaw={apiRaw}
                 canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
                 onChanged={async () => undefined}
               />
             )}
@@ -242,7 +277,7 @@ export function Inspector({
           <div className="inspector-fields">
             {columns.map(column => {
               const value = draft[column.name];
-              const text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+              const text = value === null || value === undefined ? '' : typeof value === 'object' ? stringifyExactJSON(value) : String(value);
               return (
                 <label key={column.name} className="inspector-field">
                   <span className="inspector-field-name">
@@ -259,7 +294,8 @@ export function Inspector({
                     <Textarea disabled={!canWrite || Boolean(row?._deleted_at) || busy} value={text} onChange={event => setValue(column, event.target.value)} />
                   ) : (
                     <Input
-                      type={['int64', 'float64'].includes(column.type) ? 'number' : 'text'}
+                      type={column.type === 'float64' ? 'number' : 'text'}
+                      inputMode={column.type === 'int64' ? 'numeric' : undefined}
                       disabled={!canWrite || Boolean(row?._deleted_at) || busy}
                       value={text}
                       onChange={event => setValue(column, event.target.value)}
@@ -287,13 +323,15 @@ export function Inspector({
         {tab === 'attachments' && (
           row ? (
             <Attachments
-              key={`${table.id}:${row._row_id}`}
+              uploadStore={uploadStore}
+              key={`${identityKey}:${table.id}:${row._row_id}`}
               tableId={table.id}
               rowId={row._row_id}
               api={api}
               apiPage={apiPage}
               apiRaw={apiRaw}
               canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
               onChanged={async () => undefined}
             />
           ) : (
@@ -343,8 +381,8 @@ export function Inspector({
                           <li key={name}>
                             <strong>{name}</strong>
                             <div className="history-diff">
-                              <pre>{JSON.stringify(compare.values[name] ?? null, null, 2)}</pre>
-                              <pre>{JSON.stringify(row.values[name] ?? null, null, 2)}</pre>
+                              <pre>{stringifyExactJSON(compare.values[name] ?? null, 2)}</pre>
+                              <pre>{stringifyExactJSON(row.values[name] ?? null, 2)}</pre>
                             </div>
                           </li>
                         ))}

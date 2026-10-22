@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
-"""Export and atomically stage only the OIDC origin/token maps in service env files."""
+"""Export and atomically stage the shared OIDC maps and role scopes."""
 
 import argparse
 import json
 import os
 import shlex
 import stat
+import sys
 import tempfile
 from pathlib import Path
 
+# The root-operated CLI is invoked by absolute path from a remote shell whose
+# working directory is outside the release checkout.
+RELEASE_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(RELEASE_ROOT))
+
+from xeonolab.role_scopes import OIDC_ROLE_SCOPES  # noqa: E402
+
 MAP_KEYS = ("OIDC_ISSUERS_BY_ORIGIN_JSON", "OIDC_TOKEN_URLS_JSON")
+ROLE_SCOPES_KEY = "OIDC_ROLE_SCOPES_JSON"
+PAYLOAD_KEYS = (*MAP_KEYS, ROLE_SCOPES_KEY)
 NODE_SERVICES = {
     "101": ("desktop-web",),
     "104": ("xelibrary",),
-    "106": ("tool-gateway", "llm-gateway"),
+    "106": ("deploy-gateway", "tool-gateway", "llm-gateway"),
     "107": ("embedding",),
     "111": ("dev-agent",),
 }
@@ -42,17 +52,21 @@ def _parse_map_value(line, key):
 
 
 def validate_payload(payload):
-    if not isinstance(payload, dict) or set(payload) != set(MAP_KEYS):
+    if not isinstance(payload, dict) or set(payload) != set(PAYLOAD_KEYS):
         raise ValueError("OIDC map payload has an unexpected schema")
     issuer_raw = payload["OIDC_ISSUERS_BY_ORIGIN_JSON"]
     token_raw = payload["OIDC_TOKEN_URLS_JSON"]
     if not isinstance(issuer_raw, str) or not isinstance(token_raw, str):
         raise ValueError("OIDC map payload values must be strings")
+    role_scopes_raw = payload[ROLE_SCOPES_KEY]
+    if not isinstance(role_scopes_raw, str):
+        raise ValueError("OIDC role scope payload must be a string")
     try:
         issuers = json.loads(issuer_raw)
         token_urls = json.loads(token_raw)
+        role_scopes = json.loads(role_scopes_raw)
     except json.JSONDecodeError as exc:
-        raise ValueError("OIDC map payload contains invalid JSON") from exc
+        raise ValueError("OIDC payload contains invalid JSON") from exc
     if issuers != EXPECTED_ISSUERS:
         raise ValueError("OIDC origin map does not match the exact expected issuers")
     expected_urls = {
@@ -60,18 +74,21 @@ def validate_payload(payload):
     }
     if token_urls != expected_urls:
         raise ValueError("OIDC token URL map does not match the issuer map")
+    expected_role_scopes = {role: list(scopes) for role, scopes in OIDC_ROLE_SCOPES.items()}
+    if role_scopes != expected_role_scopes:
+        raise ValueError("OIDC role scopes do not match the shared role policy")
     return payload
 
 
 def export_payload(env_file):
-    found = {key: [] for key in MAP_KEYS}
+    found = {key: [] for key in PAYLOAD_KEYS}
     for line in Path(env_file).read_text(encoding="utf-8").splitlines():
-        for key in MAP_KEYS:
+        for key in PAYLOAD_KEYS:
             if line.startswith(key + "="):
                 found[key].append(_parse_map_value(line, key))
     if any(len(values) != 1 for values in found.values()):
-        raise ValueError("source env file must contain exactly one of each OIDC map")
-    return validate_payload({key: found[key][0] for key in MAP_KEYS})
+        raise ValueError("source env file must contain exactly one of each OIDC setting")
+    return validate_payload({key: found[key][0] for key in PAYLOAD_KEYS})
 
 
 def _atomic_write(path, content):
@@ -103,17 +120,17 @@ def update_service_env(env_file, payload):
     path = Path(env_file)
     original = path.read_text(encoding="utf-8")
     lines = original.splitlines(keepends=True)
-    replacements = {key: key + "=" + shlex.quote(payload[key]) + "\n" for key in MAP_KEYS}
+    replacements = {key: key + "=" + shlex.quote(payload[key]) + "\n" for key in PAYLOAD_KEYS}
     seen = set()
     updated = []
     for line in lines:
-        key = next((candidate for candidate in MAP_KEYS if line.startswith(candidate + "=")), None)
+        key = next((candidate for candidate in PAYLOAD_KEYS if line.startswith(candidate + "=")), None)
         if key is None:
             updated.append(line)
         elif key not in seen:
             updated.append(replacements[key])
             seen.add(key)
-    for key in MAP_KEYS:
+    for key in PAYLOAD_KEYS:
         if key not in seen:
             if updated and not updated[-1].endswith("\n"):
                 updated[-1] += "\n"
@@ -152,7 +169,7 @@ def main():
         parser.error("staging requires --node and --payload")
     payload = json.loads(args.payload.read_text(encoding="utf-8"))
     services = stage_node(args.node, payload)
-    print("Updated OIDC maps for " + ", ".join(services))
+    print("Updated shared OIDC maps and role scopes for " + ", ".join(services))
 
 
 if __name__ == "__main__":

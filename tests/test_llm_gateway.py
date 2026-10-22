@@ -1,6 +1,14 @@
-from fastapi.testclient import TestClient
+import asyncio
+import json
+import logging
+from types import SimpleNamespace
 
-from xeonolab.services import create_app
+import httpx
+from fastapi.testclient import TestClient
+from starlette.requests import ClientDisconnect, Request
+
+from xeonolab.common import APIError
+from xeonolab.services import _sse_frame_kind, create_app
 
 from .conftest import auth
 
@@ -45,3 +53,701 @@ def test_model_alias_maps_only_on_server(settings, monkeypatch):
         == 422
     )
     assert client.post("/v1/chat/completions", headers=auth(), json=[]).status_code == 422
+
+
+class ProviderStream(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.closed = False
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self):
+        self.closed = True
+
+
+class StreamingProvider:
+    instances = []
+
+    def __init__(self, *, timeout, trust_env, verify):
+        assert trust_env is False
+        assert timeout.connect == 10
+        assert timeout.read == 120
+        assert timeout.write == 30
+        assert timeout.pool == 10
+        self.closed = False
+        self.sent_request = None
+        self.instances.append(self)
+
+    def build_request(self, method, url, *, headers, json):
+        return httpx.Request(method, url, headers=headers, json=json)
+
+    async def send(self, request, stream=False):
+        assert stream is True
+        self.sent_request = request
+        return self.response
+
+    async def aclose(self):
+        self.closed = True
+
+
+def _stream_client(settings, monkeypatch, stream, *, status=200, content_type="text/event-stream"):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    monkeypatch.setenv("LLM_PROVIDER_MODEL", "~deepseek/deepseek-flash-latest")
+    StreamingProvider.instances = []
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(
+                status,
+                headers={"content-type": content_type, "x-provider-secret": "must-not-forward"},
+                stream=stream,
+            )
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    return TestClient(create_app("llm-gateway", settings))
+
+
+def test_streaming_forwards_sse_deltas_and_tool_calls_without_provider_headers(settings, monkeypatch):
+    chunks = [
+        b'data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1,"model":"upstream-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"xelibrary.search","arguments":""}}]},"finish_reason":null}]}\n\n',
+        b'data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1,"model":"upstream-model","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\\"query\\\":\\\"x\\\"}"}}]},"finish_reason":null}]}\n\n',
+        b'data: {"id":"cmpl-1","object":"chat.completion.chunk","created":1,"model":"upstream-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    stream = ProviderStream(chunks)
+    client = _stream_client(settings, monkeypatch, stream)
+    response = client.post(
+        "/v1/chat/completions",
+        headers=auth(),
+        json={"model": "deepseek-flash", "stream": True, "tools": [{"type": "function"}]},
+    )
+
+    provider = StreamingProvider.instances[-1]
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.content == b"".join(chunks)
+    assert b'"arguments":"{\\\"query\\\":\\\"x\\\"}"' in response.content
+    assert response.headers.get("x-provider-secret") is None
+    assert provider.sent_request.headers["authorization"] == "Bearer provider-secret-for-test"
+    assert provider.sent_request.headers.get("x-provider-secret") is None
+    assert provider.sent_request.headers.get("authorization") != auth()["Authorization"]
+    assert json.loads(provider.sent_request.content)["model"] == "~deepseek/deepseek-flash-latest"
+    assert json.loads(provider.sent_request.content)["stream"] is True
+    assert stream.closed is True
+    assert provider.closed is True
+
+
+def test_sse_frame_validation_accepts_chat_chunks_tool_calls_and_heartbeats():
+    assert _sse_frame_kind(b": ping\n\n") == "keepalive"
+    assert _sse_frame_kind(b"event: ping\ndata: \n\n") == "keepalive"
+    assert _sse_frame_kind(
+        b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}\n\n'
+    ) == "data"
+    assert _sse_frame_kind(b"data: not-json\n\n") == "malformed"
+    assert _sse_frame_kind(b'data: {"choices":[]}\n\n') == "data"
+    deeply_nested = b"data: " + b"[" * 1200 + b"0" + b"]" * 1200 + b"\n\n"
+    assert _sse_frame_kind(deeply_nested) == "malformed"
+
+
+def test_streaming_rejects_unknown_model_and_missing_llm_scope(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    client = TestClient(create_app("llm-gateway", settings))
+    assert client.post(
+        "/v1/chat/completions",
+        headers=auth(),
+        json={"model": "other", "stream": True},
+    ).status_code == 422
+    assert client.post(
+        "/v1/chat/completions",
+        headers=auth("bob"),
+        json={"model": "deepseek-flash", "stream": True},
+    ).status_code == 403
+    assert client.post(
+        "/v1/chat/completions",
+        json={"model": "deepseek-flash", "stream": True},
+    ).status_code == 401
+
+
+def test_streaming_maps_upstream_http_and_invalid_sse_errors(settings, monkeypatch):
+    for status, content_type in [(429, "application/json"), (200, "application/json")]:
+        stream = ProviderStream([b'{"error":"provider-secret-for-test"}'])
+        client = _stream_client(settings, monkeypatch, stream, status=status, content_type=content_type)
+        response = client.post(
+            "/v1/chat/completions",
+            headers=auth(),
+            json={"model": "deepseek-flash", "stream": True},
+        )
+        assert response.status_code == 502
+        assert response.json()["error"]["code"] == "PROVIDER_ERROR"
+        assert "provider-secret-for-test" not in response.text
+        assert "must-not-forward" not in response.headers
+        assert stream.closed is True
+        assert StreamingProvider.instances[-1].closed is True
+
+
+def test_streaming_maps_upstream_connection_errors_without_leaking_details(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    StreamingProvider.instances = []
+
+    class FailingProvider(StreamingProvider):
+        async def send(self, request, stream=False):
+            raise httpx.ReadTimeout("provider-secret-for-test")
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FailingProvider)
+    response = TestClient(create_app("llm-gateway", settings)).post(
+        "/v1/chat/completions",
+        headers=auth(),
+        json={"model": "deepseek-flash", "stream": True},
+    )
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "PROVIDER_ERROR"
+    assert "provider-secret-for-test" not in response.text
+    assert StreamingProvider.instances[-1].closed is True
+
+
+def test_streaming_preserves_rate_limit_and_audit(settings, monkeypatch, caplog):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    settings.rate_limit_policies["agent"] = {"requests": 1, "window_seconds": 60}
+    caplog.set_level(logging.WARNING, logger="xeonolab.audit")
+    stream = ProviderStream([b"data: [DONE]\n\n"])
+    client = _stream_client(settings, monkeypatch, stream)
+
+    assert client.post(
+        "/v1/chat/completions",
+        headers=auth(),
+        json={"model": "deepseek-flash", "stream": True},
+    ).status_code == 200
+    limited = client.post(
+        "/v1/chat/completions",
+        headers=auth(),
+        json={"model": "deepseek-flash", "stream": True},
+    )
+    assert limited.status_code == 429
+    assert limited.headers["Retry-After"] == "60"
+    assert len(StreamingProvider.instances) == 1
+    events = [json.loads(record.message) for record in caplog.records if "rate_limit.rejected" in record.message]
+    assert events[0]["route_group"] == "agent"
+    assert events[0]["route"] == "/v1/chat/completions"
+    assert "provider-secret-for-test" not in caplog.text
+
+
+def test_streaming_truncates_and_closes_on_midstream_provider_error(settings, monkeypatch, caplog):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    StreamingProvider.instances = []
+    caplog.set_level(logging.WARNING, logger="xeonolab")
+
+    class BrokenStream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.closed = False
+
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n'
+            raise httpx.ReadError("provider-secret-for-test")
+
+        async def aclose(self):
+            self.closed = True
+
+    broken_stream = BrokenStream()
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=broken_stream,
+            )
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    response = TestClient(create_app("llm-gateway", settings)).post(
+        "/v1/chat/completions",
+        headers=auth(),
+        json={"model": "deepseek-flash", "stream": True},
+    )
+    assert response.status_code == 200
+    assert response.content.startswith(b'data: {"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}\n\n')
+    assert b'"code":"PROVIDER_ERROR"' in response.content
+    assert b"provider-secret-for-test" not in response.content
+    assert b"[DONE]" not in response.content
+    assert broken_stream.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    errors = [json.loads(record.message) for record in caplog.records if "provider_stream.interrupted" in record.message]
+    assert errors[0]["code"] == "upstream_read_failed"
+    assert errors[0]["request_id"]
+    assert "provider-secret-for-test" not in caplog.text
+
+
+def test_streaming_handles_asgi_disconnects_and_releases_resources(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    StreamingProvider.instances = []
+    started = asyncio.Event()
+    cancel_seen = asyncio.Event()
+    chunks = ProviderStream([b"data: first\n\n", b"data: second\n\n"])
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=chunks,
+            )
+
+        async def send(self, request, stream=False, **kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancel_seen.set()
+                raise
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    scope = {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+                "server": ("test", 80),
+                "client": ("test", 123),
+            }
+
+    async def run_preheader_disconnect():
+        disconnect = asyncio.Event()
+        first = True
+
+        async def receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        request = Request(scope, receive)
+        task = asyncio.create_task(endpoint(request, SimpleNamespace()))
+        await started.wait()
+        disconnect.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert cancel_seen.is_set()
+        assert StreamingProvider.instances[-1].closed is True
+        assert app.state.llm_stream_slots.qsize() == 8
+
+    asyncio.run(run_preheader_disconnect())
+    assert chunks.closed is False  # the provider never returned an HTTP response
+
+
+def test_streaming_body_disconnect_closes_provider(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    StreamingProvider.instances = []
+    body_started = asyncio.Event()
+    disconnected = asyncio.Event()
+
+    class HeldStream(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"index":0,"delta":{"content":"first"},"finish_reason":null}]}\n\n'
+            body_started.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            self.closed = True
+
+    chunks = HeldStream()
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=chunks)
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        first = True
+
+        async def request_receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+            await asyncio.Event().wait()
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+                 "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
+        response = await endpoint(Request(scope, request_receive), SimpleNamespace())
+
+        async def receive():
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                disconnected.set()
+
+        await response(scope, receive, send)
+
+    asyncio.run(run())
+    assert body_started.is_set()
+    assert chunks.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_asgi20_disconnect_waits_for_shielded_provider_and_client_cleanup(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    started_closing = asyncio.Event()
+    stream_close_gate = asyncio.Event()
+    client_close_gate = asyncio.Event()
+    client_close_started = asyncio.Event()
+    class HeldCloseStream(httpx.AsyncByteStream):
+        def __init__(self):
+            self.close_calls = 0
+
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":null}]}\n\n'
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            self.close_calls += 1
+            started_closing.set()
+            await stream_close_gate.wait()
+
+    held_stream = HeldCloseStream()
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.close_calls = 0
+            self.response = httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, stream=held_stream
+            )
+
+        async def aclose(self):
+            self.close_calls += 1
+            client_close_started.set()
+            await client_close_gate.wait()
+            self.closed = True
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        request_body_sent = False
+        response_started = asyncio.Event()
+
+        async def request_receive():
+            nonlocal request_body_sent
+            if not request_body_sent:
+                request_body_sent = True
+                return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+            await response_started.wait()
+            return {"type": "http.disconnect"}
+
+        scope = {
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.0"},
+            "http_version": "1.1", "method": "POST", "scheme": "http",
+            "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+            "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123),
+        }
+        response = await endpoint(Request(scope, request_receive), SimpleNamespace())
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                response_started.set()
+
+        response_task = asyncio.create_task(response(scope, request_receive, send))
+        await response_started.wait()
+        await started_closing.wait()
+        await asyncio.sleep(0)
+        assert not response_task.done()
+        assert app.state.llm_stream_slots.qsize() == 7
+        stream_close_gate.set()
+        await client_close_started.wait()
+        await asyncio.sleep(0)
+        assert not response_task.done()
+        assert app.state.llm_stream_slots.qsize() == 7
+        client_close_gate.set()
+        await response_task
+
+    asyncio.run(run())
+    assert held_stream.close_calls == 1
+    assert StreamingProvider.instances[-1].close_calls == 1
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_streaming_asgi_24_send_oserror_closes_provider(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    StreamingProvider.instances = []
+    chunks = ProviderStream([b"data: first\n\n"])
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=chunks)
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        first = True
+
+        async def receive():
+            nonlocal first
+            if not first:
+                await asyncio.Event().wait()
+            first = False
+            return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+
+        scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"}, "http_version": "1.1",
+                 "method": "POST", "scheme": "http", "path": "/v1/chat/completions",
+                 "raw_path": b"/v1/chat/completions", "query_string": b"", "headers": [],
+                 "server": ("test", 80), "client": ("test", 123)}
+        response = await endpoint(Request(scope, receive), SimpleNamespace())
+        sent = []
+
+        async def send(message):
+            sent.append(message)
+            if message["type"] == "http.response.start":
+                raise OSError("downstream closed")
+
+        try:
+            await response(scope, receive, send)
+        except ClientDisconnect:
+            pass
+        assert sent[0]["type"] == "http.response.start"
+
+    asyncio.run(run())
+    assert chunks.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_stream_disconnect_racing_provider_headers_closes_returned_response(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    StreamingProvider.instances = []
+    disconnect = asyncio.Event()
+    send_release = asyncio.Event()
+    send_started = asyncio.Event()
+    chunks = ProviderStream([b"data: never consumed\n\n"])
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=chunks)
+
+        async def send(self, request, stream=False):
+            send_started.set()
+            await send_release.wait()
+            return self.response
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        first = True
+
+        async def receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+                 "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
+        request = Request(scope, receive)
+        task = asyncio.create_task(endpoint(request, SimpleNamespace()))
+        await send_started.wait()
+        disconnect.set()
+        send_release.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(run())
+    assert chunks.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_chat_request_body_size_limit_returns_json_error(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    monkeypatch.setenv("LLM_REQUEST_MAX_BYTES", "16")
+    StreamingProvider.instances = []
+    app = create_app("llm-gateway", settings)
+    response = TestClient(app).post(
+        "/v1/chat/completions", headers=auth(), json={"model": "deepseek-flash", "stream": True}
+    )
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "REQUEST_TOO_LARGE"
+    assert app.state.llm_stream_slots.qsize() == 8
+    assert StreamingProvider.instances == []
+
+
+def test_chat_request_body_deadline_returns_json_error(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    monkeypatch.setenv("LLM_STREAM_TIMEOUT_SECONDS", "1")
+    StreamingProvider.instances = []
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        first = True
+
+        async def receive():
+            nonlocal first
+            if first:
+                first = False
+                return {"type": "http.request", "body": b'{"model":', "more_body": True}
+            await asyncio.Event().wait()
+
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                 "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+                 "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
+        try:
+            await endpoint(Request(scope, receive), SimpleNamespace())
+        except APIError as error:
+            assert error.status == 408
+            assert error.code == "REQUEST_TIMEOUT"
+        else:
+            raise AssertionError("slow request body should time out")
+
+    asyncio.run(run())
+    assert StreamingProvider.instances == []
+    assert app.state.llm_stream_slots.qsize() == 8
+
+
+def test_stream_capacity_rejects_without_provider_call_and_releases_slot(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    monkeypatch.setenv("LLM_STREAM_MAX_ACTIVE", "1")
+    StreamingProvider.instances = []
+    chunks = ProviderStream([b"data: [DONE]\n\n"])
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=chunks)
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    app = create_app("llm-gateway", settings)
+    endpoint = next(route.endpoint for route in app.routes if getattr(route, "path", None) == "/v1/chat/completions")
+
+    async def run():
+        async def make_request():
+            first = True
+
+            async def receive():
+                nonlocal first
+                if not first:
+                    await asyncio.Event().wait()
+                first = False
+                return {"type": "http.request", "body": b'{"model":"deepseek-flash","stream":true}', "more_body": False}
+
+            scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+                     "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
+                     "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
+            return await endpoint(Request(scope, receive), SimpleNamespace())
+
+        first_response = await make_request()
+        assert app.state.llm_stream_slots.qsize() == 0
+        try:
+            await make_request()
+        except APIError as error:
+            assert error.status == 429
+            assert error.headers["Retry-After"] == "5"
+        else:
+            raise AssertionError("full stream capacity should reject")
+        assert len(StreamingProvider.instances) == 1
+        assert await anext(first_response.body_iterator) == b"data: [DONE]\n\n"
+        await first_response.body_iterator.aclose()
+        assert app.state.llm_stream_slots.qsize() == 1
+
+    asyncio.run(run())
+    assert StreamingProvider.instances[0].closed is True
+
+
+def test_stream_sanitizes_provider_sse_errors_and_enforces_byte_limit(settings, monkeypatch):
+    settings.dev_tokens["alice"]["scope"] += " llm:use"
+    monkeypatch.setenv("LLM_API_KEY", "provider-secret-for-test")
+    monkeypatch.setenv("LLM_STREAM_MAX_RESPONSE_BYTES", "4096")
+    upstream_error = ProviderStream([b'data: {"error":{"message":"provider-secret-for-test"}}\n\n'])
+    response_stream = upstream_error
+
+    class FakeProvider(StreamingProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.response = httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=response_stream)
+
+    monkeypatch.setattr("xeonolab.services.httpx.AsyncClient", FakeProvider)
+    response = TestClient(create_app("llm-gateway", settings)).post(
+        "/v1/chat/completions", headers=auth(), json={"model": "deepseek-flash", "stream": True}
+    )
+    assert response.status_code == 200
+    assert b'"code":"PROVIDER_ERROR"' in response.content
+    assert b"provider-secret-for-test" not in response.content
+    assert b"[DONE]" not in response.content
+    assert upstream_error.closed is True
+
+    monkeypatch.setenv("LLM_STREAM_MAX_RESPONSE_BYTES", "16")
+    oversized = ProviderStream([b"data: " + b"x" * 100 + b"\n\n"])
+    response_stream = oversized
+    response = TestClient(create_app("llm-gateway", settings)).post(
+        "/v1/chat/completions", headers=auth(), json={"model": "deepseek-flash", "stream": True}
+    )
+    assert response.status_code == 200
+    assert b'"code":"PROVIDER_ERROR"' in response.content
+    assert b"[DONE]" not in response.content
+    assert oversized.closed is True
+
+    monkeypatch.setenv("LLM_STREAM_MAX_RESPONSE_BYTES", "4096")
+    deeply_nested = ProviderStream([b"data: " + b"[" * 1200 + b"0" + b"]" * 1200 + b"\n\n"])
+    response_stream = deeply_nested
+    app = create_app("llm-gateway", settings)
+    response = TestClient(app).post(
+        "/v1/chat/completions", headers=auth(), json={"model": "deepseek-flash", "stream": True}
+    )
+    assert response.status_code == 200
+    assert b'"code":"PROVIDER_ERROR"' in response.content
+    assert b"[DONE]" not in response.content
+    assert deeply_nested.closed is True
+    assert StreamingProvider.instances[-1].closed is True
+    assert app.state.llm_stream_slots.qsize() == 8

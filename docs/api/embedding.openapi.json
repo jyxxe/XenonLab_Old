@@ -71,6 +71,22 @@
         }
       }
     },
+    "/api/v1/embed/models": {
+      "get": {
+        "summary": "Models",
+        "operationId": "models_api_v1_embed_models_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/models": {
       "get": {
         "summary": "Models",
