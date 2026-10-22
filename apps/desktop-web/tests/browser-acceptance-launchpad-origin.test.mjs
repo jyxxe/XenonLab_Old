@@ -108,11 +108,11 @@ test('wrapped origins keep every full-catalogue card pointer reachable and the h
           await page.goto(`${server.resolvedUrls.local[0]}tests/launchpad-origin-fixture.html?mode=dense`);
           const cards = page.getByRole('option');
           await cards.first().waitFor();
-          // Nine built-in native apps (the Embedding queue app was added with dev:read)
+          // Ten built-in native apps (the Embedding queue app and the Agent prompts app)
           // plus three visible synthetic iframe origins; the permission-locked one is absent.
-          assert.equal(await cards.count(), 12);
+          assert.equal(await cards.count(), 13);
           const apps = await page.evaluate(() => window.__launchpadFixture.apps.map(({id, kind, origin, title}) => ({id, kind, origin, title})));
-          assert.equal(apps.filter(app => app.kind === 'native').length, 9);
+          assert.equal(apps.filter(app => app.kind === 'native').length, 10);
           assert.equal(apps.filter(app => app.kind === 'iframe').length, 3);
           const sameTitle = apps.filter(app => app.id.startsWith('insights-'));
           assert.equal(sameTitle.length, 2);

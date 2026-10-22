@@ -84,3 +84,9 @@
 - `docs/runbooks/collaboration.md`：Issue 协作、Work 租约与多 Harness 身份
 - `docs/browser-acceptance.md`：浏览器验收与本地门禁
 - `AGENTS.md`、`plan.md`、`docs/adr/`：实现约定与架构决策
+
+## 管理员凭据版
+
+公开提示词不含凭据。需要凭据的版本由运维放在服务端受保护目录
+（`/etc/xeonolab/agent-prompts`，见 `admin-credentials.md`），仅在管理员登录
+Xenon Panel 的「Agent 提示词」应用中显示；它们不进入 Git/发布包。

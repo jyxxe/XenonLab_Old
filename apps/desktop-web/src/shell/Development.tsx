@@ -130,7 +130,7 @@ export function Development({apiPage, openApp, notify, windowId}: AppViewProps) 
 
         <Panel title="发布" className="dev-card">
           <dl className="dev-meta">
-            <div><dt>发布流程</dt><dd>由 Codex 协调器执行（release → approval → exclusive lease）</dd></div>
+            <div><dt>发布流程</dt><dd>由维护者 devagent-maintainer 通过受保护接口执行（release → approval → exclusive lease）</dd></div>
             <div><dt>桌面版本</dt><dd>{document.documentElement.dataset.release || '未标记'}</dd></div>
           </dl>
           <Button size="sm" onClick={() => openApp('system')}>查看系统状态</Button>
