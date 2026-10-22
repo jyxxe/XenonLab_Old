@@ -49,7 +49,7 @@ XeLibrary 设置 `EMBEDDING_URL`、独立的 `EMBEDDING_SERVICE_TOKEN`、`D100M_
 ## 桌面与部署
 
 `infra/network/nginx.conf` 展示前端静态文件和 API 的同源反向代理。
-用 desktop 管理 API 注册 `https://chat.xenon.lan`、`https://library.xenon.lan` 等独立应用 origin。
+用 desktop 管理 API 注册独立应用 origin。内网侧请使用 IP 入口（如 `https://192.168.0.101:9443`）；`*.lan` 主机名正在按 Issue #293 分阶段弃用，新配置只使用 IP 地址。
 桌面窗口支持拖动、调整大小、最小化、最大化和保存布局，iframe 消息验证 origin 与 source。
 Embedding 的本人索引任务提供“在知识库中打开”：需要 `xelibrary:read`，通过现有知识表 API 重新验证读取权限；表不存在或 ACL 已撤销时显示错误并清除上一张表的内容。
 LAN DNS 与 TLS 证书仍需配置；按用户要求暂不配置 Cloudflare Tunnel。
