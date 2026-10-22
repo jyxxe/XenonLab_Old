@@ -19,6 +19,7 @@ import {
   isKeywordResult,
   libraryPrefsStorageKey,
   mergeRecent,
+  retainRefreshedRow,
   recentEntryPresentation,
   parseFieldFilters,
   rowHasAttachment,
@@ -286,6 +287,18 @@ test('filtered path matches reveal descendants and support transient explicit co
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered, collapsed)).filter(item => item.kind === 'table'), []);
   assert.deepEqual(flattenTree(filtered, filteredTreeExpansion(filtered)).filter(item => item.kind === 'table').map(item => item.table.id).sort(), ['a', 'b']);
   assert.deepEqual([...collapsed], ['/数学']);
+});
+
+test('refresh retains an off-page mutation target while preferring current page values', () => {
+  const first = {_row_id: 'first', _revision: 1};
+  const restored = {_row_id: 'target', _revision: 3, _deleted_at: null};
+  const rows = [first];
+  assert.deepEqual(retainRefreshedRow(rows, restored), [first, restored]);
+  assert.deepEqual(rows, [first]);
+  assert.equal(retainRefreshedRow(rows), rows);
+  const newer = {_row_id: 'target', _revision: 4};
+  const page = [first, newer];
+  assert.equal(retainRefreshedRow(page, restored), page);
 });
 
 test('field display order binds original schema objects, appends new fields and ignores removed/duplicate names', async () => {

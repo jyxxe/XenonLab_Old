@@ -65,8 +65,8 @@ export function Inspector({
   conflict: ConflictInfo | null;
   onSave: (values: Record<string, any>, revision: number) => Promise<void>;
   onDelete: (revision: number) => Promise<void>;
-  onRestore: (revision: number, currentRevision: number) => Promise<void>;
-  onCreate: (values: Record<string, any>) => Promise<void>;
+  onRestore: (revision: number, currentRevision: number) => Promise<void | false>;
+  onCreate: (values: Record<string, any>) => Promise<void | false>;
   onReloadRow: () => void;
   onToggleFavorite: () => void;
   onClose: () => void;
@@ -157,7 +157,7 @@ export function Inspector({
     try {
       const values = normalizeRowValues(columns, draft);
       if (row) await onSave(values, row._revision);
-      else await onCreate(values);
+      else if (await onCreate(values) === false) return;
       setMessage(row ? '已保存' : '记录已创建');
     } catch (cause) {
       setError(cause);
@@ -185,7 +185,7 @@ export function Inspector({
     setBusy(true);
     setError(null);
     try {
-      await onRestore(revision, row._revision);
+      if (await onRestore(revision, row._revision) === false) return;
       setMessage(`已从 r${revision} 恢复；这会创建一个新的 revision，不会覆盖历史`);
     } catch (cause) {
       setError(cause);

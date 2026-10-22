@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage} from '../shell/types';
-import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, SEARCH_LIMIT_OPTIONS, toggleFavorite} from './logic.js';
+import {libraryPrefsStorageKey, mergeRecent, retainRefreshedRow, parseFieldFilters, SEARCH_LIMIT_OPTIONS, toggleFavorite} from './logic.js';
 import {addQueryRecent, QUERY_EXPRESSION_LIMIT, queryDraftsStorageKey, readQueryDrafts, writeQueryDrafts} from './query-drafts.js';
 import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
@@ -150,8 +150,8 @@ export function useTableSession(api: API, apiPage: APIPage) {
   );
 
   const refresh = useCallback(
-    async (showDeleted = includeDeleted) => {
-      if (!table) return;
+    async (showDeleted = includeDeleted, retainedRow?: Row, isCurrent: () => boolean = () => true) => {
+      if (!table || !isCurrent()) return;
       const tableId = table.id;
       const request = ++view.current;
       ++rowsRequest.current;
@@ -163,12 +163,12 @@ export function useTableSession(api: API, apiPage: APIPage) {
       setError(null);
       try {
         const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted, sort), api(`/tables/${tableId}/schema`)]);
-        if (view.current !== request) return;
-        setRows(page.data as Row[]);
+        if (view.current !== request || !isCurrent()) return;
+        setRows(retainRefreshedRow(page.data as Row[], retainedRow));
         setCursor((page.meta.next_cursor as string) || null);
         setTable(current => (current && current.id === tableId ? {...current, ...schema} : current));
       } catch (cause) {
-        if (view.current === request) setError(cause);
+        if (view.current === request && isCurrent()) setError(cause);
       } finally {
         if (view.current === request) setLoading(false);
       }
