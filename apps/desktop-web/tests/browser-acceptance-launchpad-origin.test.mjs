@@ -92,7 +92,7 @@ test('wrapped origins keep every full-catalogue card pointer reachable and the h
   const server = await createServer({root: appRoot, optimizeDeps: {include: ['react', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime']}, server: {host: '127.0.0.1', port: 0, watch: null}});
   await server.listen();
   const browser = await chromium.launch({executablePath, headless: true});
-  const report = {source: 'actual mergeApps/LaunchPad/styles; synthetic ten-app catalogue', checks: [], errors: [], external: []};
+  const report = {source: 'actual mergeApps/LaunchPad/styles; synthetic eleven-app catalogue', checks: [], errors: [], external: []};
   try {
     for (const [width, height] of [[360, 950], [320, 950], [280, 800], [360, 640]]) {
       await t.test(`${width}x${height} full catalogue`, async () => {
@@ -108,9 +108,9 @@ test('wrapped origins keep every full-catalogue card pointer reachable and the h
           await page.goto(`${server.resolvedUrls.local[0]}tests/launchpad-origin-fixture.html?mode=dense`);
           const cards = page.getByRole('option');
           await cards.first().waitFor();
-          assert.equal(await cards.count(), 10);
+          assert.equal(await cards.count(), 11);
           const apps = await page.evaluate(() => window.__launchpadFixture.apps.map(({id, kind, origin, title}) => ({id, kind, origin, title})));
-          assert.equal(apps.filter(app => app.kind === 'native').length, 7);
+          assert.equal(apps.filter(app => app.kind === 'native').length, 8);
           assert.equal(apps.filter(app => app.kind === 'iframe').length, 3);
           const sameTitle = apps.filter(app => app.id.startsWith('insights-'));
           assert.equal(sameTitle.length, 2);

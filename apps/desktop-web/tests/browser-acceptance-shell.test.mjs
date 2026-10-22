@@ -426,11 +426,13 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.key('k', 'KeyK', 2 /* Ctrl */);
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.command-palette'))"), 'command palette');
     await cdp.evaluate(`(() => {const input=document.querySelector('.command-input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'Harness');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.command-item').length>=2"), 'palette items');
+    for (let step = 0; step < 6; step += 1) {
+      if (await cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))")) break;
+      await cdp.key('ArrowDown', 'ArrowDown');
+    }
     await waitFor(
-      () =>
-        cdp.evaluate(
-          "(()=>{const items=[...document.querySelectorAll('.command-item')];const selected=document.querySelector('.command-item[aria-selected=\"true\"]');return Boolean(selected&&selected.innerText.includes('任务')&&items.length===2)})()",
-        ),
+      () => cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))"),
       'palette keyboard selection',
     );
     await cdp.key('Enter', 'Enter');

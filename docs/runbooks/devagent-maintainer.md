@@ -45,6 +45,29 @@ the automatic watcher changed.
   `/etc/devagent/harness.env` can be removed afterwards. Never run the DSH Web
   service and the OpenCode web service on port 4096 at the same time.
 
+### LAN-only XeonoLab shortcut (2026-10-22)
+
+The desktop offers a built-in `DeepSeek Harness` app (LaunchPad; not pinned to
+the Dock) only when the shell itself is loaded from the lab LAN — the client
+checks its own hostname (`localhost`, `*.lan`, RFC1918 addresses) so public
+desktop sessions never receive the shortcut or its target.
+
+The shortcut opens the same-origin LAN path `/harness` in a new tab. VM101's LAN
+Caddy proxies that path to the root-owned `dsh-harness-launch` service on
+VM111:4097, which resolves the current per-process harness launch token from
+`journalctl -u devagent-harness-web.service` and answers with a `302` to
+`http://192.168.0.111:4096/?token=…`. The token therefore never appears in the
+repository, the app registry or desktop preferences, and rotates with the
+harness service. The launcher port is restricted to loopback/LAN by
+`infra/devagent/web-firewall.nft` alongside the existing 4096 rule.
+
+Operational checks: `systemctl is-active dsh-harness-launch.service`; from a
+LAN host `curl -s -o /dev/null -D - http://192.168.0.111:4097/health` returns
+`200`, and `GET https://xenon.lan/harness` (or `/harness` on the LAN desktop
+origin) returns a `302` with `Location: http://192.168.0.111:4096/?token=…`.
+Opening the shortcut from the LAN desktop must land on the authenticated Harness
+UI; the public desktop must not list the app.
+
 Historical OpenCode baseline (superseded by the runtime section above on
 2026-10-21): runtime was the verified official OpenCode v1.18.34 Linux x64
 release,

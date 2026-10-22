@@ -223,3 +223,7 @@
 .widget-plugin>header strong{display:inline-flex;align-items:center;gap:4px;min-width:0;font-size:var(--font-size-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .widget-plugin iframe{flex:1;width:100%;min-height:0;border:1px solid var(--border-subtle);border-radius:var(--radius-control);background:var(--surface)}
 .system-audit-filter{display:flex;align-items:center;gap:var(--spacing-2);flex-wrap:wrap}.system-audit-filter .ds-input{flex:1;min-width:160px}.system-audit-filter label{font-size:var(--font-size-sm)}
+
+.harness-launch{padding:var(--spacing-4);max-width:640px;display:flex;flex-direction:column;gap:var(--spacing-3)}
+.harness-launch h2{margin:0}
+.harness-launch p{margin:0;color:var(--text-secondary);line-height:1.6}
