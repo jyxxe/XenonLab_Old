@@ -1,0 +1,33 @@
+<!doctype html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/src/design-system/tokens.css"><link rel="stylesheet" href="/src/design-system/primitives.css"><link rel="stylesheet" href="/src/style.css"></head><body><div id="root"></div><script type="module">
+import React,{useState}from'react';import{createRoot}from'react-dom/client';import{Attachments}from'/src/Attachments.tsx';import{LibraryApp}from'/src/library/LibraryApp.tsx';
+const params=new URLSearchParams(location.search),live=params.get('live')==='1',library=params.get('library')==='1',config=live?await(await fetch('/attachment-picker-manifest.json')).json():null;
+const candidates=Array.from({length:27},(_,i)=>({attachment_id:'att-'+String(i+1).padStart(3,'0'),row_id:i<26?'source':'source-second',filename:i===26?'Final 图解.png':'proof-'+String(i+1).padStart(2,'0')+'.pdf',media_type:i===26?'image/png':'application/pdf',size:1234+i,created_at:'2026-01-01T00:00:00Z',metadata:{},source_label:i===26?'Final source second':'Readable source'}));
+if(params.get('long')==='1'){candidates[0].filename='证据'.repeat(60)+'.pdf';candidates[0].source_label='来源'.repeat(128)}
+const targetItems=new Map();window.__picker={calls:[],changed:0,failPage:false,failBind:false,hold:false,pending:[],holdBind:false,pendingBind:[],table:config?.table_id||'t1',row:config?.target||'target',epoch:0,token:config?.token||'synthetic',config};
+async function raw(path,init={}){const state=window.__picker,headers=new Headers(init.headers);headers.set('Authorization','Bearer '+state.token);if(typeof init.body==='string')headers.set('Content-Type','application/json');state.calls.push({path,method:init.method||'GET',body:typeof init.body==='string'?JSON.parse(init.body):null});const response=await fetch('/api/v1'+path,{...init,headers});if(!response.ok)throw Error('HTTP '+response.status+' '+await response.text());return response}
+async function apiPage(path,init={}){
+ const state=window.__picker;
+ if(live){const result=await(await raw(path,init)).json();return{data:result.data,meta:result.meta}}
+ const method=init.method||'GET',body=init.body?JSON.parse(init.body):null;state.calls.push({path,method,body});
+ if(path==='/users/me')return{data:{subject:'synthetic-'+state.epoch,scopes:['xelibrary:read','xelibrary:attach']},meta:{}};
+ if(path==='/tables?limit=100')return{data:[{id:'t1',path:'/Synthetic',name:'Synthetic table'}],meta:{next_cursor:null}};
+ if(path==='/tables/t1'||path==='/tables/t1/schema')return{data:{table_id:'t1',path:'/Synthetic',name:'Synthetic table',columns:[{name:'title',type:'string'}],table_revision:1},meta:{}};
+ if(path.startsWith('/tables/t1/rows?'))return{data:[{_row_id:'target',_revision:1,values:{title:'Target'}},{_row_id:'source',_revision:1,values:{title:'Readable source'}}],meta:{next_cursor:null}};
+ if(/^\/tables\/[^/]+\/rows\/[^/]+$/.test(path))return{data:{_row_id:path.split('/').at(-1),_revision:1,values:{title:'Target'}},meta:{}};
+ if(/^\/tables\/[^/]+\/attachments\?/.test(path)){
+  const url=new URL(path,'http://fixture.invalid'),q=url.searchParams.get('q').toLowerCase(),offset=Number(url.searchParams.get('cursor')||0),matching=candidates.filter(item=>item.filename.toLowerCase().includes(q)||item.source_label.toLowerCase().includes(q));const response={data:matching.slice(offset,offset+25),meta:{next_cursor:offset+25<matching.length?String(offset+25):null}};
+  if(state.hold){await new Promise((resolve,reject)=>state.pending.push({resolve,reject}));}if(state.failPage){state.failPage=false;throw Error('synthetic metadata read failed')}return response;
+ }
+ if(path.endsWith('/attachments')&&method==='GET')return{data:targetItems.get(path)||[],meta:{}};
+ if(path.endsWith('/attachments')&&method==='POST'){
+  if(state.holdBind)await new Promise((resolve,reject)=>state.pendingBind.push({resolve,reject}));
+  if(state.failBind){state.failBind=false;throw Error('synthetic binding denied')}
+  const source=candidates.find(item=>item.attachment_id===body.attachment_id);if(!source)throw Error('synthetic attachment not found');const result={...source,attachment_id:'bound-'+state.calls.length,row_id:path.split('/')[4]};targetItems.set(path,[...(targetItems.get(path)||[]),result]);return{data:result,meta:{}};
+ }
+ if(method==='DELETE'&&path.includes('/attachments/')){const base=path.slice(0,path.lastIndexOf('/'));targetItems.set(base,(targetItems.get(base)||[]).filter(item=>item.attachment_id!==path.split('/').at(-1)));return{data:{unbound:true},meta:{}}}
+ throw Error('unexpected synthetic request '+path);
+}
+const api=async(path,init)=> (await apiPage(path,init)).data;
+function Fixture(){const[context,setContext]=useState({table:window.__picker.table,row:window.__picker.row,epoch:0});window.__picker.switch=(patch)=>{Object.assign(window.__picker,patch);setContext(old=>({...old,...patch}))};return React.createElement('main',{style:{maxWidth:1100,margin:'auto'}},library?React.createElement(LibraryApp,{api,apiPage,apiRaw:raw,authEpoch:context.epoch}):React.createElement(Attachments,{key:JSON.stringify(context),tableId:context.table,rowId:context.row,api,apiPage,apiRaw:raw,canAttach:true,onChanged:async()=>{window.__picker.changed++}}))}
+createRoot(document.getElementById('root')).render(React.createElement(Fixture));
+</script></body></html>

@@ -1,0 +1,24 @@
+[Unit]
+Description=LAN-only DeepSeek Harness launcher (token redirect) for XeonoLab
+After=network-online.target devagent-harness-web.service
+Wants=network-online.target devagent-harness-web.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/dsh-harness-launch
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=96M
+TasksMax=32
+SyslogIdentifier=dsh-harness-launch
+
+[Install]
+WantedBy=multi-user.target

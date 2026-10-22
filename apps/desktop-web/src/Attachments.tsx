@@ -1,4 +1,5 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from 'react';
+import {ExistingAttachmentPicker} from './ExistingAttachmentPicker';
 import {createUploadStore, type UploadSession, type UploadStore} from './upload-state.js';
 
 type API=(path:string,init?:RequestInit)=>Promise<any>;
@@ -6,7 +7,9 @@ type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{[key:strin
 type APIRaw=(path:string,init?:RequestInit)=>Promise<Response>;
 type Attachment={attachment_id:string;row_id:string;filename:string;media_type:string;size:number;created_at:string;metadata:Record<string,any>};
 
-export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChanged,uploadStore}:{tableId:string;rowId:string;api:API;apiPage?:APIPage;apiRaw:APIRaw;canAttach:boolean;onChanged:()=>Promise<void>;uploadStore?:UploadStore}){
+export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,canRead=true,onChanged,uploadStore}:{tableId:string;rowId:string;api:API;apiPage?:APIPage;apiRaw:APIRaw;canAttach:boolean;canRead?:boolean;onChanged:()=>Promise<void>;uploadStore?:UploadStore}){
+ const [pickerOpen,setPickerOpen]=useState(false);
+ const binding=useRef(false);
  const [items,setItems]=useState<Attachment[]>([]),[message,setMessage]=useState(''),[sourceId,setSourceId]=useState(''),[localBusy,setBusy]=useState(false);
  const localStore=useMemo(()=>createUploadStore(),[]),store=uploadStore||localStore;
  const uploadKey=JSON.stringify([tableId,rowId]);
@@ -16,7 +19,7 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChange
  const {resume,progress}=uploadState,busy=localBusy||uploadState.busy;
  useEffect(()=>()=>localStore.dispose(),[localStore]);
  const [listStatus,setListStatus]=useState<'loading'|'loaded'|'error'>('loading'),[listError,setListError]=useState('');
- const request=useRef(0),active=useRef('');
+ const request=useRef(0),active=useRef(''),context=useRef(0);
  const key=`${tableId}:${rowId}`;
  async function load(){
   const current=++request.current;
@@ -26,7 +29,7 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChange
    if(store.alive&&active.current===key&&request.current===current){setItems(result.data);setMessage('');setListStatus('loaded')}
   }catch(e){if(store.alive&&active.current===key&&request.current===current){setListStatus('error');setListError(String(e))}}
  }
- useEffect(()=>{active.current=key;setItems([]);setMessage('');void load();return()=>{active.current='';++request.current}},[tableId,rowId,store]);
+ useEffect(()=>{++context.current;active.current=key;binding.current=false;setBusy(false);setSourceId('');setPickerOpen(false);setItems([]);setMessage('');void load();return()=>{++context.current;active.current='';++request.current}},[tableId,rowId,store,api,apiPage]);
  const wasUploading=useRef(uploadState.busy);
  useEffect(()=>{
   const finished=wasUploading.current&&!uploadState.busy&&!uploadState.resume;
@@ -86,12 +89,12 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChange
   catch(e){store.set(uploadKey,{message:String(e)});if(store.alive&&active.current===key)setMessage(String(e))}finally{store.set(uploadKey,{busy:false})}
  }
  function clearCompletedMessage(){if(!store.get(uploadKey).resume&&!store.get(uploadKey).busy)store.set(uploadKey,{message:''})}
- async function bind(){
-  if(!sourceId.trim())return;clearCompletedMessage();setBusy(true);setMessage('');
+ async function bind(id=sourceId):Promise<boolean>{
+  if(!id.trim()||busy||binding.current)return false;binding.current=true;const generation=context.current;const current=()=>store.alive&&active.current===key&&context.current===generation;clearCompletedMessage();setBusy(true);setMessage('');
   try{
-   await api(`/tables/${tableId}/rows/${rowId}/attachments`,{method:'POST',body:JSON.stringify({attachment_id:sourceId.trim()})});
-   if(!store.alive||active.current!==key)return;setSourceId('');await load();if(!store.alive||active.current!==key)return;await onChanged();if(store.alive&&active.current===key)setMessage('附件已关联到当前记录');
-  }catch(e){if(store.alive&&active.current===key)setMessage(String(e))}finally{if(store.alive&&active.current===key)setBusy(false)}
+   await api(`/tables/${tableId}/rows/${rowId}/attachments`,{method:'POST',body:JSON.stringify({attachment_id:id.trim()})});
+   if(!current())return false;setSourceId('');await load();if(!current())return false;await onChanged();if(current()){setMessage('附件已关联到当前记录');return true}return false;
+  }catch(e){if(current())setMessage(String(e));return false}finally{if(current()){binding.current=false;setBusy(false)}}
  }
  async function unbind(attachment:Attachment){
   clearCompletedMessage();setBusy(true);setMessage('');
@@ -114,7 +117,9 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,onChange
   {progress!==null&&<label>分片上传进度 <progress max="100" value={progress}>{progress}%</progress> {progress}%</label>}
   {canAttach&&<><label>上传附件（大于 16 MiB 时分片，最大 2 GiB）<input type="file" disabled={busy||Boolean(resume)} onChange={event=>{const file=event.currentTarget.files?.[0];if(file){void upload(file)}event.currentTarget.value=''}}/></label>
    {resume&&<><p role="status">当前分片会话未完成（{resume.file.name}）。请继续重试或取消后再选择其他文件。</p><button disabled={busy} onClick={()=>void upload(resume.file,resume)}>继续重试分片上传</button><button disabled={busy} onClick={()=>void cancelUpload()}>取消分片上传</button></>}
+   {canRead&&apiPage&&<button disabled={busy} onClick={()=>{setMessage('');setPickerOpen(true)}}>选择已有附件</button>}
    <form onSubmit={event=>{event.preventDefault();void bind()}}><label>关联此表中已有附件 ID<input value={sourceId} onChange={event=>setSourceId(event.target.value)} placeholder="附件 ID"/></label><button disabled={busy||!sourceId.trim()}>关联附件</button></form></>}
+  {pickerOpen&&canAttach&&canRead&&apiPage&&<ExistingAttachmentPicker tableId={tableId} rowId={rowId} apiPage={apiPage} busy={busy} bindError={message} onBind={bind} onClose={()=>setPickerOpen(false)}/>}
   {listStatus==='loading'&&<p role="status">正在读取附件列表…</p>}
   {listStatus==='error'&&<div><p role="alert">读取附件列表失败：{listError}</p><button disabled={busy} onClick={()=>void load()}>重试读取附件</button></div>}
   {listStatus==='loaded'&&!items.length&&<p>当前记录没有附件。</p>}
