@@ -3,6 +3,7 @@ import {EmptyState} from '../design-system/primitives';
 import {Knowledge} from '../Knowledge';
 import {Work} from '../Work';
 import {EmbeddingQueue} from '../EmbeddingQueue';
+import {AgentPrompts} from '../AgentPrompts';
 import {System} from './System';
 import {Settings} from '../Settings';
 import {Embedding} from '../Embedding';
@@ -102,6 +103,19 @@ export function builtinApps(): DesktopApp[] {
       dock: true,
       description: 'Embedding 请求实时队列与最近完成记录',
       component: EmbeddingQueue as React.ComponentType<any>,
+    },
+    {
+      id: 'agent-prompts',
+      title: 'Agent 提示词',
+      icon: '✎',
+      kind: 'native',
+      permissions: [],
+      defaultSize: [1120, 760],
+      minSize: [780, 520],
+      singleton: true,
+      dock: true,
+      description: '各角色与内外网 Agent 提示词目录；管理员登录后额外显示服务端凭据版',
+      component: AgentPrompts as React.ComponentType<any>,
     },
     {
       id: 'system',

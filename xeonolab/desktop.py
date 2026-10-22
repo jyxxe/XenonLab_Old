@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .agent_prompts import load_admin_prompts
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
 from .wallpaper_backup import wallpaper_data_lock
 from .wallpaper_limits import WALLPAPER_MAX_BYTES, WALLPAPER_MAX_PIXELS
@@ -656,6 +657,11 @@ def create_app(settings=None):
             if row:
                 wallpaper_file(row["asset_id"]).unlink(missing_ok=True)
         return response(request, {"deleted": True, "wallpaper": old["wallpaper"]})
+
+    @app.get("/api/v1/agent-prompts")
+    def admin_agent_prompts(request: Request, actor=Depends(scope("desktop:admin"))):
+        """Admin-only credential-bearing prompt catalogue (files live outside Git)."""
+        return response(request, load_admin_prompts())
 
     @app.get("/api/v1/users/me/app-audit")
     def registry_audit(request: Request, actor=Depends(scope("desktop:admin"))):

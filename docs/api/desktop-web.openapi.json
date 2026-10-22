@@ -1191,6 +1191,23 @@
         }
       }
     },
+    "/api/v1/agent-prompts": {
+      "get": {
+        "summary": "Admin Agent Prompts",
+        "description": "Admin-only credential-bearing prompt catalogue (files live outside Git).",
+        "operationId": "admin_agent_prompts_api_v1_agent_prompts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/users/me/app-audit": {
       "get": {
         "summary": "Registry Audit",
