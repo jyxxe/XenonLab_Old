@@ -1,4 +1,44 @@
-# PVE LAN 上线记录 — 2026-10-01
+# PVE LAN 上线记录 — 2026-10-02
+
+2026-10-02 组件升级记录：VM101 Caddy 已升级至 2.11.6，VM109 Keycloak 已升级至
+26.8.0（官方镜像 digest `sha256:b0f60d489d51c5d113390bdf5461d4c06e6051be026c05549f2e1e10ec352bcc`）。
+Keycloak 26.7.2→26.8.0 的隔离迁移和完整回滚演练均通过；生产升级通过真实 PKCE、JWT
+issuer/audience/roles、offline refresh、logout、服务身份无 deploy scope、IP 与公网授权数据验收。
+升级期间公网认证曾短暂返回 502；恢复后公网主页、`/dev/`、OIDC discovery 和 readiness 连续三轮及后续观察均为 200。
+本次不是零停机升级，也不代表 `plan.md` 全部阶段完成。详细过程和故障修正见下方“第三方组件升级验收”。
+
+## 第三方组件升级验收 — 2026-10-02
+
+### VM101 Caddy 2.11.6
+
+VM101 Caddy 从 2.6.2 升级到 2.11.6；使用官方发布校验和核验 SHA-512，活动二进制 SHA-256 为
+`9855a8971f1d3cd705b6d606962271f4acec82a349e88d7d280d92d055e7f11d`。Caddy 无非标准模块，
+完整配置验证通过。隔离和生产环境的真实 PKCE/session 检查通过，五个 readiness 入口通过，公网桌面、
+Forgejo、OIDC discovery、匿名 API 401 均符合预期。已知的短暂 502 与 VM109 Keycloak 升级窗口相关，
+恢复后的入口连续检查均通过。
+
+### VM109 Keycloak 26.8.0
+
+生产镜像为官方 Keycloak 镜像，固定 digest `sha256:b0f60d489d51c5d113390bdf5461d4c06e6051be026c05549f2e1e10ec352bcc`；
+数据库为 PostgreSQL 18.6。隔离演练从 26.7.2 备份恢复数据库，运行 26.8.0 完成迁移，再从迁移前备份恢复并运行旧版
+26.7.2 回滚。两条路径均完成 readiness、OIDC discovery、PKCE、签名 JWT issuer/audience/roles、offline refresh、
+logout 使 refresh token 失效、以及开发服务身份无 deploy scope 检查。隔离迁移后 realm 2、client 25、user 13
+保持；invalid index 数为 0，Liquibase changelog 记录从 210 增至 237。隔离测试用户已删除。
+
+生产升级共进行了两次尝试。第一次因把 `JAVA_OPTS` 提示行误当成版本号而触发了不必要的回滚；受 root 保护且目录权限
+为 0700 的备份路径不能由 PostgreSQL 用户直接读取，恢复也因此失败。随后改为通过标准输入传递备份，并指定数据库角色 `keycloak` 完成恢复，
+回到 26.7.2 后验证旧版登录，再开始第二次升级。第二次升级成功运行 26.8.0 并完成生产验收。期间认证入口短暂返回 502，
+这是实际维护中断，不能描述为零停机。恢复后公网主页、`/dev/`、OIDC discovery 与 readiness 连续三轮及后续观察均为 200。
+
+生产验收覆盖桌面 readiness、真实 PKCE 登录、JWT issuer/audience/roles、offline refresh、logout/refresh token 失效、
+开发服务身份没有 deploy scope，以及 IP 和公网完整登录/授权数据路径。认证与授权数据检查通过。升级备份位于 VM109
+`/var/backups/xeonolab/keycloak-upgrade-20261002-attempt2`。Deploy Gateway lease epoch 52 正常释放；特权操作审计位于 VM111
+`/var/lib/devagent-privileged/component-updates/keycloak-26.8.0.json`。非秘密原始验收记录和隔离克隆记录保存在
+`runtime/component-updates/keycloak-26.8.0/`。任何回滚均须恢复迁移前 PostgreSQL 备份并使用匹配的旧版镜像；只把镜像 tag
+改回 26.7.2 不会恢复旧 schema。
+
+这两项组件更新已完成自身验收；Qwen worker、Library Agent、OpenWebUI、HF-cache 应用和完整监控仍未部署，不能据此认为
+完整 `plan.md` 生产目标已完成。
 
 2026-10-01 更新：Issue #71 知识库错误请求编号修复已通过 Deploy Gateway 上线。代码 commit
 `a866e2bb778840a4f12142b1cd2a869b7931129b`，release `6f0436d5-48fe-4c03-b307-83b90f126646`，
@@ -159,7 +199,7 @@ IP 入口可直接登录，无需客户端 DNS；认证标准地址为 `https://
 | XeLibrary 104 | 192.168.0.104 | `.xl`、ACL、附件、DSL、全文及精确向量搜索 |
 | Docker 106 | 192.168.0.106 | Tool / LLM / Deploy Gateway |
 | Embedding 107 | 192.168.0.107 | 真实 D100M CPU worker |
-| Auth 109 | 192.168.0.109 | Keycloak 26.7.2 + 本地 PostgreSQL 18 |
+| Auth 109 | 192.168.0.109 | Keycloak 26.8.0 + 本地 PostgreSQL 18.6 |
 | Network 105 | 192.168.0.105 | xenon.lan DNS |
 | DevAgent 111 | 192.168.0.111 | Forgejo webhook 同步、work queue、规则 triage 与 Issue links |
 

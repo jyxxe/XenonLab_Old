@@ -96,6 +96,7 @@ def create_app(settings=None):
     app.state.ready_check = lambda: app.state.model is not None
 
     @app.get("/v1/models")
+    @app.get("/api/v1/embed/models")
     def models(actor=Depends(scope("embedding:read"))):
         model = app.state.model
         return {

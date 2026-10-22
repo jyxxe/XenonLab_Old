@@ -166,7 +166,7 @@ def test_project_config_cannot_override_installed_policy(tmp_path, monkeypatch):
     env = controller.runtime_environment({"policy_file": str(policy)})
     assert "OPENCODE_CONFIG" not in env
     assert env["OPENCODE_DISABLE_PROJECT_CONFIG"] == "true"
-    assert json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]["maintainer"]["steps"] == 32
+    assert "steps" not in json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]["maintainer"]
 
 
 def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
@@ -178,10 +178,7 @@ def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
     automatic = json.loads(controller.runtime_environment(config, automatic=True)["OPENCODE_CONFIG_CONTENT"])
     manual = json.loads(controller.runtime_environment(config)["OPENCODE_CONFIG_CONTENT"])
     auto = automatic["agent"]["maintainer"]
-    assert auto["steps"] == 12 and auto["permission"]["edit"] == "deny"
-    review = json.loads(controller.runtime_environment(config, automatic=True, review=True)["OPENCODE_CONFIG_CONTENT"])
-    assert review["agent"]["maintainer"]["steps"] == 24
-    assert review["agent"]["maintainer"]["permission"]["edit"] == "deny"
+    assert "steps" not in auto and auto["permission"]["edit"] == "deny"
     assert "uv run *" not in auto["permission"]["bash"]
     assert "git *" not in auto["permission"]["bash"]
     assert auto["permission"]["bash"]["*auth.json*"] == "deny"
@@ -190,10 +187,24 @@ def test_automatic_coordination_preserves_manual_capabilities(tmp_path):
     assert auto["permission"]["bash"]["devctl merge *"] == "allow"
     assert auto["permission"]["bash"]["devctl review *"] == "allow"
     assert auto["permission"]["bash"]["devctl pr-create *"] == "deny"
-    assert manual["agent"]["maintainer"]["steps"] == 48
+    assert "steps" not in manual["agent"]["maintainer"]
     assert manual["agent"]["maintainer"]["permission"]["edit"] == "allow"
     assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl deploy *"] == "allow"
     assert manual["agent"]["maintainer"]["permission"]["bash"]["devctl merge *"] == "allow"
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_old_policy_and_runtime_step_caps_are_removed(tmp_path, automatic):
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"agent": {
+        "maintainer": {"steps": 48, "maxSteps": 16},
+        "general": {"disable": True, "steps": 8},
+    }}))
+    env = controller.runtime_environment({"policy_file": str(policy), "automatic_steps": 1,
+                                          "automatic_review_steps": 2}, automatic=automatic)
+    agents = json.loads(env["OPENCODE_CONFIG_CONTENT"])["agent"]
+    assert all("steps" not in agent and "maxSteps" not in agent for agent in agents.values())
+    assert agents["general"]["disable"] is True
 
 
 def test_checkpoint_push_repository_timestamp_does_not_wake_prs():
@@ -308,7 +319,9 @@ def test_closed_pr_events_supersede_old_work_without_starting_model(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "reason,steps,expected", [("tool-calls", 1, "failed"), ("stop", 1, "done"), ("stop", 12, "done"), ("stop", 24, "failed"), ("stop", 32, "failed")]
+    "reason,steps,expected", [("tool-calls", 1, "failed"), ("tool-calls", 512, "failed"),
+                             ("stop", 1, "done"), ("stop", 12, "done"), ("stop", 24, "done"),
+                             ("stop", 48, "done"), ("stop", 512, "done")]
 )
 def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypatch, reason, steps, expected):
     state = controller.State(tmp_path / "state")
@@ -331,12 +344,14 @@ def test_cli_zero_exit_without_finished_model_is_not_success(tmp_path, monkeypat
             kwargs["stdout"].write((json.dumps(event) + "\n") * steps)
 
         def communicate(self, *args, **kwargs):
-            pass
+            assert "Use at most" not in args[0]
 
     monkeypatch.setattr(controller.subprocess, "Popen", Process)
     assert controller.run_model(config, state, task) == expected
     assert state.db.execute("SELECT status FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == expected
     assert "--continue" not in commands[0]
+    audit = state.db.execute("SELECT metadata FROM audit WHERE event=?", ("model." + expected,)).fetchone()
+    assert json.loads(audit[0])["step_limit_reached"] is False
 
 
 @pytest.mark.parametrize('case', [
@@ -462,6 +477,62 @@ def test_superseded_merged_commit_is_not_a_deployment_candidate(tmp_path):
             return {'commit': {'id': 'c' * 40}}
 
     assert list(controller.publication_events(Fake(), state))[0][1]['state'] == 'superseded'
+
+
+def test_failed_publication_is_upgraded_only_by_exact_root_receipt(tmp_path, monkeypatch):
+    state = controller.State(tmp_path)
+    operation_id, head, commit = 'd' * 32, 'a' * 40, 'b' * 40
+    state.db.execute('INSERT INTO publications(number,head,commit_sha,operation_id) VALUES(1,?,?,?)',
+                     (head, commit, operation_id))
+    state.db.commit()
+    operation = {'id': operation_id, 'state': 'failed', 'result': None}
+    receipt = {'receipt_id': 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'state': 'operator_aborted', 'operation_id': operation_id,
+               'number': 1, 'head': head, 'commit': commit, 'baseline_commit': 'f' * 40,
+               'evidence': {}}
+    calls = []
+
+    def protected(action, args):
+        calls.append((action, args))
+        return operation if action == 'operation' else receipt
+
+    monkeypatch.setattr(controller, 'protected_request', protected)
+    event = list(controller.publication_events(object(), state))[0]
+    assert event[1]['state'] == 'operator_aborted'
+    assert event[1]['operation'] == operation and event[1]['recovery'] == receipt
+    assert calls == [('operation', [operation_id]), ('publication-recovery', [operation_id])]
+    assert state.observe(*event)
+    assert json.loads(state.db.execute('SELECT evidence FROM publications').fetchone()[0])['state'] == 'operator_aborted'
+
+
+@pytest.mark.parametrize('mutate', [
+    lambda value: value.update(number=2),
+    lambda value: value.update(head='c' * 40),
+    lambda value: value.update(commit='c' * 40),
+    lambda value: value.update(operation_id='c' * 32),
+    lambda value: value.update(receipt_id='bad'),
+])
+def test_previous_failed_publication_requires_matching_root_receipt(tmp_path, monkeypatch, mutate):
+    state = controller.State(tmp_path)
+    operation_id, head, commit = 'd' * 32, 'a' * 40, 'b' * 40
+    state.db.execute('INSERT INTO publications(number,head,commit_sha,operation_id) VALUES(1,?,?,?)',
+                     (head, commit, operation_id))
+    state.db.commit()
+    receipt = {'receipt_id': 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', 'state': 'operator_aborted', 'operation_id': operation_id,
+               'number': 1, 'head': head, 'commit': commit, 'baseline_commit': 'f' * 40,
+               'evidence': {}}
+    monkeypatch.setattr(controller, 'protected_request', lambda *args: receipt)
+    assert controller.previous_publications_resolved(state, 2)
+    mutate(receipt)
+    assert not controller.previous_publications_resolved(state, 2)
+
+
+def test_failed_publication_without_operation_or_receipt_remains_blocking(tmp_path, monkeypatch):
+    state = controller.State(tmp_path)
+    state.db.execute('INSERT INTO publications(number,head,commit_sha,evidence) VALUES(1,?,?,?)',
+                     ('a' * 40, 'b' * 40, json.dumps({'state': 'terminal', 'operation': {'state': 'failed'}})))
+    state.db.commit()
+    monkeypatch.setattr(controller, 'protected_request', lambda *args: pytest.fail('No op id, no receipt lookup'))
+    assert not controller.previous_publications_resolved(state, 2)
 
 
 @pytest.mark.parametrize('operation_state', ['running', 'completed', 'failed', 'interrupted'])

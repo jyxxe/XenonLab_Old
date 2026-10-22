@@ -917,3 +917,60 @@ def test_admin_complete_rejects_blocked_and_persists_closeout(settings):
         ingest_webhook(db, issue_payload(412, "Admin closed-out item", "open", "2026-10-02T12:15:00Z"))
     row = next(item for item in client.get("/api/v1/work", headers=auth()).json()["data"] if item["id"] == closeout["id"])
     assert row["status"] == "queued" and row["admin_completed"] == 0
+
+
+def test_listing_active_filter_and_lease_expired(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]["id"]
+
+    create(101, "Queued item")
+    live, expired, blocked = (create(102, "Live claim"),
+                              create(103, "Expired claim"), create(104, "Blocked item"))
+    assert client.post(f"/api/v1/work/{live}/claim", headers=auth(), json={"ttl_seconds": 3600}).status_code == 200
+    assert client.post(f"/api/v1/work/{expired}/claim", headers=auth(), json={"ttl_seconds": 3600}).status_code == 200
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET expires=? WHERE id=?", (time.time() - 100, expired))
+        db.execute("UPDATE work SET status='blocked',holder=NULL,expires=0 WHERE id=?", (blocked,))
+        db.commit()
+
+    unfiltered = client.get("/api/v1/work?limit=100", headers=auth()).json()["data"]
+    by_title = {row["title"]: row for row in unfiltered}
+    assert set(by_title) == {"Queued item", "Live claim", "Expired claim", "Blocked item"}
+    assert by_title["Expired claim"]["lease_expired"] is True
+    assert by_title["Expired claim"]["claim_active"] is False
+    for title in ("Queued item", "Live claim", "Blocked item"):
+        assert by_title[title]["lease_expired"] is False, title
+    assert by_title["Live claim"]["claim_active"] is True
+    # claim_active stays the live-lease contract: a queued item has no holder,
+    # so it must remain claimable in the UI (regression for PR #102 review).
+    assert by_title["Queued item"]["claim_active"] is False
+    assert by_title["Blocked item"]["claim_active"] is False
+
+    active_ids = {row["title"] for row in
+                  client.get("/api/v1/work?active=true&limit=100", headers=auth()).json()["data"]}
+    assert active_ids == {"Queued item", "Live claim"}
+    inactive_ids = {row["title"] for row in
+                    client.get("/api/v1/work?active=false&limit=100", headers=auth()).json()["data"]}
+    assert inactive_ids == {"Expired claim", "Blocked item"}
+
+    # work rows are uuid-keyed, so page order across items is not assumed (#92)
+    page = client.get("/api/v1/work?active=true&limit=1", headers=auth()).json()
+    assert len(page["data"]) == 1
+    first = page["data"][0]["title"]
+    assert first in {"Queued item", "Live claim"}
+    assert page["meta"]["next_cursor"]
+    follow = client.get(
+        f"/api/v1/work?active=true&limit=1&cursor={page['meta']['next_cursor']}", headers=auth()
+    ).json()
+    remaining = ({"Queued item", "Live claim"} - {first}).pop()
+    assert [row["title"] for row in follow["data"]] == [remaining]
+    assert follow["meta"]["next_cursor"] is None
+
+    assert client.get("/api/v1/work?active=maybe", headers=auth()).status_code == 422
+    error = client.get("/api/v1/work?active=maybe", headers=auth()).json()["error"]
+    assert error["code"] == "INVALID_ACTIVE"

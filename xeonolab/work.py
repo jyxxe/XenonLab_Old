@@ -402,16 +402,44 @@ def install(app):
             return response(request, load(db, work_id))
 
     @app.get("/api/v1/work")
-    def listing(request: Request, limit: int = 100, cursor: str = "", actor=Depends(scope("dev:read"))):
+    def listing(
+        request: Request,
+        limit: int = 100,
+        cursor: str = "",
+        active: str = "",
+        actor=Depends(scope("dev:read")),
+    ):
+        """Server-side lease semantics (issue #93): `active=true|false` filters on the
+        same predicate the UI derives client-side, and every row carries an explicit
+        `lease_expired` flag so clients no longer re-implement the comparison."""
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
+        if active not in ("", "true", "false"):
+            raise APIError(422, "INVALID_ACTIVE", "active must be true or false")
+        now = time.time()
+        # `active` (the #93 filter) treats queued items as actionable, but the
+        # claim_active contract stays "this caller holds a live lease": only a
+        # non-null holder with an unexpired lease counts. Conflating the two
+        # would hide the claim button for every queued item.
+        active_expression = "(status='queued' OR (holder IS NOT NULL AND expires > :now))"
+        claim_expression = "(holder IS NOT NULL AND expires > :now)"
+        query = (
+            "SELECT *,"
+            f" {claim_expression} AS claim_active,"
+            f" (status='claimed' AND NOT {claim_expression}) AS lease_expired"
+            " FROM work WHERE id>:cursor"
+        )
+        parameters: dict = {"cursor": cursor, "now": now}
+        if active:
+            query += " AND " + (active_expression if active == "true" else f"NOT {active_expression}")
+        query += " ORDER BY id LIMIT :limit"
+        parameters["limit"] = limit + 1
         with connect(database) as db:
-            rows = [
-                dict(r)
-                for r in db.execute("SELECT * FROM work WHERE id>? ORDER BY id LIMIT ?", (cursor, limit + 1))
-            ]
+            rows = [dict(r) for r in db.execute(query, parameters)]
         for row in rows:
-            row["claim_active"] = row["holder"] is not None and row["expires"] > time.time()
+            # SQLite yields the computed columns as 0/1; the API contract is JSON booleans.
+            row["claim_active"] = bool(row["claim_active"])
+            row["lease_expired"] = bool(row["lease_expired"])
         return response(
             request, rows[:limit], next_cursor=rows[limit - 1]["id"] if len(rows) > limit else None
         )

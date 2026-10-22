@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>System audit local acceptance fixture</title>
+    <link rel="stylesheet" href="/src/design-system/tokens.css" />
+    <link rel="stylesheet" href="/src/design-system/primitives.css" />
+    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="stylesheet" href="/src/shell/shell.css" />
+    <style>html,body,#root{height:100%;margin:0}</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react';
+      import {createRoot} from 'react-dom/client';
+      import {System} from '/src/shell/System.tsx';
+      async function apiPage(path) {
+        const response = await fetch(`/fixture-api${path}`);
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error.message);
+        return body;
+      }
+      const api = async path => (await apiPage(path)).data;
+      createRoot(document.getElementById('root')).render(React.createElement(System,{api,apiPage,openApp(){},apps:[]}));
+    </script>
+  </body>
+</html>

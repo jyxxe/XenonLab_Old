@@ -155,6 +155,7 @@
       },
       "get": {
         "summary": "Listing",
+        "description": "Server-side lease semantics (issue #93): `active=true|false` filters on the\nsame predicate the UI derives client-side, and every row carries an explicit\n`lease_expired` flag so clients no longer re-implement the comparison.",
         "operationId": "listing_api_v1_work_get",
         "parameters": [
           {
@@ -175,6 +176,16 @@
               "type": "string",
               "default": "",
               "title": "Cursor"
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Active"
             }
           }
         ],
