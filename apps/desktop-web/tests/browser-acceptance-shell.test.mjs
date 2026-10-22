@@ -725,7 +725,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody')?.innerText.includes('领取已过期')"),'System Agents view marks expired claim');
     assert.match(await cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody').innerText"),/已过期 · 可重领/);
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='存储').click()");
-    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('容量信息尚未接入')"),'Storage unavailable');
+    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('hf-cache:read')"),'Storage scope notice without pool numbers');
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='审计').click()");
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('xelibrary:admin')"),'Audit permission denied');
     await cdp.evaluate("document.querySelector('.window[data-app-id=system] .bar .close').click()");

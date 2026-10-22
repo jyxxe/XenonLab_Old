@@ -41,6 +41,7 @@ const tests = [
   'tests/browser-acceptance-plugin-panel.test.mjs',
   'tests/browser-acceptance-search-limit.test.mjs',
   'tests/browser-acceptance-harness-shortcut.test.mjs',
+  'tests/browser-acceptance-issue201-storage.test.mjs',
 ];
 const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...tests], {
   cwd: appRoot,
