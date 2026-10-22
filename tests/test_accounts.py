@@ -244,6 +244,9 @@ def test_shrunk_parent_scope_does_not_block_name_or_enabled_patch(accounts):
     )
     assert explicit_old_grant.status_code == 403
     assert explicit_old_grant.json()["error"]["code"] == "PERMISSION_ESCALATION"
+    assert "xelibrary:write" in explicit_old_grant.json()["error"]["message"], (
+        "the refusal must name the exact scope that is not grantable"
+    )
 
     removed = client.patch(
         f"/api/v1/auth/accounts/{uid}",

@@ -34,11 +34,11 @@ export function Meter({segments, height = 12}: {segments: Segment[]; height?: nu
 }
 
 /** Vertical bars inside a rounded chart mask; values are real counts, never scaled guesses. */
-export function Bars({data, height = 96, unit = ''}: {data: {label: string; value: number; hint?: string}[]; height?: number; unit?: string}) {
+export function Bars({data, height = 96, unit = ''}: {data: {label: string; value: number; hint?: string; color?: string}[]; height?: number; unit?: string}) {
   const maximum = Math.max(1, ...data.map(item => item.value));
-  return <div className="mac-bars" style={{height}} role="img" aria-label={data.map(item => `${item.label} ${item.value}${unit}`).join('，')}>
-    {data.map((item, index) => <div className="mac-bar" key={item.label} title={item.hint || `${item.label} ${item.value}${unit}`}>
-      <div className="mac-plot"><i style={{height: `${Math.max(4, (item.value / maximum) * 100)}%`, background: chartColor(index)}}/></div>
+  return <div className="mac-bars" style={{height}} role="group" aria-label={data.map(item => item.hint || `${item.label} ${item.value}${unit}`).join('，')}>
+    {data.map((item, index) => <div className="mac-bar" key={item.label} role="img" aria-label={item.hint || `${item.label} ${item.value}${unit}`} title={item.hint || `${item.label} ${item.value}${unit}`}>
+      <div className="mac-plot"><i style={{height: `${Math.max(4, (item.value / maximum) * 100)}%`, background: item.color || chartColor(index)}}/></div>
       <span>{item.label}</span>
     </div>)}
   </div>;

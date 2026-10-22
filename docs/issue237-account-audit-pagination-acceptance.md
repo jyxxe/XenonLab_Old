@@ -40,3 +40,19 @@ Validation:
 
 No new scope or provisioning dependency is required. Startup adds an
 idempotent `(at DESC, id DESC)` index to the existing account audit table.
+
+## Coordinator integration (2026-10-22)
+
+The branch was refreshed onto release base `261cb0a` before integration. The only
+semantic conflicts were `Accounts.tsx` (union with the newer account-create
+validation form and `readableErrorMessage` helper) and the browser-regression
+list. During resolution one duplicate legacy `建立子账号` block was accidentally
+kept next to the newer validated form; the stale copy was removed so the panel
+renders exactly one create-account form, and the full browser regression was
+re-run afterwards.
+
+Final gates on the merged tree: 576 pytest, full-repository Ruff, OpenAPI no diff
+(only the new `cursor`/`limit` parameters), frontend unit tests, `tsc --noEmit` +
+Vite build, the account-create and account-audit browser acceptances (8/8) and the
+full 65/65 browser regression. Exact-head CI, protected preflight, approval and
+deployment evidence are recorded on the PR.

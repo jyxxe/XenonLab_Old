@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Xenon Panel prompt catalogue local acceptance fixture</title>
+    <link rel="stylesheet" href="/src/design-system/tokens.css" />
+    <link rel="stylesheet" href="/src/design-system/primitives.css" />
+    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="stylesheet" href="/src/shell/shell.css" />
+    <style>html,body,#root{height:100%;margin:0}</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react';
+      import {createRoot} from 'react-dom/client';
+      import {System} from '/src/shell/System.tsx';
+      // Synthetic, inert view contract: the prompt catalogue reads bundled docs and
+      // must not call the API at all. Empty pages keep the initial overview harmless.
+      const apiPage = async () => ({data: [], meta: {next_cursor: null}});
+      const api = async () => ({});
+      createRoot(document.getElementById('root')).render(
+        React.createElement(System, {api, apiPage, openApp() {}, apps: []}),
+      );
+    </script>
+  </body>
+</html>
