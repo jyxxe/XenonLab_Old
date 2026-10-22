@@ -1,12 +1,14 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {isUnregisteredAccountError} from './api-error.js';
+import {AccountAudit} from './AccountAudit';
+import type {APIPage} from './shell/types';
 import {PASSWORD_HINT,USERNAME_HINT,formatCreateAccountError,validateNewAccount} from './account-create.js';
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type Account={id:string;parent:string|null;username:string;name:string;enabled:boolean;inherit_all:boolean;grants:string[];effective_scopes:string[];kind:string};
 const labels:Record<string,string>={'accounts:manage':'管理子账号','desktop:read':'访问桌面','desktop:admin':'管理桌面应用','dev:read':'读取开发任务','dev:write':'更新开发任务','xelibrary:read':'读取知识库','xelibrary:write':'编辑知识库','xelibrary:query':'查询知识库','xelibrary:attach':'管理附件','xelibrary:admin':'管理知识库权限','xelibrary:theorem:read':'读取定理','xelibrary:theorem:propose':'提交定理提案','xelibrary:theorem:promote':'晋升定理','embedding:read':'读取向量','embedding:write':'生成向量','llm:use':'使用模型','deploy:read':'查看发布','deploy:release':'登记发布','deploy:approve':'审批发布','deploy:execute':'执行发布（仍需 Codex 身份）'};
 function displayError(error:unknown,fallback:string){return error instanceof Error&&error.message.trim()?error.message:fallback}
 function Scopes({available,locked=[],selected,setSelected}:{available:string[];locked?:string[];selected:string[];setSelected:(s:string[])=>void}){return <div className="scope-grid">{available.map(scope=><label key={scope}><input type="checkbox" checked={selected.includes(scope)} onChange={e=>setSelected(e.target.checked?[...selected,scope]:selected.filter(s=>s!==scope))}/>{labels[scope]||scope}</label>)}{locked.map(scope=><label key={scope} title="该权限由登录角色持有，但根账号尚未采纳；请先用根账号登录并在账号页勾选采纳，之后才能授予子账号。"><input type="checkbox" disabled/>{labels[scope]||scope}<small>（根账号未采纳）</small></label>)}</div>}
-export function Accounts({api}:{api:API}){
+export function Accounts({api,apiPage,authEpoch=0}:{api:API;apiPage:APIPage;authEpoch?:number}){
  const [me,setMe]=useState<any>(null),[nodes,setNodes]=useState<Account[]>([]),[chosen,setChosen]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
  const [rootCandidates,setRootCandidates]=useState<string[]>([]);
  const [treeFilter,setTreeFilter]=useState('');
@@ -15,7 +17,7 @@ export function Accounts({api}:{api:API}){
  const [parent,setParent]=useState(''),[username,setUsername]=useState(''),[newName,setNewName]=useState(''),[password,setPassword]=useState(''),[newAll,setNewAll]=useState(false),[newScopes,setNewScopes]=useState<string[]>(['desktop:read']);
  const [createErrors,setCreateErrors]=useState<Partial<Record<'username'|'name'|'password',string>>>({}),[createError,setCreateError]=useState('');
  const usernameInput=useRef<HTMLInputElement>(null),nameInput=useRef<HTMLInputElement>(null),passwordInput=useRef<HTMLInputElement>(null);
- const [reset,setReset]=useState(''),[keys,setKeys]=useState<any[]>([]),[keyName,setKeyName]=useState(''),[keyScopes,setKeyScopes]=useState<string[]>([]),[secret,setSecret]=useState(''),[audit,setAudit]=useState<any[]>([]);
+ const [reset,setReset]=useState(''),[keys,setKeys]=useState<any[]>([]),[keyName,setKeyName]=useState(''),[keyScopes,setKeyScopes]=useState<string[]>([]),[secret,setSecret]=useState('');
  const selected=nodes.find(n=>n.id===chosen),parentNode=nodes.find(n=>n.id===parent);
  const treeQuery=treeFilter.trim().toLowerCase();
  const visibleNodes=treeQuery?nodes.filter(node=>node.name.toLowerCase().includes(treeQuery)||node.username.toLowerCase().includes(treeQuery)):nodes;
@@ -109,6 +111,6 @@ export function Accounts({api}:{api:API}){
   <button disabled={busy} onClick={()=>void submitCreate()}>创建子账号</button>
  </details>}
 
- <details><summary>账号审计</summary><button disabled={busy} onClick={()=>act(async()=>setAudit(await api('/auth/accounts/audit/events')))}>读取最近记录</button><p className="muted">名称与登录名来自当前可见账号树；原始 ID 保留供核对。</p><ul>{audit.map(event=><li key={event.id}>{new Date(event.at*1000).toLocaleString()} · {event.event}<div>操作人：{auditAccount(event.actor)}</div><div>目标：{auditAccount(event.target)}</div></li>)}</ul></details>
+ <AccountAudit apiPage={apiPage} identityKey={`${authEpoch}:${me?.subject||''}`} accountLabel={auditAccount}/>
  </div></div>}</section>
 }

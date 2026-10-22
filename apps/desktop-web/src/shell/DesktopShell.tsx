@@ -79,11 +79,13 @@ export function DesktopShell({
   api,
   apiPage,
   apiRaw,
+  authEpoch = 0,
   onLogout,
 }: {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
+  authEpoch?: number;
   onLogout: () => Promise<void>;
 }) {
   const {push} = useToast();
@@ -734,6 +736,7 @@ export function DesktopShell({
                   refreshApps={refreshApps}
                   apiPage={apiPage}
                   apiRaw={apiRaw}
+                  authEpoch={authEpoch}
                   app={app}
                   apps={apps}
                   openApp={openApp}

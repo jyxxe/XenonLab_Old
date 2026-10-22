@@ -114,6 +114,7 @@ export type AppViewProps = {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
+  authEpoch?: number;
   app: DesktopApp;
   apps: DesktopApp[];
   openApp: (id: string, intent?: Omit<AppIntent, 'id'>) => void;
