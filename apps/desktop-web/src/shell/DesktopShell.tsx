@@ -1,4 +1,5 @@
 import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {readableErrorMessage} from '../api-error.js';
 import {ErrorState, Spinner, useToast} from '../design-system/primitives';
 import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget, PluginWidget, SearchWidget, StatusWidget, WorkWidget} from '../Widgets';
 import {customWallpaperStyle} from '../wallpaper.js';
@@ -413,7 +414,7 @@ export function DesktopShell({
           setPreferences(current => ({...current, ...confirmed}));
         }
       } catch (error) {
-        if (preferenceLifetime.current && preferenceOwner.current === owner && currentAPI.current === api) push({tone: 'danger', title: '偏好保存失败', description: String(error)});
+        if (preferenceLifetime.current && preferenceOwner.current === owner && currentAPI.current === api) push({tone: 'danger', title: '偏好保存失败', description: readableErrorMessage(error)});
         throw error;
       }
     },
