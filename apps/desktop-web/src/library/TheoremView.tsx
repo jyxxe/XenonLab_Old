@@ -15,6 +15,8 @@ function confidenceAverage(theorem: Theorem): number | null {
 }
 
 export function TheoremView({
+  canRead = true,
+  identityReady = true,
   items,
   searchResults,
   searchPartial = false,
@@ -33,6 +35,8 @@ export function TheoremView({
   onOpen,
   onClose,
 }: {
+  canRead?: boolean;
+  identityReady?: boolean;
   items: Theorem[];
   searchResults: Theorem[] | null;
   searchPartial?: boolean;
@@ -48,7 +52,7 @@ export function TheoremView({
   onLoadMore: () => void;
   onSearch: (query: string, reviewStatus?: string) => void;
   onClearSearch: () => void;
-  onOpen: (id: string) => void;
+  onOpen: (theorem: Theorem) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -64,62 +68,74 @@ export function TheoremView({
           <h2>定理</h2>
           <p>定理对象存储在 XeLibrary catalogue 中；形式验证与候选生成在 Library Agent / Lean 就绪前不可用。</p>
         </div>
-        <Button size="sm" onClick={() => { setQuery(''); setReviewStatus(''); onLoad(); }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</Button>
+        {canRead && <Button size="sm" onClick={() => { setQuery(''); setReviewStatus(''); onLoad(); }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</Button>}
       </header>
 
-      <div className="library-search-bar">
-        <Input
-          type="search"
-          aria-label="搜索定理"
-          placeholder="按标题或陈述搜索定理"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          onKeyDown={event => event.key === 'Enter' && query.trim() && onSearch(query, reviewStatus)}
-        />
-        <Select aria-label="定理审查状态" value={reviewStatus} disabled={!query.trim()} onChange={event => { const status = event.target.value; setReviewStatus(status); if (query.trim()) onSearch(query, status); }}>
-          <option value="">全部审查状态</option><option value="draft">草稿</option><option value="proposed">待审</option><option value="promoted">已晋升</option><option value="rejected">已拒绝</option>
-        </Select>
-        <Button onClick={() => onSearch(query, reviewStatus)} disabled={loading || !query.trim()}>搜索</Button>
-        {(searchResults !== null || query || reviewStatus) && <Button variant="ghost" onClick={() => { setQuery(''); setReviewStatus(''); onClearSearch(); }}>清除搜索</Button>}
-      </div>
-
-      {searchResults !== null && searchPartial && <p className="library-notice" role="status">仅显示部分匹配结果；这不是完整审阅队列。请缩小关键词范围或调整审查状态。</p>}
-
-      {errorInfo ? (
-        <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={() => query.trim() ? onSearch(query, reviewStatus) : onLoad()} />
-      ) : loading && !list.length ? (
-        <div className="library-result-skeleton" role="status" aria-label="正在加载定理">
-          {Array.from({length: 4}, (_, index) => <Skeleton key={index} height={54} />)}
-        </div>
-      ) : !list.length ? (
-        <EmptyState icon="⊢" title={searchResults ? '没有匹配的定理' : '还没有定理'} description="定理由 API 创建；Library Agent 与 Lean verifier 尚未部署。" />
+      {!canRead ? (
+        identityReady ? (
+          <EmptyState icon="⊢" title="需要定理读取权限" description="当前账户没有 xelibrary:theorem:read 权限，无法读取定理列表；也不会发起会被拒绝的请求。请管理员在「账号」页为该账号授予定理读取权限后重试。" />
+        ) : (
+          <div className="library-result-skeleton" role="status" aria-label="正在读取权限">
+            {Array.from({length: 4}, (_, index) => <Skeleton key={index} height={54} />)}
+          </div>
+        )
       ) : (
         <>
-          <ul className="library-theorem-list">
-            {list.map(theorem => {
-              const average = confidenceAverage(theorem);
-              return (
-                <li key={theorem.theorem_id}>
-                  <button type="button" className={selected?.theorem_id === theorem.theorem_id ? 'active' : ''} onClick={() => onOpen(theorem.theorem_id)}>
-                    <strong>{theorem.title}</strong>
-                    <span className="library-theorem-meta">
-                      <code>{theorem.path}</code>
-                      <Badge tone={theorem.review_status === 'promoted' ? 'success' : theorem.review_status === 'rejected' ? 'danger' : 'neutral'}>
-                        {theorem.review_status || 'unknown'}
-                      </Badge>
-                      <Badge tone={theorem.formal_status === 'verified' ? 'success' : theorem.formal_status === 'failed' ? 'danger' : 'neutral'}>
-                        formal: {theorem.formal_status || 'none'}
-                      </Badge>
-                      {average != null && <span>confidence {average.toFixed(2)}</span>}
-                      <small>{relativeTime(theorem.updated_at)}</small>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-          {!searchResults && cursor && (
-            <Button onClick={onLoadMore} disabled={loadingMore}>{loadingMore ? '加载中…' : '加载更多定理'}</Button>
+          <div className="library-search-bar">
+            <Input
+              type="search"
+              aria-label="搜索定理"
+              placeholder="按标题或陈述搜索定理"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              onKeyDown={event => event.key === 'Enter' && query.trim() && onSearch(query, reviewStatus)}
+            />
+            <Select aria-label="定理审查状态" value={reviewStatus} disabled={!query.trim()} onChange={event => { const status = event.target.value; setReviewStatus(status); if (query.trim()) onSearch(query, status); }}>
+              <option value="">全部审查状态</option><option value="draft">草稿</option><option value="proposed">待审</option><option value="promoted">已晋升</option><option value="rejected">已拒绝</option>
+            </Select>
+            <Button onClick={() => onSearch(query, reviewStatus)} disabled={loading || !query.trim()}>搜索</Button>
+            {(searchResults !== null || query || reviewStatus) && <Button variant="ghost" onClick={() => { setQuery(''); setReviewStatus(''); onClearSearch(); }}>清除搜索</Button>}
+          </div>
+
+          {searchResults !== null && searchPartial && <p className="library-notice" role="status">仅显示部分匹配结果；这不是完整审阅队列。请缩小关键词范围或调整审查状态。</p>}
+
+          {errorInfo ? (
+            <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={() => query.trim() ? onSearch(query, reviewStatus) : onLoad()} />
+          ) : loading && !list.length ? (
+            <div className="library-result-skeleton" role="status" aria-label="正在加载定理">
+              {Array.from({length: 4}, (_, index) => <Skeleton key={index} height={54} />)}
+            </div>
+          ) : !list.length ? (
+            <EmptyState icon="⊢" title={searchResults ? '没有匹配的定理' : '还没有定理'} description="定理由 API 创建；Library Agent 与 Lean verifier 尚未部署。" />
+          ) : (
+            <>
+              <ul className="library-theorem-list">
+                {list.map(theorem => {
+                  const average = confidenceAverage(theorem);
+                  return (
+                    <li key={theorem.theorem_id}>
+                      <button type="button" className={selected?.theorem_id === theorem.theorem_id ? 'active' : ''} onClick={() => onOpen(theorem)}>
+                        <strong>{theorem.title}</strong>
+                        <span className="library-theorem-meta">
+                          <code>{theorem.path}</code>
+                          <Badge tone={theorem.review_status === 'promoted' ? 'success' : theorem.review_status === 'rejected' ? 'danger' : 'neutral'}>
+                            {theorem.review_status || 'unknown'}
+                          </Badge>
+                          <Badge tone={theorem.formal_status === 'verified' ? 'success' : theorem.formal_status === 'failed' ? 'danger' : 'neutral'}>
+                            formal: {theorem.formal_status || 'none'}
+                          </Badge>
+                          {average != null && <span>confidence {average.toFixed(2)}</span>}
+                          <small>{relativeTime(theorem.updated_at)}</small>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {!searchResults && cursor && (
+                <Button onClick={onLoadMore} disabled={loadingMore}>{loadingMore ? '加载中…' : '加载更多定理'}</Button>
+              )}
+            </>
           )}
         </>
       )}
@@ -145,7 +161,7 @@ export function TheoremView({
           {selected.formal_statement && <section><h4>Formal Statement</h4><pre>{selected.formal_statement}</pre></section>}
           {selected.lean_source && <section><h4>Lean Proof</h4><pre>{selected.lean_source}</pre></section>}
           {detailErrorInfo ? (
-            <ErrorState title={detailErrorInfo.title} message={detailErrorInfo.message} requestId={detailErrorInfo.requestId} errorCode={detailErrorInfo.code} onRetry={() => onOpen(selected.theorem_id)} />
+            <ErrorState title={detailErrorInfo.title} message={detailErrorInfo.message} requestId={detailErrorInfo.requestId} errorCode={detailErrorInfo.code} onRetry={() => onOpen(selected)} />
           ) : detailLoading ? (
             <p className="muted" role="status">正在读取 evidence 与定理关系…</p>
           ) : (
