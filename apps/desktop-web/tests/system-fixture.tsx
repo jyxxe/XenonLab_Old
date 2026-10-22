@@ -15,6 +15,9 @@ const api = async (path: string) => {
     if (mode === 'unavailable') {
       throw Object.assign(new Error('trusted storage telemetry unavailable'), {code: 'STORAGE_TELEMETRY_UNAVAILABLE', status: 503});
     }
+    if (mode === 'not-wired') {
+      throw Object.assign(new Error('Not Found'), {code: 'HTTP_ERROR', status: 404});
+    }
     return {
       pool: 'aux-10t',
       sampled_at: new Date().toISOString(),
@@ -36,9 +39,13 @@ const api = async (path: string) => {
 };
 const apiPage = async (path: string) => ({data: [], meta: {}});
 
+// Current AppViewProps needs the full shell view contract; provide inert synthetic
+// stubs so the isolated System component renders exactly as the desktop shell would.
+const apps = [{id: 'issues', title: '任务', kind: 'native', icon: '✓', permissions: [], component: () => null}] as any;
+const noop = () => {};
 createRoot(document.getElementById('root')!).render(
   <div className="window" id="system-fixture" style={{left: 8, top: 8, width: 1180, height: 820, resize: 'none'}}>
     <div className="bar"><button className="close"/><button className="min"/><button className="max"/><span>系统 · 存储水位本地验收</span></div>
-    <div className="window-body"><System api={api} apiPage={apiPage} openApp={(id) => {document.body.dataset.openedApp = id}}/></div>
+    <div className="window-body"><System api={api} apiPage={apiPage} apiRaw={async () => new Response('{}')} app={apps[0]} apps={apps} openApp={(id) => {document.body.dataset.openedApp = id}} dockIds={[]} togglePin={noop} movePinned={noop} preferences={{}} applyPreferences={noop} notify={noop} windowId="system-fixture" saveLayout={async () => {}} refreshApps={async () => {}}/></div>
   </div>,
 );

@@ -129,13 +129,20 @@ test('System storage tab shows the verified HF-cache pool watermark or honest un
     const unavailable=await cdp.evaluate("document.querySelector('.system-content').innerText");
     assert.doesNotMatch(unavailable,/TiB/);
     assert.match(unavailable,/不展示任何缓存数字/);
+
+    // Capability not wired on the desktop origin yet (#66): the API catch-all 404
+    // must render the honest unavailable state instead of a raw error.
+    await openStorage('?storageCase=not-wired');
+    await waitFor(()=>cdp.evaluate("document.body.innerText.includes('缓存池水位暂不可用')"),'not-wired unavailable notice');
+    const notWired=await cdp.evaluate("document.querySelector('.system-content').innerText");
+    assert.doesNotMatch(notWired,/TiB/);
     await cdp.evaluate("document.querySelector('.system-content').scrollIntoView()");
     await sleep(120);
     await cdp.call('Page.captureScreenshot',{format:'png'}).then(async shot=>{
       await fs.writeFile(path.join(evidence,'system-storage-watermark.png'),Buffer.from(shot.data,'base64'));
     });
     assert.equal(errors.length,0);
-    const report={source:'Real headless Chrome renders the System storage tab via a local synthetic fixture (no production account or services). Success, missing-scope and telemetry-unavailable states are asserted; no real HF-cache API was accessed.',cases:['ok','forbidden','unavailable'],checks:['pool name and watermark badge render','pool vs guest filesystem usage are distinguished','cached bytes and verified sampled_at render','server-local paths never appear','missing scope shows permission notice without numbers','unavailable telemetry shows explicit empty state without numbers'],pageErrors:errors,outcome:'PASS'};
+    const report={source:'Real headless Chrome renders the System storage tab via a local synthetic fixture (no production account or services). Success, missing-scope and telemetry-unavailable states are asserted; no real HF-cache API was accessed.',cases:['ok','forbidden','unavailable','not-wired'],checks:['pool name and watermark badge render','pool vs guest filesystem usage are distinguished','cached bytes and verified sampled_at render','server-local paths never appear','missing scope shows permission notice without numbers','unavailable telemetry and a not-yet-wired route show explicit empty state without numbers'],pageErrors:errors,outcome:'PASS'};
     await fs.writeFile(path.join(evidence,'browser-report.json'),JSON.stringify(report,null,2));
   }finally{
     cdp?.socket.close();

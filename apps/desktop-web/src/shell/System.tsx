@@ -68,8 +68,11 @@ export function System(props: AppViewProps) {
             const status = await api('/cache/storage');
             if (active) setStorage(status);
           } catch (cause) {
-            const code = (cause as {code?:string} | null)?.code;
-            if (code === 'STORAGE_TELEMETRY_UNAVAILABLE' || /telemetry unavailable/i.test(String(cause))) {
+            const error = cause as {code?:string; status?:number} | null;
+            // Until the HF-cache service has a production route (#66), the desktop
+            // origin answers 404 from the API catch-all; an upstream-down proxy
+            // answers 502/503. Both mean "telemetry not available", never cached data.
+            if (error?.code === 'STORAGE_TELEMETRY_UNAVAILABLE' || [404, 502, 503].includes(Number(error?.status)) || /telemetry unavailable/i.test(String(cause))) {
               if (active) setStorageUnavailable(true);
               return;
             }

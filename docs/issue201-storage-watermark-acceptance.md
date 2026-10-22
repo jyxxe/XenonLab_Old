@@ -1,6 +1,6 @@
 # Issue #201 acceptance: System storage shows the HF-cache shared pool watermark
 
-Baseline: `2c3481d96f8ba602be5418a44882ba0aa25187db`. Branch: `zcode/issue-201-storage-watermark`.
+Baseline: `2c3481d96f8ba602be5418a44882ba0aa25187db`; final integration onto release base `0bca9c9c674c168851ac8bf7934b3ec09262e5c5` on 2026-10-22. Branch: `zcode/issue-201-storage-watermark`.
 
 The desktop 「系统」→「存储」tab now reads the existing HF-cache storage API through the user's own bearer identity and renders the verified shared-pool state: pool name and watermark badge (`normal` / `evict_low_priority` / `stop_prefetch` / `retain_protected`), pool usage versus the HF-cache guest filesystem usage as two clearly separated views of the same shared pool with a "不能相加" caution, HF-cache cached bytes, and the verified sampling time. A missing `hf-cache:read` scope shows a permission explanation without numbers. Upstream telemetry that is missing, stale or unreachable (503 `STORAGE_TELEMETRY_UNAVAILABLE`) shows an explicit "缓存池水位暂不可用" state and never renders cached numbers.
 
@@ -8,7 +8,8 @@ Backend: `read_pool_metrics` now propagates the validated `observed_at` from the
 
 ## Validation
 
-- `uv run pytest`: 482 passed (44 → 47 in `tests/test_hf_cache.py`: verified sampling-time propagation, `sampled_at` null for timestamp-less providers, non-string timestamp fails closed; root-fed schema test now covers `observed_at`; integrated storage assertions cover `sampled_at` and `path` absence).
+- Original head gates: `uv run pytest` 482 passed; frontend 64 passed; Ruff, OpenAPI export, build and Chrome storage acceptance passed.
+- Final integration gates on base `0bca9c9` (2026-10-22): `uv run pytest` **520 passed** (the 47 `tests/test_hf_cache.py` cases including sampling-time propagation, `sampled_at` null for timestamp-less providers, non-string timestamp fails closed, root-fed schema `observed_at`, `sampled_at`/`path` absence); `uv run ruff check xeonolab tests scripts` passed; `export_openapi.py` produced no API diff; frontend `tsc --noEmit` and **110 unit tests** passed; production build passed; Chrome storage acceptance passed all four cases (`ok`, `forbidden`, `unavailable`, `not-wired`) with zero page errors.
 - `uv run ruff check xeonolab tests`: passed.
 - `uv run python scripts/export_openapi.py`: passed; generated schemas unchanged (the storage endpoint's response schema is intentionally untyped, pre-existing).
 - Frontend `npm test`: 64 passed, zero skipped.
@@ -29,3 +30,12 @@ handle @cache_api {
 ```
 
 Until then the desktop honestly renders the unavailable state. No deployment was performed by this change; rollback is reverting the UI/API/test/document changes.
+
+## 2026-10-22 final integration onto release base `0bca9c9`
+
+The branch was merged with the current release base; the only conflict was the browser-regression test list, resolved as a union that keeps both the new `browser-acceptance-issue201-storage.test.mjs` and the base's later browser tests. Two integration adaptations were needed and are recorded here honestly:
+
+1. **Fixture follows the current shell contract**: the current `AppViewProps` now includes `apps`, `apiRaw`, `dockIds`, `preferences`, `notify`, `windowId` and related fields (the original fixture predates them), so the isolated `tests/system-fixture.tsx` passes inert synthetic stubs. Product code is unchanged by this adaptation.
+2. **Not-yet-wired route renders the honest unavailable state**: the HF-cache service still has no production node/port (#66), so the desktop origin's `/api/v1/cache/storage` currently falls through the API catch-all and answers 404. The storage tab now treats 404/502/503 proxy outcomes like the existing 503 `STORAGE_TELEMETRY_UNAVAILABLE` case: it shows "缓存池水位暂不可用" and never renders numbers, instead of a raw error. The Chrome acceptance gained a `not-wired` case asserting this. When #66 wires the service, the documented Caddy route below makes the real state visible with no further desktop change.
+
+The trusted protected preflight and current-head CI for the exact integration head remain the merge gate; the local Chrome run is coordinator evidence (synthetic fixture only, no production HF-cache API or account).
