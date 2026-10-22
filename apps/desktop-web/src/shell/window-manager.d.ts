@@ -7,8 +7,16 @@ export const MIN_WIDTH: number;
 export const MIN_HEIGHT: number;
 export const MIN_VISIBLE_X: number;
 export const MIN_VISIBLE_Y: number;
+export const LEGACY_XELIBRARY_APP_ID: string;
+export function isRetiredRegistryAppId(id: string): boolean;
+export function migrateLegacyAppReferences<T extends Record<string, any>>(layout: T): T;
 
+export function maximizedRect(viewport: {width: number; height: number}): Rect;
 export function workArea(viewport: {width: number; height: number}): Rect;
+export type HalfScreenSide = 'left' | 'right';
+export type DesktopBounds = {menuBottom: number; dockTop: number};
+export type HalfScreenPlacement = {rect: Rect; reason: null} | {rect: null; reason: 'unmeasured' | 'compact' | 'width' | 'height'};
+export function halfScreenPlacement(viewport: {width: number; height: number}, minSize: {width: number; height: number}, side: HalfScreenSide, bounds: DesktopBounds | null): HalfScreenPlacement;
 export function clamp(value: number, min: number, max: number): number;
 export function minSizeOf(app: {minSize?: [number, number]; min_size?: [number, number]} | null | undefined): {width: number; height: number};
 export function clampRect(rect: Rect, viewport: {width: number; height: number}, minSize?: {width: number; height: number}): Rect;
@@ -36,3 +44,5 @@ export function restoreWindows(
   viewport: {width: number; height: number},
 ): WindowState[];
 export function serializeWindows(windows: WindowState[]): Array<Record<string, unknown>>;
+
+export function stableWindowOrder(windows: WindowState[]): WindowState[];

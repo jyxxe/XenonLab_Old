@@ -277,6 +277,26 @@ def install(
             counts=jobs.counts(table_id=table_id or None, owner=actor.sub),
         )
 
+    @app.get("/api/v1/embedding/jobs")
+    def embedding_job_list(
+        request: Request,
+        table_id: str = "",
+        status: Literal["queued", "running", "completed", "failed"] | None = None,
+        limit: int = 50,
+        actor=Depends(scope("embedding:read")),
+    ):
+        """Return only the authenticated caller's XeLibrary indexing jobs."""
+        if not 1 <= limit <= 200:
+            raise APIError(422, "INVALID_LIMIT", "limit outside range")
+        owned_jobs = jobs.list(table_id=table_id or None, status=status, owner=actor.sub, limit=limit)
+        fields = ("job_id", "table_id", "status", "created_at", "updated_at", "error")
+        rows = [{key: job.get(key) for key in fields} for job in owned_jobs]
+        return response(
+            request,
+            rows,
+            counts=jobs.counts(table_id=table_id or None, owner=actor.sub),
+        )
+
     @app.get("/api/v1/jobs/{job_id}")
     def job(job_id: str, request: Request, actor=Depends(scope("xelibrary:admin"))):
         data = jobs.get(job_id)

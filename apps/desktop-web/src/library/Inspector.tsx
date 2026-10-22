@@ -1,5 +1,8 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import {Icon} from '../design-system/Icon';
+import {normalizeRowValues, parseExactJSON, stringifyExactJSON} from './json.js';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, ErrorState, IconButton, Input, Select, Skeleton, Spinner, StatusDot, Tabs, Textarea} from '../design-system/primitives';
+import type {UploadStore} from '../upload-state.js';
 import {Attachments} from '../Attachments';
 import {changedFields, describeError, indexStatusFromJobs, indexStatusFromServer, relativeTime} from './logic.js';
 import type {Column, IndexStatus, Job, Row, Table} from './types';
@@ -42,7 +45,13 @@ export function Inspector({
   onReloadRow,
   onToggleFavorite,
   onClose,
+  tab: controlledTab,
+  onTabChange,
+  uploadStore,
+  identityKey = '',
 }: {
+  tab?: InspectorTab;
+  onTabChange?: (tab: InspectorTab) => void;
   table: Table;
   columns: Column[];
   row: Row | null;
@@ -62,13 +71,20 @@ export function Inspector({
   conflict: ConflictInfo | null;
   onSave: (values: Record<string, any>, revision: number) => Promise<void>;
   onDelete: (revision: number) => Promise<void>;
-  onRestore: (revision: number, currentRevision: number) => Promise<void>;
-  onCreate: (values: Record<string, any>) => Promise<void>;
+  onRestore: (revision: number, currentRevision: number) => Promise<void | false>;
+  onCreate: (values: Record<string, any>) => Promise<void | false>;
   onReloadRow: () => void;
   onToggleFavorite: () => void;
   onClose: () => void;
+  uploadStore?: UploadStore;
+  identityKey?: string;
 }) {
-  const [tab, setTab] = useState<InspectorTab>('overview');
+  const [localTab, setLocalTab] = useState<InspectorTab>('overview');
+  const tab = controlledTab ?? localTab;
+  const setTab = (next: InspectorTab) => {
+    setLocalTab(next);
+    onTabChange?.(next);
+  };
   const [draft, setDraft] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -76,15 +92,34 @@ export function Inspector({
   const [history, setHistory] = useState<Row[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [compare, setCompare] = useState<Row | null>(null);
+  const [compareRevision, setCompareRevision] = useState<number | null>(null);
+  const comparison = history.find(item => item._revision === compareRevision) || row;
+
+  useEffect(() => {
+    setCompare(null);
+    setCompareRevision(null);
+  }, [table.id, row?._row_id]);
   const [acl, setAcl] = useState<{table: any; path: any; row: any} | null>(null);
   const [aclError, setAclError] = useState<unknown>(null);
+
+  // A record switch invalidates every pending mutation, even when returning to A.
+  const context = JSON.stringify([table.id, row?._row_id ?? null]);
+  const mutation = useRef({context, generation: 0});
+  if (mutation.current.context !== context) {
+    mutation.current = {context, generation: mutation.current.generation + 1};
+  }
+  useEffect(() => {
+    setBusy(false);
+    setError(null);
+    setMessage('');
+  }, [context]);
+  useEffect(() => () => { mutation.current.generation += 1; }, []);
 
   const canWrite = scopes.includes('xelibrary:write');
   const canAttach = scopes.includes('xelibrary:attach');
 
   useEffect(() => {
     setError(null);
-    setMessage('');
     setCompare(null);
     if (row) setDraft({...row.values});
     else setDraft(Object.fromEntries(columns.map(column => [column.name, column.default_value])));
@@ -128,11 +163,12 @@ export function Inspector({
 
   function setValue(column: Column, raw: string) {
     let value: any = raw;
-    if (['int64', 'float64'].includes(column.type)) value = raw === '' ? null : Number(raw);
+    if (column.type === 'int64') value = raw === '' ? null : raw;
+    if (column.type === 'float64') value = raw === '' ? null : Number(raw);
     if (column.type === 'boolean') value = raw === '' ? null : raw === 'true';
     if (['json', 'attachment_list'].includes(column.type) && raw !== '') {
       try {
-        value = JSON.parse(raw);
+        value = parseExactJSON(raw);
       } catch {
         value = raw;
       }
@@ -141,45 +177,49 @@ export function Inspector({
   }
 
   async function submit() {
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     setMessage('');
     try {
-      if (row) await onSave(draft, row._revision);
-      else await onCreate(draft);
-      setMessage(row ? '已保存' : '记录已创建');
+      const values = normalizeRowValues(columns, draft);
+      if (row) await onSave(values, row._revision);
+      else if (await onCreate(values) === false) return;
+      if (generation === mutation.current.generation) setMessage(row ? '已保存' : '记录已创建');
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
   async function remove() {
     if (!row) return;
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     try {
       await onDelete(row._revision);
-      setMessage('记录已软删除，历史仍然保留');
+      if (generation === mutation.current.generation) setMessage('记录已软删除，历史仍然保留');
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
   async function restore(revision: number) {
     if (!row) return;
+    const generation = ++mutation.current.generation;
     setBusy(true);
     setError(null);
     try {
-      await onRestore(revision, row._revision);
-      setMessage(`已从 r${revision} 恢复；这会创建一个新的 revision，不会覆盖历史`);
+      if (await onRestore(revision, row._revision) === false) return;
+      if (generation === mutation.current.generation) setMessage(`已从 r${revision} 恢复；这会创建一个新的 revision，不会覆盖历史`);
     } catch (cause) {
-      setError(cause);
+      if (generation === mutation.current.generation) setError(cause);
     } finally {
-      setBusy(false);
+      if (generation === mutation.current.generation) setBusy(false);
     }
   }
 
@@ -229,16 +269,18 @@ export function Inspector({
                 <div><dt>Deleted</dt><dd>{row._deleted_at ? <Badge tone="danger">已软删除</Badge> : '有效'}</dd></div>
               </dl>
             )}
-            <Button size="sm" onClick={onToggleFavorite}>★ 收藏此表</Button>
+            <Button size="sm" icon="favorite" onClick={onToggleFavorite}>收藏此表</Button>
             {row && (
               <Attachments
-                key={`overview:${table.id}:${row._row_id}`}
+                uploadStore={uploadStore}
+                key={`overview:${identityKey}:${table.id}:${row._row_id}`}
                 tableId={table.id}
                 rowId={row._row_id}
                 api={api}
                 apiPage={apiPage}
                 apiRaw={apiRaw}
                 canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
                 onChanged={async () => undefined}
               />
             )}
@@ -249,7 +291,7 @@ export function Inspector({
           <div className="inspector-fields">
             {columns.map(column => {
               const value = draft[column.name];
-              const text = value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+              const text = value === null || value === undefined ? '' : typeof value === 'object' ? stringifyExactJSON(value) : String(value);
               return (
                 <label key={column.name} className="inspector-field">
                   <span className="inspector-field-name">
@@ -266,7 +308,8 @@ export function Inspector({
                     <Textarea disabled={!canWrite || Boolean(row?._deleted_at) || busy} value={text} onChange={event => setValue(column, event.target.value)} />
                   ) : (
                     <Input
-                      type={['int64', 'float64'].includes(column.type) ? 'number' : 'text'}
+                      type={column.type === 'float64' ? 'number' : 'text'}
+                      inputMode={column.type === 'int64' ? 'numeric' : undefined}
                       disabled={!canWrite || Boolean(row?._deleted_at) || busy}
                       value={text}
                       onChange={event => setValue(column, event.target.value)}
@@ -294,13 +337,15 @@ export function Inspector({
         {tab === 'attachments' && (
           row ? (
             <Attachments
-              key={`${table.id}:${row._row_id}`}
+              uploadStore={uploadStore}
+              key={`${identityKey}:${table.id}:${row._row_id}`}
               tableId={table.id}
               rowId={row._row_id}
               api={api}
               apiPage={apiPage}
               apiRaw={apiRaw}
               canAttach={canAttach}
+                canRead={scopes.includes('xelibrary:read')}
               onChanged={async () => undefined}
             />
           ) : (
@@ -341,23 +386,34 @@ export function Inspector({
                     </li>
                   ))}
                 </ol>
-                {compare && (
+                {compare && comparison && (
                   <div className="history-compare">
-                    <h4>r{compare._revision} 与当前 r{row._revision} 的差异</h4>
-                    {changedFields(compare.values, row.values).length ? (
+                    <h4>r{compare._revision} 与{comparison._revision === row._revision ? '当前' : '历史'} r{comparison._revision} 的差异</h4>
+                    <label>查看版本
+                      <Select aria-label="查看版本" value={String(compare._revision)} onChange={event => setCompare(history.find(item => item._revision === Number(event.target.value)) || row)}>
+                        {history.map(item => <option key={item._revision} value={item._revision}>r{item._revision}（{item._revision === row._revision ? '当前' : '历史'}）</option>)}
+                      </Select>
+                    </label>
+                    <label>对照版本
+                      <Select aria-label="对照版本" value={compareRevision === null ? 'current' : String(compareRevision)} onChange={event => setCompareRevision(event.target.value === 'current' ? null : Number(event.target.value))}>
+                        <option value="current">当前 r{row._revision}</option>
+                        {history.filter(item => item._revision !== row._revision).map(item => <option key={item._revision} value={item._revision}>历史 r{item._revision}</option>)}
+                      </Select>
+                    </label>
+                    {changedFields(compare.values, comparison.values).length ? (
                       <ul>
-                        {changedFields(compare.values, row.values).map(name => (
+                        {changedFields(compare.values, comparison.values).map(name => (
                           <li key={name}>
                             <strong>{name}</strong>
                             <div className="history-diff">
-                              <pre>{JSON.stringify(compare.values[name] ?? null, null, 2)}</pre>
-                              <pre>{JSON.stringify(row.values[name] ?? null, null, 2)}</pre>
+                              <div><small>查看：{compare._revision === row._revision ? '当前' : '历史'} r{compare._revision}</small><pre>{stringifyExactJSON(compare.values[name] ?? null, 2)}</pre></div>
+                              <div><small>对照：{comparison._revision === row._revision ? '当前' : '历史'} r{comparison._revision}</small><pre>{stringifyExactJSON(comparison.values[name] ?? null, 2)}</pre></div>
                             </div>
                           </li>
                         ))}
                       </ul>
                     ) : (
-                      <p className="muted">字段内容与当前 revision 相同（revision 变更可能来自删除/恢复）。</p>
+                      <p className="muted">两端字段内容相同（revision 变更可能来自删除/恢复）。</p>
                     )}
                     <p className="muted">恢复操作会新增一个 revision，并完整保留当前历史。</p>
                   </div>
@@ -417,7 +473,7 @@ export function Inspector({
                   <div><dt>已索引行</dt><dd>{indexStatus!.embedded_rows}</dd></div>
                   <div><dt>待索引行</dt><dd>{indexStatus!.pending_rows}</dd></div>
                   <div><dt>向量块</dt><dd>{indexStatus!.chunk_count}</dd></div>
-                  {indexStatus!.last_job && <div><dt>最近任务</dt><dd className="mono">{indexStatus!.last_job.job_id} · {relativeTime(indexStatus!.last_job.updated_at || indexStatus!.last_job.created_at)}</dd></div>}
+                  {indexStatus!.last_job && <div><dt>最近任务</dt><dd className="mono">{indexStatus!.last_job.job_id ? `${indexStatus!.last_job.job_id} · ` : ''}{relativeTime(indexStatus!.last_job.updated_at || indexStatus!.last_job.created_at)}</dd></div>}
                   {indexStatus!.last_job?.error && <div><dt>最近错误</dt><dd>{indexStatus!.last_job.error}</dd></div>}
                 </dl>
                 <p className="muted">

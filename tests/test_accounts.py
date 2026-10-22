@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from xeonolab.common import connect
 from xeonolab.desktop import create_app
+from xeonolab.role_scopes import OIDC_ROLE_SCOPES
 
 from .conftest import auth, put_acl
 
@@ -95,6 +96,45 @@ def test_account_tree_first_use_requires_explicit_bootstrap_and_preserves_scopes
     assert "accounts:manage" not in created.json()["data"]["effective_scopes"]
 
 
+def test_platform_admin_oidc_role_can_explicitly_grant_embedding_to_a_human_child(accounts):
+    client, settings, _app = accounts
+    root_before = client.get("/api/v1/auth/accounts", headers=auth("admin")).json()["data"][0]
+    assert not {"embedding:read", "embedding:write"} & set(root_before["effective_scopes"])
+
+    # This models refreshed human OIDC tokens after the platform-admin mapper is
+    # updated. The registered root record does not inherit these scopes implicitly.
+    settings.role_scopes = OIDC_ROLE_SCOPES
+    settings.dev_tokens["admin"]["realm_access"] = {"roles": ["platform-admin"]}
+    assert not {"embedding:read", "embedding:write"} & scopes(client, "admin")
+
+    candidates = client.get("/api/v1/auth/accounts/root-scope-candidates", headers=auth("admin"))
+    assert candidates.status_code == 200, candidates.text
+    assert set(candidates.json()["data"]["candidate_scopes"]) >= {
+        "embedding:read", "embedding:write"
+    }
+
+    explicit_grants = sorted(set(root_before["grants"]) | {"embedding:read", "embedding:write"})
+    updated = client.patch(
+        "/api/v1/auth/accounts/admin", headers=auth("admin"), json={"grants": explicit_grants}
+    )
+    assert updated.status_code == 200, updated.text
+    assert {"embedding:read", "embedding:write"} <= set(updated.json()["data"]["effective_scopes"])
+    remaining_candidates = client.get(
+        "/api/v1/auth/accounts/root-scope-candidates", headers=auth("admin")
+    ).json()["data"]["candidate_scopes"]
+    assert not {"embedding:read", "embedding:write"} & set(remaining_candidates)
+
+    child_id = child(
+        client,
+        grants=["desktop:read", "embedding:read", "embedding:write"],
+        actor="admin",
+    )
+    assert {"embedding:read", "embedding:write"} <= scopes(client, child_id)
+    assert client.get(
+        "/api/v1/auth/accounts/root-scope-candidates", headers=auth(child_id)
+    ).status_code == 403
+
+
 def test_tree_inheritance_sibling_boundary_and_live_shrink(accounts):
     client, settings, app = accounts
     uid = child(client)
@@ -160,6 +200,62 @@ def test_tree_inheritance_sibling_boundary_and_live_shrink(accounts):
     assert len(first["data"]) + len(second["data"]) == 4
 
 
+def test_shrunk_parent_scope_does_not_block_name_or_enabled_patch(accounts):
+    client, _, _ = accounts
+    uid = child(
+        client,
+        grants=["desktop:read", "accounts:manage", "xelibrary:read", "xelibrary:write"],
+    )
+    tree = client.get("/api/v1/auth/accounts", headers=auth("admin")).json()["data"]
+    root = next(row for row in tree if row["id"] == "admin")
+    assert "xelibrary:write" in root["grants"]
+
+    revoked = sorted(set(root["grants"]) - {"xelibrary:write"})
+    response = client.patch(
+        "/api/v1/auth/accounts/admin", headers=auth("admin"), json={"grants": revoked}
+    )
+    assert response.status_code == 200, response.text
+
+    child_before = next(
+        row for row in client.get("/api/v1/auth/accounts", headers=auth("admin")).json()["data"]
+        if row["id"] == uid
+    )
+    assert "xelibrary:write" in child_before["grants"]
+    assert "xelibrary:write" not in child_before["effective_scopes"]
+
+    renamed = client.patch(
+        f"/api/v1/auth/accounts/{uid}", headers=auth("admin"), json={"name": "Renamed child"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    disabled = client.patch(
+        f"/api/v1/auth/accounts/{uid}", headers=auth("admin"), json={"enabled": False}
+    )
+    assert disabled.status_code == 200, disabled.text
+    enabled = client.patch(
+        f"/api/v1/auth/accounts/{uid}", headers=auth("admin"), json={"enabled": True}
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    explicit_old_grant = client.patch(
+        f"/api/v1/auth/accounts/{uid}",
+        headers=auth("admin"),
+        json={"grants": ["desktop:read", "xelibrary:read", "xelibrary:write"]},
+    )
+    assert explicit_old_grant.status_code == 403
+    assert explicit_old_grant.json()["error"]["code"] == "PERMISSION_ESCALATION"
+    assert "xelibrary:write" in explicit_old_grant.json()["error"]["message"], (
+        "the refusal must name the exact scope that is not grantable"
+    )
+
+    removed = client.patch(
+        f"/api/v1/auth/accounts/{uid}",
+        headers=auth("admin"),
+        json={"grants": ["desktop:read", "xelibrary:read"]},
+    )
+    assert removed.status_code == 200, removed.text
+    assert "xelibrary:write" not in removed.json()["data"]["grants"]
+
+
 def test_api_key_attenuation_revocation_and_password_fencing(accounts):
     client, settings, app = accounts
     uid = child(client)
@@ -176,6 +272,19 @@ def test_api_key_attenuation_revocation_and_password_fencing(accounts):
     assert created.headers["cache-control"] == "no-store"
     key = created.json()["data"]["token"]
     kid = created.json()["data"]["id"]
+    root_key_result = client.post(
+        "/api/v1/auth/api-keys",
+        headers=auth("admin"),
+        json={"owner": "admin", "name": "root-policy-key", "scopes": ["desktop:admin"]},
+    )
+    assert root_key_result.status_code == 201, root_key_result.text
+    root_key = root_key_result.json()["data"]["token"]
+    resolved_key = app.state.authorization_resolver(root_key)
+    assert resolved_key.scopes == {"desktop:admin"}
+    assert resolved_key.token_scopes is None  # DB key scopes are not verified JWT claims.
+    assert client.get(
+        "/api/v1/auth/accounts/root-scope-candidates", headers=auth(root_key)
+    ).status_code == 403
     assert scopes(client, key) == {"desktop:read"}
     assert (
         client.post(
