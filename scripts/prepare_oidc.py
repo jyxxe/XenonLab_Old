@@ -82,7 +82,7 @@ realm = {
     "ssoSessionMaxLifespan": 28800,
     "offlineSessionIdleTimeout": 2147483647,
     "offlineSessionMaxLifespanEnabled": False,
-    "roles": {"realm": [{"name": "platform-admin"}]},
+    "roles": {"realm": [{"name": "platform-admin"}, {"name": "embedding-admin"}]},
     "users": [
         {
             "username": "admin",
