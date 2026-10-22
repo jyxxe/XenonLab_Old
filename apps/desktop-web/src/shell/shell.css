@@ -232,3 +232,30 @@
 .harness-launch{padding:var(--spacing-4);max-width:640px;display:flex;flex-direction:column;gap:var(--spacing-3)}
 .harness-launch h2{margin:0}
 .harness-launch p{margin:0;color:var(--text-secondary);line-height:1.6}
+
+/* Xenon Panel prompt catalogue: bundled prompt docs, readable on LAN and public origins. */
+.system-prompts{display:flex;flex-direction:column;gap:var(--spacing-3);min-width:0}
+.system-prompts-note{margin:0;padding:var(--spacing-2) var(--spacing-3);border:1px solid var(--border-subtle);border-radius:var(--radius-control);background:var(--surface-sunken);color:var(--text-secondary);font-size:var(--font-size-sm);overflow-wrap:anywhere}
+.system-prompts-layout{display:grid;grid-template-columns:minmax(0,18rem) minmax(0,1fr);gap:var(--spacing-4);align-items:start;min-width:0}
+@media(max-width:900px){.system-prompts-layout{grid-template-columns:minmax(0,1fr)}}
+.system-prompts-list{min-width:0}
+.system-prompts-list h3{margin:0 0 var(--spacing-2);font-size:var(--font-size-sm);color:var(--text-secondary)}
+.system-prompts-list ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--spacing-1);min-width:0}
+.system-prompts-list li{min-width:0}
+.system-prompt-item{display:flex;flex-direction:column;gap:var(--spacing-1);width:100%;min-width:0;margin:0;padding:var(--spacing-2) var(--spacing-3);text-align:left;border:1px solid var(--border-subtle);border-radius:var(--radius-control);background:var(--surface-elevated);color:var(--text-primary);cursor:pointer}
+.system-prompt-item:hover{border-color:var(--border-strong)}
+.system-prompt-item:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.system-prompt-item[aria-current="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.system-prompt-title{font-weight:600;overflow-wrap:anywhere}
+.system-prompt-meta{display:flex;align-items:center;gap:var(--spacing-1);flex-wrap:wrap;min-width:0;color:var(--text-secondary);font-size:var(--font-size-xs)}
+.system-prompt-meta>span:last-child{overflow-wrap:anywhere;min-width:0}
+.system-prompt-summary{color:var(--text-muted);font-size:var(--font-size-sm);overflow-wrap:anywhere}
+.system-prompts-preview{min-width:0;display:flex;flex-direction:column;gap:var(--spacing-2)}
+.system-prompts-preview-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:var(--spacing-2);min-width:0}
+.system-prompts-preview-head>div{min-width:0}
+.system-prompts-preview-head h3{margin:0;font-size:var(--font-size-lg);overflow-wrap:anywhere}
+.system-prompts-preview-head p{margin:var(--spacing-1) 0 0;overflow-wrap:anywhere}
+.system-prompts-actions{display:flex;flex-wrap:wrap;gap:var(--spacing-1)}
+.system-prompt-body{width:100%;min-width:0;max-height:min(60vh,520px);margin:0;padding:var(--spacing-3);overflow:auto;border:1px solid var(--border-subtle);border-radius:var(--radius-control);background:var(--surface-sunken);color:var(--text-primary);font-family:var(--font-mono);font-size:var(--font-size-sm);line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.system-prompt-body:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.system-prompts-status{margin:0;min-height:1.2em}

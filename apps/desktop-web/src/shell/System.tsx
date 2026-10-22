@@ -4,10 +4,12 @@ import {Dashboard} from '../Dashboard';
 import type {AppViewProps} from './types';
 import {workDisplayStatus} from '../work-state';
 import {auditDisplayFields, filterAuditRows} from './audit-filter.js';
+import {agentPrompts, networkLabel, type PromptNetwork} from '../agent-prompts';
 
 const sections = [
   ['overview', '概览'], ['services', '服务'], ['storage', '存储'], ['embedding', 'Embedding'],
   ['hfcache', 'HF Cache'], ['agents', 'Agents'], ['deployments', '部署'], ['network', '网络'], ['audit', '审计'],
+  ['prompts', '提示词'],
 ];
 const statusLabels: Record<string,string> = {queued:'排队',running:'运行中',claimed:'已领取',expired:'领取已过期 · 可重领',completed:'已完成',failed:'失败',blocked:'阻塞'};
 const watermarkLabels: Record<string,string> = {normal:'正常',evict_low_priority:'建议淘汰低优先级',stop_prefetch:'停止预取',retain_protected:'仅保留受保护项'};
@@ -22,6 +24,92 @@ const unavailable: Record<string,[string,string]> = {
   hfcache:['HF Cache 尚未接入桌面','HF Cache 服务使用独立 API；当前桌面没有受控的状态读取入口。'],
   deployments:['部署状态尚未接入桌面','当前桌面没有发布历史 API。部署完成状态由发布协调器确认。'],
 };
+
+function promptNetworkTone(network: PromptNetwork): 'success' | 'warning' {
+  return network === 'lan' ? 'success' : 'warning';
+}
+
+/**
+ * Read-only prompt catalogue. The bodies are bundled at build time, so the panel
+ * never fetches a static docs route and behaves the same on LAN and public origins.
+ * Selecting an entry only changes local state; copy/download stay local as well.
+ */
+function AgentPromptsView() {
+  const [selectedId, setSelectedId] = useState(() => agentPrompts[0]?.id ?? '');
+  const [status, setStatus] = useState('');
+  const listTitleId = useId();
+  const selected = agentPrompts.find(prompt => prompt.id === selectedId) ?? agentPrompts[0];
+
+  useEffect(() => { setStatus(''); }, [selectedId]);
+
+  if (!selected) return <EmptyState title="提示词清单为空" description="docs/agent-prompts/manifest.json 没有可展示的提示词。"/>;
+
+  const copy = async () => {
+    try {
+      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(selected.body);
+      setStatus(`已复制《${selected.title}》全文到剪贴板。`);
+    } catch {
+      setStatus('复制失败：浏览器未提供剪贴板权限，请选中预览文本手动复制。');
+    }
+  };
+
+  const download = () => {
+    try {
+      const blob = new Blob([selected.body], {type: 'text/markdown;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = selected.file;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setStatus(`已开始下载 ${selected.file}。`);
+    } catch {
+      setStatus('下载失败：当前浏览器不支持本地文件下载。');
+    }
+  };
+
+  return <div className="system-prompts">
+    <header className="app-head">
+      <div>
+        <h2>提示词</h2>
+        <p>仓库 docs/agent-prompts 中的 Agent 提示词，随桌面构建打包；内网与公网入口都可读取，不依赖静态文件路由。</p>
+      </div>
+    </header>
+    <p className="system-prompts-note">提示词本身不含任何凭据；凭据只存放在私有 0600 身份文件中，由各 Agent 自行读取。请勿把 token、密码或私钥粘贴到提示词或对话里。</p>
+    <div className="system-prompts-layout">
+      <section className="system-prompts-list" aria-labelledby={listTitleId}>
+        <h3 id={listTitleId}>提示词清单（{agentPrompts.length}）</h3>
+        <ul>
+          {agentPrompts.map(prompt => <li key={prompt.id}>
+            <button type="button" className="system-prompt-item" data-testid="agent-prompt-item" aria-current={selected.id === prompt.id ? 'true' : undefined} onClick={() => setSelectedId(prompt.id)}>
+              <span className="system-prompt-title">{prompt.title}</span>
+              <span className="system-prompt-meta"><Badge tone={promptNetworkTone(prompt.network)}>{networkLabel(prompt.network)}</Badge><span>{prompt.audience}</span></span>
+              <span className="system-prompt-summary">{prompt.summary}</span>
+            </button>
+          </li>)}
+        </ul>
+      </section>
+      <article className="system-prompts-preview" aria-label={`${selected.title} 预览`}>
+        <header className="system-prompts-preview-head">
+          <div>
+            <h3>{selected.title}</h3>
+            <p className="muted">{selected.file} · {selected.audience} · <Badge tone={promptNetworkTone(selected.network)}>{networkLabel(selected.network)}</Badge></p>
+          </div>
+          <div className="system-prompts-actions">
+            <Button data-testid="agent-prompt-copy" onClick={() => { void copy(); }}>复制全文</Button>
+            <Button data-testid="agent-prompt-download" onClick={download}>下载 .md</Button>
+          </div>
+        </header>
+        <pre className="system-prompt-body" data-testid="agent-prompt-preview" tabIndex={0} aria-label={`${selected.title} Markdown 正文`}>{selected.body}</pre>
+        <p className="muted system-prompts-status" role="status" aria-live="polite">{status}</p>
+      </article>
+    </div>
+  </div>;
+}
 
 /** Read-only views use existing same-origin API boundaries; unavailable services are explicit. */
 export function System(props: AppViewProps) {
@@ -103,7 +191,7 @@ export function System(props: AppViewProps) {
       {sections.map(([id,label]) => <button type="button" key={id} aria-current={tab===id ? 'page' : undefined} onClick={() => setTab(id)}>{label}</button>)}
     </nav>
     <section className="system-content" aria-label={`系统${title}`}>
-      {tab === 'overview' ? <Dashboard apiPage={apiPage} openApp={openApp} canOpenTasks={props.apps.some(app=>app.id==='issues')}/> : <>
+      {tab === 'overview' ? <Dashboard apiPage={apiPage} openApp={openApp} canOpenTasks={props.apps.some(app=>app.id==='issues')}/> : tab === 'prompts' ? <AgentPromptsView/> : <>
         <header className="app-head"><div><h2>{title}</h2><p>只展示当前可读取的真实状态</p></div><Button disabled={loading} onClick={() => setTick(value => value+1)}>刷新</Button></header>
         {loading ? <div role="status"><Skeleton height={28}/><Skeleton height={28}/><Skeleton height={28}/></div> : error ? <ErrorState title="状态读取失败" message={error} onRetry={() => setTick(value => value+1)}/> : missing ? <EmptyState title={missing[0]} description={missing[1]}/> : tab==='services' ? <>
           {ready && <p><Badge tone={ready.ready ? 'success' : 'danger'}>{ready.ready ? 'Ready' : 'Unavailable'}</Badge> {ready.service}</p>}
