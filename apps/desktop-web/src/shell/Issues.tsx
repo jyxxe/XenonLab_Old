@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton, StatusDot, Tabs} from '../design-system/primitives';
-import {forgejoBase} from './apps';
+import {forgejoBase, forgejoIssueUrl as issueUrl} from './forgejo-links.js';
 import type {AppViewProps} from './types';
 import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from '../work-state';
 
@@ -32,13 +32,6 @@ const filters = [
   {id: 'blocked', label: '需处理'},
   {id: 'all', label: '全部'},
 ];
-
-function issueUrl(repository: string, issueId: number): string | null {
-  const [owner, repo, ...rest] = repository.split('/');
-  if (rest.length || !owner || !repo || owner === '.' || repo === '.') return null;
-  if (!/^[-A-Za-z0-9_.]+$/.test(owner) || !/^[-A-Za-z0-9_.]+$/.test(repo)) return null;
-  return `${forgejoBase()}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueId}`;
-}
 
 export function Issues({apiPage, notify, windowId}: AppViewProps) {
   const [items, setItems] = useState<WorkItem[]>([]);

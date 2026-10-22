@@ -35,6 +35,7 @@ class StorageUsage:
     guest_total: int
     guest_used: int
     guest_free: int
+    observed_at: str | None = None
 
     @property
     def pressure_percent(self):
@@ -99,7 +100,7 @@ def read_pool_metrics(path, *, expected_pool="aux-10t", owner_validator=None, no
         age = (now - observed.astimezone(timezone.utc)).total_seconds()
         if age < -30 or age > max_age_seconds:
             raise ValueError("storage metrics are stale or from the future")
-        return {"pool": expected_pool, "total": total, "used": used, "free": free}
+        return {"pool": expected_pool, "total": total, "used": used, "free": free, "observed_at": data["observed_at"]}
     except APIError:
         raise
     except Exception:
@@ -380,9 +381,11 @@ def create_app(
                     pool_usage.get("used"),
                     pool_usage.get("free"),
                 )
+                observed_at = pool_usage.get("observed_at")
             else:
                 pool = getattr(pool_usage, "pool", None)
                 total, used, free = pool_usage.total, pool_usage.used, pool_usage.free
+                observed_at = getattr(pool_usage, "observed_at", None)
             if (
                 type(total) is not int
                 or type(used) is not int
@@ -394,6 +397,8 @@ def create_app(
                 or guest_usage.total <= 0
                 or guest_usage.used < 0
                 or guest_usage.free < 0
+                or observed_at is not None
+                and (not isinstance(observed_at, str) or not observed_at)
             ):
                 raise ValueError("invalid storage usage values")
             usage = StorageUsage(
@@ -404,6 +409,7 @@ def create_app(
                 guest_usage.total,
                 guest_usage.used,
                 guest_usage.free,
+                observed_at,
             )
         except Exception:
             raise APIError(
@@ -1023,8 +1029,8 @@ def create_app(
         return response(
             request,
             {
-                "path": str(root),
                 "pool": usage.pool,
+                "sampled_at": usage.observed_at,
                 "pool_total_bytes": usage.pool_total,
                 "pool_used_bytes": usage.pool_used,
                 "pool_free_bytes": usage.pool_free,

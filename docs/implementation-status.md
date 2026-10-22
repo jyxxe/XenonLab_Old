@@ -246,6 +246,12 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
 
+### Issue #94 修复（zcode 本地交付）
+
+公网边缘（`cloudflare-origin.caddy` 站点块）补齐与 LAN `(xeonolab-desktop)` snippet 一致的安全头——`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，并按 Issue 建议的灰度值在两侧同时加 `Strict-Transport-Security "max-age=300"`（公网源站为 HTTP，经 Cloudflare HTTPS 边缘下发后浏览器按 HTTPS 响应生效；max-age 短窗灰度，可后续调大）。
+
+首个增量（PR #106）用共享 `security-headers.caddy` snippet，但 VM101 的激活路径只安装 `infra/network/cloudflare-origin.caddy`，不安装被 import 的兄弟文件与 `xeonolab.caddy`；2026-10-22 的部署因此在 Caddy reload 时报 `File to import not found: security-headers.caddy` 并在激活后自动回滚（生产保持上一版本，未受影响）。随后修订为部署兼容方案：两个文件均内联同样的三条头（不再新增/import 文件），`tests/test_edge_security_headers.py` 改为按大括号作用域提取两个站点块，断言必需头齐全、值精确、两侧集合一致，且禁止 import 激活清单之外的文件。VM101 的 `xeonolab.caddy` 仍为运维手工管理文件（激活不覆盖），由操作者按仓库内容同步。CSP 的完整方案（iframe 应用白名单等）需单独评估，不在本增量内。
+
 ### Issue #116 桌面自定义能力（本地，未发布）
 
 本地分支新增单账户自定义壁纸：`desktop:read` scope 下由 API 使用认证主体隔离，服务端限制 5 MiB/1600 万像素/单帧，解码验证 JPEG、PNG、WebP 后重新编码为 WebP，客户端路径和 MIME 不作为信任依据；API 提供读取、上传和重置。保留账户图片之外的纯色/渐变配置与压暗层，将图片数据留在受限资产 API、不写入偏好 JSON，并兼容旧版 `wallpaper=custom` 图片偏好。桌面组件包含时钟、系统状态、时区日历、按授权 registry 过滤的应用快捷入口、按当前权限显示的工作队列和 XeLibrary 搜索，以及账户偏好中的快速便签。便签显示保存状态并在失焦、pagehide 和组件卸载时尝试 flush；移动组件条适配 390 px 并可用键盘访问。验证覆盖账号隔离、重启持久化、旧偏好兼容、无效/超限图片、背景压暗叠放、工作项状态筛选、权限收缩、便签 pagehide 保存与键盘可用性。
@@ -255,3 +261,11 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 ### Issue #85 修复（zcode 本地交付）
 
 分支 `zcode/issue-85-issues-toolbar`（基于 `754ff27`）：`.ds-tabs` 的 `flex-shrink:0` 使任务页状态筛选条在 390px 视口撑宽 `.issues-app`（实测 scrollWidth 523 > clientWidth 380）并裁切筛选选项。修复限定在 `.issues-toolbar` 作用域：`ds-tabs` 允许 `flex-wrap:wrap;flex-shrink:1;min-width:0`，表格保留自身横向滚动。新增 390×844 合成 fixture 与浏览器验收（app/toolbar 无横向溢出、每个筛选选项完整落在视口内、截图 `runtime/acceptance-artifacts/issue-85-issues-toolbar-390x844.png`）。全前端 45 项测试与构建通过。
+
+### Issue #96 修复（zcode 本地交付）
+
+分支 `zcode/issue-96-blocked-claim`（基于 `754ff27`）：blocked 状态的 work 项不再渲染必然 409 的「领取」按钮，操作列改为「来源冲突 · 不可领取」提示（`work-state.ts` 新增 `isBlockedWorkItem`）；work 浏览器验收新增 blocked 行无按钮断言。全前端 45 项测试与构建通过。
+
+### Issue #93 修复（zcode 本地交付）
+
+分支 `zcode/issue-93-work-active`（基于 `754ff27`）：`GET /api/v1/work` 新增 `?active=true|false` 服务端过滤（SQL 级，游标分页语义不变）并在每行显式返回 `lease_expired` 布尔（claimed 且租约已过期），客户端不再各自实现 `expires > now` 比较；计算列由 SQLite 产出后转回 JSON 布尔以保持既有契约。新增 1 项测试覆盖五种状态的过滤/标记/游标/422（全库 353 项通过），改动文件 Ruff 通过，OpenAPI 导出仅 dev-agent.openapi.json 增加查询参数。
