@@ -29,6 +29,7 @@ const tests = [
   'tests/browser-acceptance-directory-distribution.test.mjs',
   'tests/browser-acceptance-account-filter.test.mjs',
   'tests/browser-acceptance-embedding-table.test.mjs',
+  'tests/browser-acceptance-embedding-queue.test.mjs',
   'tests/browser-acceptance-calendar.test.mjs',
   'tests/browser-acceptance-theorem-gate.test.mjs',
   'tests/browser-acceptance-dashboard-task-entry.test.mjs',

@@ -71,6 +71,82 @@
         }
       }
     },
+    "/api/v1/embedding/queue": {
+      "get": {
+        "summary": "Embedding Queue",
+        "description": "Caller-scoped unfinished requests plus totals for the desktop queue view\n(issue #74). History and counts only ever include the requesting principal;\nthe worker block carries service-level state (configured/busy/revision).",
+        "operationId": "embedding_queue_api_v1_embedding_queue_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/embedding/requests": {
+      "get": {
+        "summary": "Embedding Requests",
+        "description": "Newest-first request history for the calling principal; finished rows\nare retained up to 1000. Requests are never queued for later: a busy\nworker answers 429 directly and there is no waiting/priority scheduling.",
+        "operationId": "embedding_requests_api_v1_embedding_requests_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/embed/models": {
       "get": {
         "summary": "Models",

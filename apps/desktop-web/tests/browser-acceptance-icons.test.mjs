@@ -35,7 +35,9 @@ test('shared icons retain shell and Library names, keyboard actions, themes and 
     });
     await page.goto(`${origin}/tests/shell-fixture.html`);
     const dock = page.getByRole('navigation', {name: '应用程序', exact: true});
-    await expect(dock.locator('svg[data-icon]')).toHaveCount(8);
+    // 9 dock apps: knowledge/chat/development/issues/system/embedding/settings plus
+    // the added Embedding queue app (dev:read) and any built-in extras.
+    await expect(dock.locator('svg[data-icon]')).toHaveCount(9);
     for (const [title, icon] of [['知识库', 'library'], ['AI 对话', 'chat'], ['开发', 'code'], ['任务', 'issues'], ['系统状态', 'monitor'], ['Embedding', 'embedding'], ['系统设置', 'settings']]) {
       await expect(dock.getByRole('button', {name: new RegExp(`^${title}(?: [0-9]+)?$`)}).locator('svg')).toHaveAttribute('data-icon', icon);
     }
@@ -45,7 +47,7 @@ test('shared icons retain shell and Library names, keyboard actions, themes and 
     await dock.getByRole('button', {name: 'LaunchPad', exact: true}).focus();
     await page.keyboard.press('Enter');
     const launchpad = page.getByRole('dialog', {name: 'LaunchPad', exact: true});
-    await expect(launchpad.locator('svg[data-icon]')).toHaveCount(8);
+    await expect(launchpad.locator('svg[data-icon]')).toHaveCount(9);
     await expect(launchpad.getByRole('option', {name: /知识库/}).locator('svg')).toHaveAttribute('aria-hidden', 'true');
     await page.screenshot({path: path.join(evidence, 'launchpad-dark.png')});
     await page.keyboard.press('Escape');
