@@ -55,6 +55,8 @@ export function indexStatusFromServer(status: IndexStatus | null | undefined): {
   pending: number;
   last_job: IndexStatusLastJob | null;
 };
+export const RECENT_VISIBLE_LIMIT: number;
+export function recentListDisplay(recent: unknown, showAll?: boolean): {visible: any[]; expanded: boolean; toggle: boolean; hidden: number; label: string};
 export function mergeRecent(list: any[], entry: any, limit?: number): any[];
 export function libraryPrefsKey(entry: any): string;
 export function mergeServerPrefs(local: any[] | null | undefined, server: any[] | null | undefined, kind: 'recent' | 'favorites', tombstones?: any[]): any[];
