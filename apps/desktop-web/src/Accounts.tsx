@@ -1,5 +1,6 @@
-import React,{useEffect,useState} from 'react';
+import React,{useEffect,useRef,useState} from 'react';
 import {isUnregisteredAccountError} from './api-error.js';
+import {PASSWORD_HINT,USERNAME_HINT,formatCreateAccountError,validateNewAccount} from './account-create.js';
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type Account={id:string;parent:string|null;username:string;name:string;enabled:boolean;inherit_all:boolean;grants:string[];effective_scopes:string[];kind:string};
 const labels:Record<string,string>={'accounts:manage':'管理子账号','desktop:read':'访问桌面','desktop:admin':'管理桌面应用','dev:read':'读取开发任务','dev:write':'更新开发任务','xelibrary:read':'读取知识库','xelibrary:write':'编辑知识库','xelibrary:query':'查询知识库','xelibrary:attach':'管理附件','xelibrary:admin':'管理知识库权限','xelibrary:theorem:read':'读取定理','xelibrary:theorem:propose':'提交定理提案','xelibrary:theorem:promote':'晋升定理','embedding:read':'读取向量','embedding:write':'生成向量','llm:use':'使用模型','deploy:read':'查看发布','deploy:release':'登记发布','deploy:approve':'审批发布','deploy:execute':'执行发布（仍需 Codex 身份）'};
@@ -12,6 +13,8 @@ export function Accounts({api}:{api:API}){
  const [treeState,setTreeState]=useState<'loading'|'unregistered'|'ready'>('loading');
  const [name,setName]=useState(''),[enabled,setEnabled]=useState(true),[inherit,setInherit]=useState(false),[grants,setGrants]=useState<string[]>([]);
  const [parent,setParent]=useState(''),[username,setUsername]=useState(''),[newName,setNewName]=useState(''),[password,setPassword]=useState(''),[newAll,setNewAll]=useState(false),[newScopes,setNewScopes]=useState<string[]>(['desktop:read']);
+ const [createErrors,setCreateErrors]=useState<Partial<Record<'username'|'name'|'password',string>>>({}),[createError,setCreateError]=useState('');
+ const usernameInput=useRef<HTMLInputElement>(null),nameInput=useRef<HTMLInputElement>(null),passwordInput=useRef<HTMLInputElement>(null);
  const [reset,setReset]=useState(''),[keys,setKeys]=useState<any[]>([]),[keyName,setKeyName]=useState(''),[keyScopes,setKeyScopes]=useState<string[]>([]),[secret,setSecret]=useState(''),[audit,setAudit]=useState<any[]>([]);
  const selected=nodes.find(n=>n.id===chosen),parentNode=nodes.find(n=>n.id===parent);
  const treeQuery=treeFilter.trim().toLowerCase();
@@ -55,6 +58,24 @@ export function Accounts({api}:{api:API}){
   await load();
   setMessage('账号已更新');
  }
+ async function submitCreate(){
+  const validation=validateNewAccount({username,name:newName,password});
+  setCreateError('');
+  setCreateErrors(validation.errors);
+  if(validation.firstInvalidField){
+   const inputs={username:usernameInput,name:nameInput,password:passwordInput};
+   inputs[validation.firstInvalidField].current?.focus();
+   return;
+  }
+  await act(async()=>{
+   let created:Account;
+   try{created=await api('/auth/accounts',{method:'POST',body:JSON.stringify({parent_id:parent,username,name:newName,password,inherit_all:newAll,grants:newAll?[]:newScopes})})}
+   catch(error){const formatted=formatCreateAccountError(error);setCreateError(formatted);setMessage(formatted);return}
+   setPassword('');setUsername('');setNewName('');
+   await load(created.id);
+   setMessage('子账号已创建，可使用统一登录入口');
+  });
+ }
  return <section className="account-manager"><h2>账号与 API key</h2><p>子账号的有效权限随父账号变化。API key 只显示一次，撤销后立即停止授权。</p><p role="status">{message}</p>
  {treeState==='loading'&&<p role="status">正在检查账号树状态…</p>}
  {treeState==='unregistered'&&<section className="account-setup" aria-labelledby="account-setup-title"><h3 id="account-setup-title">首次启用账号树</h3><p>当前登录身份尚未登记到受管账号树。初始化会将当前身份登记为根账号，并沿用已验证的现有权限；不会自动启用账号树或增加权限。</p>{me?.kind==='human'&&me?.scopes?.includes('desktop:admin')?<button disabled={busy} onClick={()=>act(async()=>{await api('/auth/accounts/bootstrap',{method:'POST',body:JSON.stringify({name:'管理员'})});await load();setMessage('账号树已启用')})}>初始化我的账号树</button>:<p>请联系具有桌面管理员权限的人工用户完成初始化。此页面不会自动执行此操作。</p>}</section>}
@@ -74,7 +95,20 @@ export function Accounts({api}:{api:API}){
  <h3>API key</h3><div className="key-list">{keys.map(key=><div key={key.id}><span>{key.name} · {key.revoked?'已撤销':key.scopes.map((s:string)=>labels[s]||s).join('、')}<small>创建于 {new Date(key.created*1000).toLocaleString()} · <span title={key.id}>ID …{key.id.slice(-8)}</span></small></span>{!key.revoked&&<button disabled={busy} onClick={()=>act(async()=>{await api('/auth/api-keys/'+key.id,{method:'DELETE'});setKeys(await api('/auth/api-keys?owner='+chosen));setMessage('API key 已撤销')})}>撤销</button>}</div>)}</div>
  <label>新 key 名称<input value={keyName} onChange={e=>setKeyName(e.target.value)}/></label><Scopes available={selected.effective_scopes.filter(s=>me?.scopes?.includes(s))} selected={keyScopes} setSelected={setKeyScopes}/><button disabled={busy||!keyName} onClick={()=>act(async()=>{const key=await api('/auth/api-keys',{method:'POST',body:JSON.stringify({owner:chosen,name:keyName,scopes:keyScopes})});setSecret(key.token);setKeyName('');setKeys(await api('/auth/api-keys?owner='+chosen));setMessage('请保存新 key；关闭后无法再次查看')})}>建立 API key</button>
  {secret&&<div className="one-time-key"><input readOnly aria-label="新 API key（仅显示一次）" value={secret}/><button onClick={()=>act(async()=>{await navigator.clipboard.writeText(secret);setMessage('已复制到剪贴板')})}>复制</button><button onClick={()=>setSecret('')}>已保存，关闭</button></div>}</>}
- {canManage&&<details><summary>建立子账号</summary><label>父账号<select value={parent} onChange={e=>{setParent(e.target.value);setNewScopes(['desktop:read'].filter(s=>nodes.find(n=>n.id===e.target.value)?.effective_scopes.includes(s)))}}>{nodes.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}</select></label><label>登录名<input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="off" placeholder="字母、数字、点、横线，下划线"/></label><label>显示名称<input value={newName} onChange={e=>setNewName(e.target.value)}/></label><label>初始密码<input type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)}/></label><label><input type="checkbox" checked={newAll} onChange={e=>setNewAll(e.target.checked)}/>继承父账号全部权限</label>{!newAll&&<><Scopes available={parentNode?.effective_scopes||[]} locked={rootCandidates} selected={newScopes} setSelected={setNewScopes}/>{rootCandidates.length>0&&<p className="account-locked-hint">灰色的权限由登录角色持有，但根账号尚未采纳，暂时无法授予新子账号；请先用根账号登录，在根账号的权限列表勾选采纳后再创建。</p>}</>}<button disabled={busy||password.length<12||!username||!newName} onClick={()=>act(async()=>{const created=await api('/auth/accounts',{method:'POST',body:JSON.stringify({parent_id:parent,username,name:newName,password,inherit_all:newAll,grants:newAll?[]:newScopes})});setPassword('');setUsername('');setNewName('');await load(created.id);setMessage('子账号已创建，可使用统一登录入口')})}>创建子账号</button></details>}
+ {canManage&&<details><summary>建立子账号</summary>
+  <label>父账号<select value={parent} onChange={e=>{setParent(e.target.value);setNewScopes(['desktop:read'].filter(s=>nodes.find(n=>n.id===e.target.value)?.effective_scopes.includes(s)))}}>{nodes.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}</select></label>
+  <label>登录名<input ref={usernameInput} value={username} onChange={e=>setUsername(e.target.value)} autoComplete="off" placeholder="字母、数字、点、横线，下划线" aria-invalid={!!createErrors.username} aria-describedby={'create-username-hint'+(createErrors.username?' create-username-error':'')}/><small className="muted field-hint" id="create-username-hint">{USERNAME_HINT}</small></label>
+  {createErrors.username&&<p className="field-error" id="create-username-error" role="alert" style={{color:'var(--danger)'}}>{createErrors.username}</p>}
+  <label>显示名称<input ref={nameInput} value={newName} onChange={e=>setNewName(e.target.value)} aria-invalid={!!createErrors.name} aria-describedby={createErrors.name?'create-name-error':undefined}/></label>
+  {createErrors.name&&<p className="field-error" id="create-name-error" role="alert" style={{color:'var(--danger)'}}>{createErrors.name}</p>}
+  <label>初始密码<input ref={passwordInput} type="password" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)} aria-invalid={!!createErrors.password} aria-describedby={'create-password-hint'+(createErrors.password?' create-password-error':'')}/><small className="muted field-hint" id="create-password-hint">{PASSWORD_HINT}</small></label>
+  {createErrors.password&&<p className="field-error" id="create-password-error" role="alert" style={{color:'var(--danger)'}}>{createErrors.password}</p>}
+  <label><input type="checkbox" checked={newAll} onChange={e=>setNewAll(e.target.checked)}/>继承父账号全部权限</label>
+  {!newAll&&<><Scopes available={parentNode?.effective_scopes||[]} locked={rootCandidates} selected={newScopes} setSelected={setNewScopes}/>{rootCandidates.length>0&&<p className="account-locked-hint">灰色的权限由登录角色持有，但根账号尚未采纳，暂时无法授予新子账号；请先用根账号登录，在根账号的权限列表勾选采纳后再创建。</p>}</>}
+  {createError&&<p className="account-create-error" role="alert" style={{color:'var(--danger)'}}>{createError}</p>}
+  <button disabled={busy} onClick={()=>void submitCreate()}>创建子账号</button>
+ </details>}
+
  <details><summary>账号审计</summary><button disabled={busy} onClick={()=>act(async()=>setAudit(await api('/auth/accounts/audit/events')))}>读取最近记录</button><p className="muted">名称与登录名来自当前可见账号树；原始 ID 保留供核对。</p><ul>{audit.map(event=><li key={event.id}>{new Date(event.at*1000).toLocaleString()} · {event.event}<div>操作人：{auditAccount(event.actor)}</div><div>目标：{auditAccount(event.target)}</div></li>)}</ul></details>
  </div></div>}</section>
 }
