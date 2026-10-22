@@ -33,7 +33,7 @@ CHROME_BIN=/usr/bin/google-chrome node --test tests/browser-acceptance-directory
 ```
 
 The actual Dashboard Chrome fixture covers eight equal-sized directories,
-six directories, zero tables, a1000-table truncated sample, arbitrary names
+six directories, zero tables, a 1000-table truncated sample, arbitrary names
 and genuine Other directories, plus long shared-prefix names in a360px
 viewport. It checks every complete hover/accessible name and exact count,
 aggregate count conservation, bar height ratios, no horizontal overflow,
@@ -44,9 +44,28 @@ repository checks despite this frontend-only change.
 
 ## 2026-10-22 final integration onto release base `d78b50e`
 
-The PR was un-drafted after its earlier WIP/CI-failure state and merged with the current release base `d78b50e2b4c1111d96567696084d143d6222e17e`. The only conflict was the browser-regression test list; it was resolved as a union that keeps this change's `browser-acceptance-directory-distribution.test.mjs` and all base tests added since. No product code conflict remained: `Dashboard.tsx`, `MacCharts.tsx`, `directory-distribution.js` and `style.css` auto-merged onto the current base.
+The PR was un-drafted after its earlier WIP/CI-failure state and its branch was integrated onto the current release base `d78b50e2b4c1111d96567696084d143d6222e17e`. The only conflict was the browser-regression test list; it was resolved as a union that keeps this change's `browser-acceptance-directory-distribution.test.mjs` and all base tests added since. No product code conflict remained: `Dashboard.tsx`, `MacCharts.tsx`, `directory-distribution.js` and `style.css` auto-merged onto the current base.
 
 Final integration gates on the merged tree:
 - `tsc --noEmit`: passed; `npm test`: **116 passed** (3 new directory-distribution unit tests); `npm run build`: passed.
 - `CHROME_BIN=... node --test tests/browser-acceptance-directory-distribution.test.mjs`: **8/8 subtests passed, zero page errors** (eight equal-sized directories, six directories, zero tables, 1000-table truncated sample, arbitrary names, genuine `Other` directories, long shared-prefix names at 360px; complete hover/accessible names, aggregate count conservation, bar height ratios, no horizontal overflow, unchanged request paths, no passive navigation).
 - CI `verify / backend`, `verify / frontend` and the protected `devagent/preflight` on the exact integration head are the merge gate; the local Chrome run is coordinator evidence with synthetic data only. No endpoint, permission, persistence, navigation or production dependency change.
+
+## 2026-10-22 CI compatibility fixes after integration head `86dc28b`
+
+The first integrated head failed `verify / frontend` in two pre-existing browser tests
+that consume the same Dashboard markup. Both failures were test/environment adaptations,
+not product regressions:
+
+- `tests/browser-acceptance-shell.test.mjs` asserted the old knowledge chart accessible
+  name format (`示例 1 张表`). The chart now exposes the explicit `目录：示例，1 张表`
+  format required by this change, so the shell acceptance assertion was updated to the
+  new, more precise name. All other shell expectations are unchanged.
+- `tests/browser-acceptance-directory-distribution.test.mjs` asserted the long-name
+  360px legend cell with a fixed pixel height. The CI container and the operator
+  workstation resolve different CJK fallback fonts, so the exact line count legitimately
+  differs. The test now measures the text width actually needed for the cell (with the
+  cell's own computed font) and compares it with the available width, then asserts at
+  least two stable CSS line boxes (line-height is fixed at `20px`) and no vertical
+  clipping. The full-name string equality checks are unchanged, so truncation is still
+  rejected; only the font-dependent height constant was removed.

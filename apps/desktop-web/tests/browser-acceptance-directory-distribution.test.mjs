@@ -71,7 +71,35 @@ test('Dashboard directory chart covers loaded tables with full names and exact r
             }
             assert.equal(await card.locator('.directory-distribution').evaluate(element => element.scrollWidth <= element.clientWidth), true);
             if (mode === 'long') {
-              assert.equal(await entries.first().locator('span').evaluate(element => element.getBoundingClientRect().height > 40 && element.scrollHeight <= element.clientHeight), true);
+              // CI containers and operator workstations resolve different CJK fallback fonts,
+              // so assert wrapping by the CSS line box count and the actually needed text width
+              // instead of one font-dependent pixel height.
+              const longName = await entries.first().locator('span').evaluate(element => {
+                const style = getComputedStyle(element);
+                const probe = document.createElement('span');
+                probe.textContent = element.textContent;
+                probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${style.font};letter-spacing:${style.letterSpacing}`;
+                element.parentElement.appendChild(probe);
+                const probeWidth = probe.getBoundingClientRect().width;
+                probe.remove();
+                return {
+                  text: element.textContent,
+                  height: element.getBoundingClientRect().height,
+                  lineHeight: Number.parseFloat(style.lineHeight),
+                  available: element.clientWidth,
+                  probeWidth,
+                  textOverflow: style.textOverflow,
+                  overflowY: style.overflowY,
+                  scrollHeight: element.scrollHeight,
+                  clientHeight: element.clientHeight,
+                };
+              });
+              assert.ok(longName.text.startsWith('目录：公共课程长期学习项目-'), `long directory name is rendered in full: ${longName.text}`);
+              assert.ok(longName.probeWidth > longName.available, 'long directory name needs more than one line of its column');
+              assert.ok(longName.height >= longName.lineHeight * 2 - 0.5, 'long directory name wraps instead of truncating to a single line');
+              assert.equal(longName.textOverflow, 'clip');
+              assert.equal(longName.overflowY, 'visible');
+              assert.ok(longName.scrollHeight <= longName.clientHeight + 1, 'wrapped long directory name is not clipped vertically');
             }
           }
           assert.equal(await card.getByText('路径统计仅覆盖当前载入的前 1000 张表。').count(), mode === 'truncated' ? 1 : 0);
