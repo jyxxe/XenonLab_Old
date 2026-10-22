@@ -4,6 +4,7 @@ import {Dashboard} from '../Dashboard';
 import type {AppViewProps} from './types';
 import {workDisplayStatus} from '../work-state';
 import {auditDisplayFields, filterAuditRows} from './audit-filter.js';
+import {copyLanEntry, lanEntryState} from '../lan-entry.js';
 import {agentPrompts, networkLabel, type PromptNetwork} from '../agent-prompts';
 
 const sections = [
@@ -126,6 +127,7 @@ export function System(props: AppViewProps) {
   const [storageUnavailable,setStorageUnavailable] = useState(false);
   const generation=useRef(0);
   const [online,setOnline] = useState(navigator.onLine);
+  const [lanMessage,setLanMessage] = useState('');
   const [auditQuery,setAuditQuery] = useState('');
   const auditFilterId = useId();
   const auditInput = useRef<HTMLInputElement>(null);
@@ -196,7 +198,19 @@ export function System(props: AppViewProps) {
         {loading ? <div role="status"><Skeleton height={28}/><Skeleton height={28}/><Skeleton height={28}/></div> : error ? <ErrorState title="状态读取失败" message={error} onRetry={() => setTick(value => value+1)}/> : missing ? <EmptyState title={missing[0]} description={missing[1]}/> : tab==='services' ? <>
           {ready && <p><Badge tone={ready.ready ? 'success' : 'danger'}>{ready.ready ? 'Ready' : 'Unavailable'}</Badge> {ready.service}</p>}
           <p className="muted">此探测只检查桌面服务。XeLibrary、Embedding 和外部应用的健康状态没有统一监控 API，不能据此认为所有服务在线。</p>
-        </> : tab==='network' ? <dl className="dev-meta"><div><dt>浏览器连接提示</dt><dd>{online ? '浏览器报告网络可用' : '浏览器报告离线'}</dd></div><div><dt>当前入口</dt><dd>{location.origin}</dd></div><div><dt>服务端网络与 Tunnel</dt><dd>状态读取尚未接入；浏览器提示不能确认 Tunnel 或上游服务健康。</dd></div></dl> : rowsView ? <>
+        </> : tab==='network' ? (() => {
+          const lan = lanEntryState(location.origin, import.meta.env?.VITE_LAN_ORIGIN);
+          return <dl className="dev-meta">
+            <div><dt>浏览器连接提示</dt><dd>{online ? '浏览器报告网络可用' : '浏览器报告离线'}</dd></div>
+            <div><dt>当前入口</dt><dd>{location.origin}</dd></div>
+            <div className="lan-entry"><dt>内网直连入口</dt><dd>
+              <code data-testid="lan-entry-origin">{lan.origin}</code>
+              <Button size="sm" onClick={() => { void copyLanEntry(lan.origin).then(ok => setLanMessage(ok ? '已复制内网入口地址' : '复制失败：浏览器未提供剪贴板权限，请手动复制')) }}>复制内网入口</Button>
+              <p className="muted" role="status">{lanMessage || lan.hint}</p>
+            </dd></div>
+            <div><dt>服务端网络与 Tunnel</dt><dd>状态读取尚未接入；浏览器提示不能确认 Tunnel 或上游服务健康。</dd></div>
+          </dl>;
+        })() : rowsView ? <>
           {jobView && <p className="muted">索引任务队列不等于模型健康检查；Qwen quality worker 的部署状态没有在此 API 中提供。</p>}
           {tab==='audit' && <>
             <div className="system-audit-filter">

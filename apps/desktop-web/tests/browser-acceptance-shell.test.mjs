@@ -752,6 +752,14 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('hf-cache:read')"),'Storage scope notice without pool numbers');
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='审计').click()");
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('xelibrary:admin')"),'Audit permission denied');
+    await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='网络').click()");
+    const lanEntry = await cdp.evaluate(`(() => {
+      const row=document.querySelector('.lan-entry');
+      return {origin:row?.querySelector('[data-testid=lan-entry-origin]')?.innerText,text:row?.innerText||'',buttons:[...document.querySelectorAll('.lan-entry button')].map(button=>button.innerText)};
+    })()`);
+    assert.equal(lanEntry.origin,'https://192.168.0.101:9443');
+    assert.ok(lanEntry.buttons.includes('复制内网入口'));
+    assert.match(lanEntry.text,/LAN CA/);
     await cdp.evaluate("document.querySelector('.window[data-app-id=system] .bar .close').click()");
 
     // Failed settings writes remain visible and are never labelled saved.

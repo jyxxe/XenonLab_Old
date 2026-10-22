@@ -1,5 +1,6 @@
 interface ImportMetaEnv {
   readonly VITE_CHAT_ORIGIN?: string;
+  readonly VITE_LAN_ORIGIN?: string;
 }
 
 interface ImportMeta {
