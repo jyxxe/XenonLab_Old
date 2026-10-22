@@ -134,3 +134,9 @@ After such a release, the operator must:
 
 The public include is handled by activation; only the LAN include needs this
 manual step.
+
+After syncing the LAN include, also verify that Keycloak still advertises the
+ported issuer (`https://192.168.0.101:9444/realms/xeonolab`), otherwise the
+deploy gateway rejects its own release token with 401. The auth block must use
+`header_up X-Forwarded-Host {http.request.hostport}`; Caddy's `{host}` strips
+the port. See [`oidc-public-issuer.md`](oidc-public-issuer.md#forwarded-host-must-keep-the-port).
