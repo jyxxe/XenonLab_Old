@@ -1,3 +1,5 @@
+import base64
+import binascii
 import fcntl
 import hashlib
 import json
@@ -15,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 
-from fastapi import Depends, Header, Request, UploadFile
+from fastapi import Depends, Header, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -101,6 +103,28 @@ def now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+SORT_CURSOR_PREFIX = "sort1."
+
+
+def encode_rows_sort_cursor(payload):
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return SORT_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_rows_sort_cursor(cursor):
+    if not cursor.startswith(SORT_CURSOR_PREFIX):
+        raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+    encoded = cursor[len(SORT_CURSOR_PREFIX) :]
+    try:
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        payload = json.loads(raw)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed") from None
+    if not isinstance(payload, dict):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+    return payload
+
+
 class Column(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]{0,63}$")
     type: str
@@ -136,6 +160,22 @@ class Restore(BaseModel):
 
 class AttachmentBind(BaseModel):
     attachment_id: str = Field(min_length=1, max_length=64)
+
+
+class AttachmentCandidate(BaseModel):
+    attachment_id: str
+    row_id: str
+    filename: str
+    media_type: str
+    size: int
+    created_at: str
+    metadata: dict
+    source_label: str
+
+
+class AttachmentCandidatePage(BaseModel):
+    data: list[AttachmentCandidate]
+    meta: dict
 
 
 class ACLWrite(BaseModel):
@@ -758,22 +798,122 @@ def create_app(settings=None):
         limit: int = 100,
         cursor: str = "",
         include_deleted: bool = False,
+        sort_by: str | None = Query(default=None, description="Optional schema or system field for table-wide ordering."),
+        direction: str | None = Query(default=None, description="Sort direction: asc or desc; defaults to asc when sort_by is set."),
         actor=Depends(scope("xelibrary:read")),
     ):
+        """List visible rows; sorted cursors are bound to the table, ordering, and deleted-row filter."""
         table, permits = authorize_request(actor, tid, "read")
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
         with table_connect(tid) as db:
-            rows = [
-                decode(r)
-                for r in db.execute(
-                    "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id",
-                    (include_deleted, cursor),
-                )
-                if permits("read", r["_row_id"])
-            ][: limit + 1]
+            if sort_by is None:
+                if direction is not None:
+                    raise APIError(422, "INVALID_SORT", "direction requires sort_by")
+                if cursor.startswith(SORT_CURSOR_PREFIX):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+                query = "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id"
+                raw_rows = db.execute(query, (include_deleted, cursor))
+                rows = []
+                for raw in raw_rows:
+                    if permits("read", raw["_row_id"]):
+                        rows.append(decode(raw))
+                        if len(rows) > limit:
+                            break
+                page = rows[:limit]
+                next_cursor = page[-1]["_row_id"] if len(rows) > limit else None
+                return response(request, page, next_cursor=next_cursor)
+
+            direction = "asc" if direction is None else direction
+            if direction not in {"asc", "desc"}:
+                raise APIError(422, "INVALID_SORT", "direction must be asc or desc")
+            if not sort_by:
+                raise APIError(422, "INVALID_SORT", "sort_by must be a non-empty field name")
+
+            system_sort_expressions = {
+                "_row_id": "_row_id",
+                "_revision": "_revision",
+                "_created_at": "_created_at",
+                "_updated_at": "_updated_at",
+                "_deleted_at": "_deleted_at",
+            }
+            if sort_by in system_sort_expressions:
+                sort_expression = system_sort_expressions[sort_by]
+                sort_parameters = []
+            else:
+                if not any(column["name"] == sort_by for column in columns(db)):
+                    raise APIError(422, "INVALID_SORT", "sort_by must name a schema or supported system field")
+                # Schema field names are constrained by Column.name. Bind the JSON path
+                # as data as well, so it can never become SQL syntax.
+                sort_expression = "json_extract(values_json, ?)"
+                sort_parameters = ['$.' + json.dumps(sort_by, ensure_ascii=False)]
+
+            sort_cursor = None
+            if cursor:
+                sort_cursor = decode_rows_sort_cursor(cursor)
+                expected = {
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                }
+                if any(sort_cursor.get(key) != value for key, value in expected.items()):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested table, sort, or filters")
+                after_row_id = sort_cursor.get("after_row_id")
+                after_value = sort_cursor.get("after_value")
+                if not isinstance(after_row_id, str) or not after_row_id or not (
+                    after_value is None or type(after_value) in {int, float, str}
+                ):
+                    raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+
+            query = f"SELECT * FROM (SELECT data.*, {sort_expression} AS __sort_value FROM data) "
+            query += "WHERE (? OR _deleted_at IS NULL)"
+            parameters = [*sort_parameters, include_deleted]
+            if sort_cursor:
+                after_value = sort_cursor["after_value"]
+                after_row_id = sort_cursor["after_row_id"]
+                if after_value is None:
+                    # SQLite sorts NULL first for ASC and last for DESC. An ASC
+                    # cursor inside the NULL group must still admit every
+                    # non-NULL row that follows it; only DESC NULLs are terminal.
+                    if direction == "asc":
+                        query += " AND ((__sort_value IS NULL AND _row_id>?) OR __sort_value IS NOT NULL)"
+                    else:
+                        query += " AND __sort_value IS NULL AND _row_id>?"
+                    parameters.append(after_row_id)
+                else:
+                    operator = ">" if direction == "asc" else "<"
+                    query += f" AND (__sort_value {operator} ? OR (__sort_value = ? AND _row_id>?)"
+                    parameters.extend((after_value, after_value, after_row_id))
+                    # SQLite puts NULL first for ASC and last for DESC. Only the
+                    # latter can still appear after a non-null cursor value.
+                    if direction == "desc":
+                        query += " OR __sort_value IS NULL"
+                    query += ")"
+            query += f" ORDER BY __sort_value {direction.upper()}, _row_id ASC"
+            rows = []
+            for raw in db.execute(query, parameters):
+                if permits("read", raw["_row_id"]):
+                    rows.append((decode(raw), raw["__sort_value"]))
+                    if len(rows) > limit:
+                        break
+
+            page = [row for row, _ in rows[:limit]]
+            next_cursor = None
+            if len(rows) > limit:
+                last_row, last_value = rows[limit - 1]
+                next_cursor = encode_rows_sort_cursor({
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                    "after_value": last_value,
+                    "after_row_id": last_row["_row_id"],
+                })
         return response(
-            request, rows[:limit], next_cursor=rows[limit - 1]["_row_id"] if len(rows) > limit else None
+            request, page, next_cursor=next_cursor
         )
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}")
@@ -1172,6 +1312,84 @@ def create_app(settings=None):
         table_connect=table_connect,
     )
     recover_table_deletions()
+
+    @app.get("/api/v1/tables/{tid}/attachments", response_model=AttachmentCandidatePage, description=(
+        "List same-table attachment metadata for currently readable, live source rows. "
+        "Requires xelibrary:read and table/row ACL. UUID keyset cursor is bound to table "
+        "and normalized search, not authority; every page checks current identity/ACL. "
+        "At most 500 references are examined per page; empty pages may have next_cursor. "
+        "Search is a casefolded substring of filename or displayed source_label. "
+        "No content, object hash, row values, preview or total count is returned."
+    ))
+    def list_table_attachments(
+        tid: str,
+        request: Request,
+        limit: int = Query(default=25, ge=1, le=100),
+        q: str = Query(default="", max_length=200),
+        cursor: str = Query(default="", max_length=2048),
+        actor=Depends(scope("xelibrary:read")),
+    ):
+        _, permits = authorize_request(actor, tid, "read")
+        query = q.strip().casefold()
+        after = ""
+        if cursor:
+            try:
+                decoded = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+                if not isinstance(decoded, dict) or set(decoded) != {"v", "table", "q", "after"}:
+                    raise ValueError
+                after = decoded["after"]
+                if (type(decoded["v"]) is not int or decoded["v"] != 1 or decoded["table"] != tid or decoded["q"] != query
+                        or not isinstance(after, str) or str(UUID(after)) != after):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError, binascii.Error):
+                raise APIError(422, "INVALID_CURSOR", "invalid attachment list cursor") from None
+        visible = []
+        last = after
+        more = False
+        with table_connect(tid) as db:
+            schema = columns(db)
+            names = [c["name"] for c in schema if c["type"] in ("string", "text")]
+            names = [name for name in ("title", "name") if name in names] + [
+                name for name in names if name not in ("title", "name")
+            ]
+            rows = db.execute(
+                "SELECT a.*,d._row_id AS source_row_id,d._deleted_at FROM __xl_attachments a LEFT JOIN data d ON d._row_id=a.row_id "
+                "WHERE a.attachment_id>? "
+                "ORDER BY a.attachment_id LIMIT 501", (after,)
+            ).fetchall()
+            # References can share a large source row; retain only its bounded label,
+            # and never load its values before checking the current read permission.
+            labels = {}
+            for attachment in rows[:500]:
+                if (attachment["source_row_id"] is not None and not attachment["_deleted_at"]
+                        and permits("read", attachment["row_id"])):
+                    source = attachment["row_id"]
+                    if source not in labels:
+                        row = db.execute(
+                            "SELECT values_json FROM data WHERE _row_id=? "
+                            "AND (_deleted_at IS NULL OR _deleted_at='')", (source,)
+                        ).fetchone()
+                        labels[source] = None
+                        if row is not None and row["values_json"] is not None:
+                            values = json.loads(row["values_json"])
+                            labels[source] = next((values[name].strip()[:256] for name in names
+                                                   if isinstance(values.get(name), str) and values[name].strip()), source)
+                    label = labels[source]
+                    if label is not None and (not query or query in attachment["filename"].casefold()
+                                              or query in label.casefold()):
+                        if len(visible) == limit:
+                            more = True
+                            break
+                        # Only the readable row's label is exposed, never its other values.
+                        visible.append({**attachment_metadata(attachment), "source_label": label})
+                last = attachment["attachment_id"]
+            more = more or len(rows) > 500
+        next_cursor = None
+        if more:
+            next_cursor = base64.urlsafe_b64encode(json.dumps({
+                "v": 1, "table": tid, "q": query, "after": last
+            }, separators=(",", ":"), ensure_ascii=False).encode()).decode()
+        return response(request, visible, next_cursor=next_cursor)
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
     def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
