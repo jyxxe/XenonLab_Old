@@ -168,10 +168,15 @@
 .ring-label{fill:var(--text-muted);font-size:11px}
 .card-split{display:flex;align-items:center;gap:var(--spacing-4);justify-content:space-between}
 .mac-bars{display:flex;align-items:flex-end;gap:var(--spacing-3);padding:4px 2px 0}
-.mac-bar{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
+.mac-bar{flex:1;min-width:0;height:100%;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
 .mac-plot{width:100%;flex:1;display:flex;align-items:flex-end;justify-content:center;padding:3px;background:var(--control);border-radius:10px;overflow:hidden}
 .mac-plot i{width:58%;min-height:4px;border-radius:7px 7px 3px 3px}
 .mac-bar span{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:var(--font-size-xs)}
+.directory-legend{display:grid;gap:var(--spacing-2);margin:var(--spacing-3) 0 0;padding:0;list-style:none;font-size:var(--font-size-sm)}
+.directory-legend li{display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:var(--spacing-2);align-items:start;min-width:0}
+.directory-legend b{display:grid;place-items:center;height:20px;border-radius:var(--radius-control);border-bottom:3px solid;background:var(--surface-sunken);color:var(--text-primary);font-size:var(--font-size-xs)}
+.directory-legend span{overflow-wrap:anywhere;line-height:20px}
+.directory-legend em{font-style:normal;color:var(--text-secondary);line-height:20px;white-space:nowrap}
 .job-list{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
 .job-list li{display:flex;align-items:center;gap:var(--spacing-2);font-size:var(--font-size-sm)}
 .job-table{margin-right:auto;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)}

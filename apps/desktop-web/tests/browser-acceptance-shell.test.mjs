@@ -698,7 +698,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
       return {text:card?.innerText,chart:card?.querySelector('.mac-bars')?.getAttribute('aria-label'),requests:window.shellFixture.calls.filter(call=>call.path.startsWith('/tables?')).map(call=>call.path)};
     })()`);
     assert.match(knowledgeOverview.text,/1 张表/);
-    assert.match(knowledgeOverview.chart,/示例 1 张表/);
+    assert.match(knowledgeOverview.chart,/目录：示例，1 张表/);
     assert.ok(knowledgeOverview.requests.includes('/tables?limit=1000'));
     await cdp.evaluate('window.shellFixture.control.delayTables=true');
     await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText==='刷新').click()");

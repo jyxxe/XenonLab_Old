@@ -26,6 +26,7 @@ const tests = [
   'tests/browser-acceptance-search-return.test.mjs',
   'tests/browser-acceptance-session-cache.test.mjs',
   'tests/browser-acceptance-account-patch.test.mjs',
+  'tests/browser-acceptance-directory-distribution.test.mjs',
   'tests/browser-acceptance-account-filter.test.mjs',
   'tests/browser-acceptance-embedding-table.test.mjs',
   'tests/browser-acceptance-calendar.test.mjs',
