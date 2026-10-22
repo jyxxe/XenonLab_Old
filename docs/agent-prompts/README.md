@@ -10,9 +10,9 @@
 
 | id | 文件 | 适用 Agent | 网络 | 核心职责 |
 |---|---|---|---|---|
-| `codex` | `codex.md` | Codex 协调器 | LAN | 工作租约、验收、远端写入、PR；release → approval → 排他租约 → 固定 executor 发布与证据 |
+| `codex` | `codex.md` | Codex 开发 Agent | LAN | 本地实现、立回归与验证；用自己的账号推分支/开 PR；不合并、不发布 |
 | `dsh` | `dsh.md` | DeepSeek Harness 维护 / 发布 Agent（`devagent-maintainer`） | LAN | `devctl` 评审、合并门禁、部署、终态核实；publication 证据写入 `maintainer.sqlite` 与 `admin-runlog.md` |
-| `opencode` | `opencode.md` | OpenCode 开发 Harness | LAN | 本地实现与回归；写入请求 / 交付报告交协调器；不自动合并或发布 |
+| `opencode` | `opencode.md` | OpenCode 开发 Harness | LAN | 本地实现与回归；用自己账号推分支/开 PR；由维护者合并与发布 |
 | `general-agent-lan` | `general-agent-lan.md` | 通用 Bug 搜寻 / Issue 处理 Agent（内网） | LAN | 直连 `192.168.0.x` 与 LAN CA；Work 认领、合成 fixture 复现、回归测试、附证据 PR |
 | `general-agent-wan` | `general-agent-wan.md` | 通用 Bug 搜寻 / Issue 处理 Agent（外网） | WAN | 只用公网域名与公共 CA；经 Forgejo REST 提交 Issue/分支/PR；请求维护者合并与发布 |
 
@@ -56,7 +56,7 @@
 | Forgejo | `https://192.168.0.101:9445/dev/` | `https://xenon.jyxxe.com/dev/` |
 | OIDC issuer | `https://192.168.0.101:9444/realms/xeonolab` | `https://xenon.jyxxe.com/auth/realms/xeonolab` |
 | 工具面 | 可只读诊断、可使用内网服务 API | 无内网诊断、无 `devctl`、无生产 SSH |
-| 写入方式 | 默认交协调器；授权后可用自己账号 | 自己账号经 Forgejo REST 提交 |
+| 写入方式 | 自己的 Forgejo 账号直连 LAN REST | 自己的 Forgejo 账号经公网入口提交 |
 | 合并 / 发布 | 维护者门禁 | 请求维护者执行，本人不合并不发布 |
 
 两份通用提示词（`general-agent-lan.md` / `general-agent-wan.md`）内容必须保持实质差异，不能互相复制后只改网络地址。

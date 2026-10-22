@@ -94,3 +94,18 @@ test('agent-prompts module imports the manifest and all five bodies with Vite ?r
     assert.match(source, new RegExp(`docs/agent-prompts/${id}\\.md\\?raw`), `${id}.md is imported with ?raw`);
   }
 });
+
+
+
+test('the codex prompt is a development agent, not a coordinator', async () => {
+  const manifest = await readManifest();
+  const codex = manifest.prompts.find(prompt => prompt.id === 'codex');
+  assert.ok(codex);
+  assert.equal(codex.title, 'Codex 开发 Agent 提示词');
+  assert.match(await readBody('codex.md'), /普通开发 Agent/);
+  for (const prompt of manifest.prompts) {
+    const text = await readBody(prompt.file);
+    assert.doesNotMatch(text, /Codex 协调器/, `${prompt.file} must not describe a Codex coordinator`);
+    assert.doesNotMatch(text, /交协调器/, `${prompt.file} must not delegate remote writes to a coordinator`);
+  }
+});

@@ -5,11 +5,11 @@
   "prompts": [
     {
       "id": "codex",
-      "title": "Codex 协调器提示词",
-      "audience": "Codex 协调器（工作租约、验收、远端写入、生产发布）",
+      "title": "Codex 开发 Agent 提示词",
+      "audience": "Codex 开发 Agent（本地实现、回归验证、PR）",
       "network": "lan",
       "file": "codex.md",
-      "summary": "协调器职责：Work 租约与验收、代为执行远端写入、PR 创建；release → 独立审批 → 排他租约 → 固定 executor 发布，发布后核实 5 目标 / 7 readiness / 网关并记录证据，不直接 SSH 生产。"
+      "summary": "普通开发 Agent：读取 Issue/PR 现状、从发布分支新建 worktree、做最小范围实现并跑本地门禁；用自己账号推分支/开 PR 并回复证据；不合并、不发布、不审批。"
     },
     {
       "id": "dsh",
@@ -25,7 +25,7 @@
       "audience": "OpenCode 开发 Harness（本地实现与回归）",
       "network": "lan",
       "file": "opencode.md",
-      "summary": "用自己私有身份文件中的 OIDC client_credentials 与 Forgejo 账号做本地实现与回归验证；写入请求 / 交付报告交协调器，默认不自合并、不发布、不关闭 Issue。"
+      "summary": "用自己私有身份文件中的 Forgejo 账号做本地实现与回归验证；自己推分支/开 PR 并回复证据；默认不自合并、不发布、不关闭 Issue。"
     },
     {
       "id": "general-agent-lan",
