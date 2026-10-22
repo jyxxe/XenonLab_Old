@@ -12,7 +12,8 @@ const row = (name, index) => ({id: `table-${index}`, name: `Synthetic ${index}`,
 let tables = names.map(row);
 if (mode === 'six') tables = names.slice(0, 6).map(row);
 if (mode === 'zero') tables = [];
-if (mode === 'long') tables = names.slice(0, 6).map((name, index) => row(`公共课程长期学习项目-${name}-${'知识基础'.repeat(8)}`, index));
+if (mode === 'long') tables = names.slice(0, 5).map((name, index) => row(`公共课程长期学习项目-${name}-${'知识基础'.repeat(8)}`, index))
+  .concat([row('公共课程长期学习项目-artificial-intelligence-and-machine-learning-foundations-deep-learning-transformer-architecture-notes', 5)]);
 if (mode === 'truncated') tables = Array.from({length: 1000}, (_, index) => row(names[index % names.length], index));
 if (mode === 'arbitrary') tables = ['Other', '其他', '其他（汇总）', '__proto__', 'constructor', 'toString', 'x', 'y']
   .flatMap((name, index) => Array.from({length: index < 3 ? 10 - index : 1}, (_, count) => row(name, `${index}-${count}`)));

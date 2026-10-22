@@ -6,6 +6,32 @@ import {fileURLToPath} from 'node:url';
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 
+// Measure a legend cell with its own computed font: how wide the text would be on
+// one line, how many stable CSS line boxes it currently occupies, and whether any
+// of it is clipped. This stays valid when font fallbacks change between environments.
+const measureLegendCell = element => {
+  const style = getComputedStyle(element);
+  const probe = document.createElement('span');
+  probe.textContent = element.textContent;
+  probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${style.font};letter-spacing:${style.letterSpacing}`;
+  element.parentElement.appendChild(probe);
+  const probeWidth = probe.getBoundingClientRect().width;
+  probe.remove();
+  return {
+    text: element.textContent,
+    height: element.getBoundingClientRect().height,
+    lineHeight: Number.parseFloat(style.lineHeight),
+    available: element.clientWidth,
+    probeWidth,
+    overflowWrap: style.overflowWrap,
+    overflowY: style.overflowY,
+    textOverflow: style.textOverflow,
+    whiteSpace: style.whiteSpace,
+    scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight,
+  };
+};
+
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('Dashboard directory chart covers loaded tables with full names and exact remainder', async t => {
@@ -71,35 +97,27 @@ test('Dashboard directory chart covers loaded tables with full names and exact r
             }
             assert.equal(await card.locator('.directory-distribution').evaluate(element => element.scrollWidth <= element.clientWidth), true);
             if (mode === 'long') {
-              // CI containers and operator workstations resolve different CJK fallback fonts,
-              // so assert wrapping by the CSS line box count and the actually needed text width
-              // instead of one font-dependent pixel height.
-              const longName = await entries.first().locator('span').evaluate(element => {
-                const style = getComputedStyle(element);
-                const probe = document.createElement('span');
-                probe.textContent = element.textContent;
-                probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:${style.font};letter-spacing:${style.letterSpacing}`;
-                element.parentElement.appendChild(probe);
-                const probeWidth = probe.getBoundingClientRect().width;
-                probe.remove();
-                return {
-                  text: element.textContent,
-                  height: element.getBoundingClientRect().height,
-                  lineHeight: Number.parseFloat(style.lineHeight),
-                  available: element.clientWidth,
-                  probeWidth,
-                  textOverflow: style.textOverflow,
-                  overflowY: style.overflowY,
-                  scrollHeight: element.scrollHeight,
-                  clientHeight: element.clientHeight,
-                };
-              });
-              assert.ok(longName.text.startsWith('目录：公共课程长期学习项目-'), `long directory name is rendered in full: ${longName.text}`);
-              assert.ok(longName.probeWidth > longName.available, 'long directory name needs more than one line of its column');
-              assert.ok(longName.height >= longName.lineHeight * 2 - 0.5, 'long directory name wraps instead of truncating to a single line');
-              assert.equal(longName.textOverflow, 'clip');
-              assert.equal(longName.overflowY, 'visible');
-              assert.ok(longName.scrollHeight <= longName.clientHeight + 1, 'wrapped long directory name is not clipped vertically');
+              // The fixture keeps five long CJK-prefixed names and one long ASCII name.
+              // ASCII fallback fonts exist in every CI image, so the ASCII entry proves the
+              // wrap/no-truncate mechanism at 360px without depending on CJK font coverage;
+              // the CJK names are covered by the full-text equality checks above.
+              const asciiName = await entries.first().locator('span').evaluate(measureLegendCell);
+              const cjkName = await entries.filter({hasText: '知识基础'}).first().locator('span').evaluate(measureLegendCell);
+              console.log(`[directory-distribution long-360] ${JSON.stringify({asciiName, cjkName})}`);
+              assert.ok(asciiName.text.startsWith('目录：公共课程长期学习项目-artificial-intelligence'), `long directory name is rendered in full: ${asciiName.text}`);
+              assert.equal(asciiName.overflowWrap, 'anywhere');
+              assert.equal(asciiName.whiteSpace, 'normal');
+              assert.equal(asciiName.textOverflow, 'clip');
+              assert.equal(asciiName.overflowY, 'visible');
+              assert.ok(asciiName.probeWidth > asciiName.available, 'long directory name needs more than one line of its column');
+              assert.ok(asciiName.height >= asciiName.lineHeight * 2 - 0.5, 'long directory name wraps instead of truncating to a single line');
+              assert.ok(asciiName.scrollHeight <= asciiName.clientHeight + 1, 'wrapped long directory name is not clipped vertically');
+              assert.ok(cjkName.text.includes('知识基础'), 'long CJK directory name is rendered in full');
+              assert.equal(cjkName.textOverflow, 'clip');
+              assert.equal(cjkName.overflowWrap, 'anywhere');
+              assert.ok(cjkName.scrollHeight <= cjkName.clientHeight + 1, 'long CJK directory name is not clipped vertically');
+              const legendTexts = await entries.locator('span').allTextContents();
+              assert.ok(legendTexts.every(text => text.startsWith('目录：')), 'every legend entry keeps an explicit directory prefix');
             }
           }
           assert.equal(await card.getByText('路径统计仅覆盖当前载入的前 1000 张表。').count(), mode === 'truncated' ? 1 : 0);

@@ -62,10 +62,14 @@ not product regressions:
   format required by this change, so the shell acceptance assertion was updated to the
   new, more precise name. All other shell expectations are unchanged.
 - `tests/browser-acceptance-directory-distribution.test.mjs` asserted the long-name
-  360px legend cell with a fixed pixel height. The CI container and the operator
-  workstation resolve different CJK fallback fonts, so the exact line count legitimately
-  differs. The test now measures the text width actually needed for the cell (with the
-  cell's own computed font) and compares it with the available width, then asserts at
-  least two stable CSS line boxes (line-height is fixed at `20px`) and no vertical
-  clipping. The full-name string equality checks are unchanged, so truncation is still
-  rejected; only the font-dependent height constant was removed.
+  360px legend cell with a fixed pixel height. The CI job container resolves CJK text
+  differently from the operator workstation (the runner image only installs Latin
+  fallback fonts), so CJK glyph advance and hence the exact line count are not stable
+  between environments. The long fixture now keeps five long CJK-prefixed names plus one
+  long ASCII name; the ASCII name proves the wrap/no-truncate mechanism in every font
+  environment, while the CJK names keep their full-text equality checks. The test
+  measures the text width the long cell actually needs with its own computed font,
+  asserts at least two stable CSS line boxes (line-height is fixed at `20px`), no vertical
+  clipping and the wrapping CSS properties (`overflow-wrap: anywhere`, `white-space:
+  normal`, `text-overflow: clip`). It also logs the measured ASCII and CJK cell metrics
+  for CI diagnostics.
