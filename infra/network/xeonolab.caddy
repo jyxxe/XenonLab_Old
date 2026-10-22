@@ -33,6 +33,9 @@
   }
 }
 https://xenon.lan, https://192.168.0.101:9443 {
+  handle /harness* {
+    reverse_proxy 192.168.0.111:4097
+  }
   import xeonolab-desktop
 }
 https://library.xenon.lan {

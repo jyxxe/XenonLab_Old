@@ -45,7 +45,7 @@ test('shared icons retain shell and Library names, keyboard actions, themes and 
     await dock.getByRole('button', {name: 'LaunchPad', exact: true}).focus();
     await page.keyboard.press('Enter');
     const launchpad = page.getByRole('dialog', {name: 'LaunchPad', exact: true});
-    await expect(launchpad.locator('svg[data-icon]')).toHaveCount(7);
+    await expect(launchpad.locator('svg[data-icon]')).toHaveCount(8);
     await expect(launchpad.getByRole('option', {name: /知识库/}).locator('svg')).toHaveAttribute('aria-hidden', 'true');
     await page.screenshot({path: path.join(evidence, 'launchpad-dark.png')});
     await page.keyboard.press('Escape');
