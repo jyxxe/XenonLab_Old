@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {APIRequestError, apiErrorFromResponse, isUnregisteredAccountError} from '../src/api-error.js';
+import {APIRequestError, apiErrorFromResponse, isUnregisteredAccountError, readableErrorMessage} from '../src/api-error.js';
 import {describeError} from '../src/library/logic.js';
 
 test('API errors keep server request IDs distinct from semantic error codes', () => {
@@ -35,4 +35,16 @@ test('missing request IDs are never invented; existing account classification st
   assert.equal(describeError(error).requestId, undefined);
   assert.equal(isUnregisteredAccountError(error), true);
   assert.equal(describeError(new APIRequestError('network', 0, 'NETWORK_ERROR')).requestId, undefined);
+});
+
+
+test('readableErrorMessage never exposes the internal class name', () => {
+  const error = new APIRequestError('invalid preference or timezone', 422, 'INVALID_PREFERENCES');
+  assert.equal(readableErrorMessage(error), 'invalid preference or timezone');
+  assert.equal(readableErrorMessage(new Error('plain failure')), 'plain failure');
+  assert.equal(readableErrorMessage('text failure'), 'text failure');
+  assert.equal(readableErrorMessage(undefined), '请稍后重试');
+  assert.equal(readableErrorMessage({}), '请稍后重试');
+  assert.equal(readableErrorMessage({message: '   '}), '请稍后重试');
+  assert.ok(!readableErrorMessage(error).includes('APIRequestError'));
 });

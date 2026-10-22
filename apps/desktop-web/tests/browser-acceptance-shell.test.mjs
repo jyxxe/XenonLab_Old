@@ -483,8 +483,11 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('日历')).querySelector('input').click()");
     await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('应用快捷入口')).querySelector('input').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.widget-calendar')&&document.querySelector('.widget-shortcuts'))"), 'calendar and app shortcut widgets');
+    // The 12-item shortcut cap is visible and counted instead of replacing silently.
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=shortcut-limit-hint]')?.innerText.includes('已选 0/12')"), 'shortcut limit hint shows the empty count');
     await cdp.evaluate("[...document.querySelectorAll('.widget-shortcut-options label')].find(label=>label.innerText.includes('知识库')).querySelector('input').click()");
     await waitFor(() => cdp.evaluate("window.shellFixture.preferences.shortcut_apps.includes('knowledge')"), 'authorized app shortcut saved');
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=shortcut-limit-hint]')?.innerText.includes('已选 1/12')"), 'shortcut limit hint updates with the selection');
     assert.match(await cdp.evaluate("document.querySelector('.widget-calendar').getAttribute('aria-label')"), /日历/);
     await cdp.evaluate("document.querySelector('.widget-shortcuts button[aria-label=\"打开知识库\"]').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), 'authorized app opened from shortcut widget');
