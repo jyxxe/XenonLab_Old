@@ -550,6 +550,16 @@
               "type": "string",
               "title": "Rid"
             }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Deleted"
+            }
           }
         ],
         "responses": {

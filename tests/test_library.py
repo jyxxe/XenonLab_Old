@@ -537,6 +537,26 @@ def test_deleted_rows_are_opt_in_and_still_acl_checked(library):
     assert [row["_row_id"] for row in visible.json()["data"]] == [rid]
 
 
+
+def test_deleted_row_detail_is_opt_in_and_preserves_read_acl(library):
+    tid, rid = seed(library)
+    path = f"/api/v1/tables/{tid}/rows/{rid}"
+    assert library.delete(path, headers=auth(**{"If-Match": '"revision:1"'})).status_code == 200
+    assert library.get(path, headers=auth()).status_code == 404
+    assert library.get(path + "?include_deleted=false", headers=auth()).status_code == 404
+    detail = library.get(path + "?include_deleted=true", headers=auth())
+    assert detail.status_code == 200
+    assert detail.json()["data"]["_deleted_at"]
+    assert detail.json()["data"]["_revision"] == 2
+    assert detail.headers["etag"] == '"revision:2"'
+    assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{rid}", {}).status_code == 200
+    assert library.get(path + "?include_deleted=true", headers=auth("bob")).status_code == 403
+    assert put_acl(library, "row", f"{tid}:{rid}", {"bob": ["read"]}).status_code == 200
+    assert library.get(path + "?include_deleted=true", headers=auth("bob")).status_code == 200
+    missing = f"/api/v1/tables/{tid}/rows/{uuid4()}?include_deleted=true"
+    assert library.get(missing, headers=auth("bob")).status_code == 404
+
 def test_table_rows_sort_across_cursor_pages_with_stable_ties(library):
     table = library.post(
         "/api/v1/tables",

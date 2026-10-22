@@ -88,6 +88,7 @@ export function buildSelectionPrompt(
   question?: string,
 ): string;
 
+export function loadedDeletedRow(rows: Row[] | undefined, rowId: string): Row | null;
 export function retainRefreshedRow(rows: Row[], retainedRow?: Row): Row[];
 export function orderedColumns(columns: Column[], preference: unknown): Column[];
 export function moveColumn(columns: Column[], preference: unknown, name: string, direction: number): string[];

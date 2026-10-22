@@ -546,6 +546,12 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
   return lines.join('\n');
 }
 
+// Only a deleted row actually returned by the current authenticated include_deleted page
+// replaces the default detail read. Active/unloaded rows retain their existing read path.
+export function loadedDeletedRow(rows, rowId) {
+  return rows?.find(row => row._row_id === rowId && row._deleted_at) || null;
+}
+
 // Keep the precise mutation result when refreshing only the first page. A newer
 // server page containing the same row takes precedence over the retained value.
 export function retainRefreshedRow(rows, retainedRow) {

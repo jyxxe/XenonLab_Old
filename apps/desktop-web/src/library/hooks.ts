@@ -140,6 +140,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
         setRows(page.data as Row[]);
         setCursor((page.meta.next_cursor as string) || null);
         setTable({...next, ...schema});
+        return page.data as Row[];
       } catch (cause) {
         if (view.current === request) setError(cause);
       } finally {

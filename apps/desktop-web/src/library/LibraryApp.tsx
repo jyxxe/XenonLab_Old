@@ -1,4 +1,5 @@
 import {normalizeColumnDefaults, stringifyExactJSON} from './json.js';
+import {APIRequestError} from '../api-error.js';
 import React, {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {Badge, Button, Checkbox, ErrorState, Input, Modal, Select, Spinner} from '../design-system/primitives';
 import {SchemaEditor, type Column} from '../SchemaEditor';
@@ -16,7 +17,7 @@ import {NewTableDialog} from './NewTableDialog';
 import {AskAIDialog} from './AskAIDialog';
 import {useCatalogue, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {createRequestLifetime} from './request-lifetime.js';
-import {ancestorPaths, changedFields, classifySchemaChange, describeError, filterRows, rowSelectionRange, sortRows} from './logic.js';
+import {ancestorPaths, changedFields, classifySchemaChange, describeError, filterRows, loadedDeletedRow, rowSelectionRange, sortRows} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
 type LibraryAppProps = {
@@ -93,6 +94,9 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const rowNavigation = useRef(0);
+  const rowOwner = useRef({api, authEpoch, subject});
+  rowOwner.current = {api, authEpoch, subject};
+  useEffect(() => () => { ++rowNavigation.current; }, []);
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
   const content = useRef<HTMLElement>(null);
   const searchReturn = useRef<{version: number; top: number} | null>(null);
@@ -200,18 +204,23 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   async function openRow(tableId: string, rowId: string, remember = true, fromSearch = false) {
     if (!fromSearch) searchReturn.current = null;
     const request = ++rowNavigation.current;
+    const owner = rowOwner.current;
+    const current = () => request === rowNavigation.current && owner.api === rowOwner.current.api && owner.authEpoch === rowOwner.current.authEpoch && owner.subject === rowOwner.current.subject;
     setTableTarget(null);
     const known = catalogue.tables.find(item => item.id === tableId) || (await api(`/tables/${tableId}`).catch(() => null));
-    if (request !== rowNavigation.current) return;
+    if (!current()) return;
     if (!known) {
       setNotice({tone: 'danger', message: '无法定位该记录所属的知识表。'});
       return;
     }
     setView('library');
-    await session.open(known, true);
-    if (request !== rowNavigation.current) return;
-    const row: Row | null = await api(`/tables/${tableId}/rows/${rowId}`).catch(() => null);
-    if (request !== rowNavigation.current) return;
+    const loadedRows = await session.open(known, true);
+    if (!current()) return;
+    const row: Row | null = loadedDeletedRow(loadedRows, rowId) || await api(`/tables/${tableId}/rows/${rowId}`).catch(async error => {
+      if (!current() || !(error instanceof APIRequestError) || error.code !== 'XL_ROW_NOT_FOUND') return null;
+      return api(`/tables/${tableId}/rows/${rowId}?include_deleted=true`).catch(() => null);
+    });
+    if (!current()) return;
     if (!row) {
       setNotice({tone: 'danger', message: '记录不存在，或当前身份没有读取权限。'});
       return;
