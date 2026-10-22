@@ -40,6 +40,14 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080 {
       header_up X-Forwarded-Host {host}
     }
   }
+
+  # DeepSeek Harness launcher (LAN-only target). The launcher and the Harness UI
+  # stay on the lab intranet; a remote public visitor cannot complete the
+  # LAN-only second hop, while a same-intranet browser on the public desktop can.
+  @harness path /harness*
+  handle @harness {
+    reverse_proxy 192.168.0.111:4097
+  }
   @embedding_api path /api/v1/embed/*
   handle @embedding_api {
     reverse_proxy 192.168.0.107:8104
