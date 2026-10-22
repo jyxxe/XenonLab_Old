@@ -41,3 +41,12 @@ unchanged request paths, and no navigation from passive chart interaction.
 Data and readiness are synthetic browser-local fixtures; this is not a
 production API or scale test. Backend pytest and OpenAPI export are required
 repository checks despite this frontend-only change.
+
+## 2026-10-22 final integration onto release base `d78b50e`
+
+The PR was un-drafted after its earlier WIP/CI-failure state and merged with the current release base `d78b50e2b4c1111d96567696084d143d6222e17e`. The only conflict was the browser-regression test list; it was resolved as a union that keeps this change's `browser-acceptance-directory-distribution.test.mjs` and all base tests added since. No product code conflict remained: `Dashboard.tsx`, `MacCharts.tsx`, `directory-distribution.js` and `style.css` auto-merged onto the current base.
+
+Final integration gates on the merged tree:
+- `tsc --noEmit`: passed; `npm test`: **116 passed** (3 new directory-distribution unit tests); `npm run build`: passed.
+- `CHROME_BIN=... node --test tests/browser-acceptance-directory-distribution.test.mjs`: **8/8 subtests passed, zero page errors** (eight equal-sized directories, six directories, zero tables, 1000-table truncated sample, arbitrary names, genuine `Other` directories, long shared-prefix names at 360px; complete hover/accessible names, aggregate count conservation, bar height ratios, no horizontal overflow, unchanged request paths, no passive navigation).
+- CI `verify / backend`, `verify / frontend` and the protected `devagent/preflight` on the exact integration head are the merge gate; the local Chrome run is coordinator evidence with synthetic data only. No endpoint, permission, persistence, navigation or production dependency change.
