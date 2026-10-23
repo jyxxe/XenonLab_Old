@@ -107,3 +107,49 @@ def test_capabilities_endpoint_requires_desktop_scope_and_fails_closed(tmp_path,
     broken = client.get("/api/v1/capabilities", headers=auth("alice"))
     assert broken.status_code == 503
     assert broken.json()["error"]["code"] == "CAPABILITY_REGISTRY_INVALID"
+
+
+def test_runtime_capabilities_include_only_enabled_plugins(tmp_path):
+    import json as jsonlib
+    import sqlite3
+
+    from xeonolab.capabilities import runtime_capabilities
+
+    database = tmp_path / "desktop.sqlite"
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "CREATE TABLE plugin_installs(owner TEXT, plugin_id TEXT, enabled INTEGER, "
+            "manifest TEXT, installed_version TEXT, catalog_revision INTEGER, installed_at REAL)"
+        )
+        manifest = {
+            "version": "1.2.0",
+            "permissions": ["desktop:read"],
+            "app": {"id": "plugin-app", "title": "Plugin app"},
+            "widget": {"id": "plugin-widget", "title": "Plugin widget"},
+        }
+        db.execute(
+            "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
+            ("alice", "acme.tools", 1, jsonlib.dumps(manifest), "1.2.0", 3, 0.0),
+        )
+        db.execute(
+            "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
+            ("alice", "acme.disabled", 0, jsonlib.dumps(manifest), "1.2.0", 3, 0.0),
+        )
+        db.execute(
+            "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
+            ("alice", "acme.denied", 1, jsonlib.dumps({**manifest, "permissions": ["desktop:admin"]}), "1.2.0", 3, 0.0),
+        )
+        db.execute(
+            "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
+            ("alice", "acme.broken", 1, "{not json", "1.2.0", 3, 0.0),
+        )
+
+    registry = load_registry()
+    capabilities = runtime_capabilities(registry, database, "alice", ["desktop:read"])
+    plugin_ids = {item["id"] for item in capabilities if item["source"] == "plugin"}
+    assert plugin_ids == {"plugin.acme.tools.app", "plugin.acme.tools.widget"}
+    assert all(item["enabled"] for item in capabilities if item["source"] == "plugin")
+    assert {item["kind"] for item in capabilities if item["id"].startswith("plugin.acme.tools")} == {"app", "widget"}
+
+    other = runtime_capabilities(registry, database, "bob", ["desktop:read"])
+    assert not any(item["source"] == "plugin" for item in other)

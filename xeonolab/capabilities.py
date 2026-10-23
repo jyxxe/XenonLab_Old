@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import Depends, Request
 
-from .common import APIError, response, scope
+from .common import APIError, connect, response, scope
 
 KINDS = {"app", "widget", "tool", "agent", "provider", "worker"}
 TIERS = {"ui", "api", "service"}
@@ -126,6 +126,60 @@ class CapabilityRegistry:
         return {"manifest": {"id": self.manifest["id"], "version": self.manifest["version"]}, "counts": counts}
 
 
+def runtime_capabilities(registry, database, owner, scopes):
+    """Builtin capabilities plus this account's enabled plugin capabilities.
+
+    Disabled plugins and plugins whose permissions exceed the caller's current
+    scopes are omitted, so a stopped plugin stops being discoverable. Malformed
+    install snapshots are skipped rather than breaking discovery.
+    """
+    scopes = set(scopes or [])
+    items = []
+    for capability in registry.all()["capabilities"]:
+        items.append({
+            **capability,
+            "source": "builtin",
+            "installed": True,
+            "enabled": set(capability["permissions"]) <= scopes,
+        })
+    try:
+        with connect(database) as db:
+            rows = db.execute(
+                "SELECT plugin_id,enabled,manifest FROM plugin_installs WHERE owner=? ORDER BY plugin_id",
+                (owner,),
+            ).fetchall()
+    except Exception:  # noqa: BLE001 - a missing plugin store must not break discovery
+        rows = []
+    for row in rows:
+        try:
+            manifest = json.loads(row["manifest"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        permissions = [permission for permission in manifest.get("permissions") or [] if isinstance(permission, str)]
+        if not row["enabled"] or not set(permissions) <= scopes:
+            continue
+        version = str(manifest.get("version") or "0.0.0")
+        for kind, key in (("app", "app"), ("widget", "widget")):
+            section = manifest.get(key)
+            if not isinstance(section, dict) or not isinstance(section.get("id"), str) or not section["id"]:
+                continue
+            items.append({
+                "id": f"plugin.{row['plugin_id']}.{kind}",
+                "kind": kind,
+                "version": version,
+                "runtime": "ui",
+                "permissions": permissions,
+                "dependencies": [],
+                "source": "plugin",
+                "plugin_id": row["plugin_id"],
+                "installed": True,
+                "enabled": True,
+            })
+    return items
+
+
 def load_registry(path=None):
     """Load the builtin manifest; missing/invalid manifests fail closed with 503."""
     target = Path(path) if path is not None else DEFAULT_MANIFEST
@@ -139,11 +193,16 @@ def load_registry(path=None):
         raise APIError(503, "CAPABILITY_REGISTRY_INVALID", f"capability manifest is invalid: {error}") from error
 
 
-def install(app):
+def install(app, plugin_database=None):
     @app.get("/api/v1/capabilities")
     def list_capabilities(request: Request, actor=Depends(scope("desktop:read"))):
         registry = load_registry()
-        return response(request, registry.all()["capabilities"], **{"registry": registry.summary()})
+        capabilities = (
+            runtime_capabilities(registry, plugin_database, actor.sub, actor.scopes)
+            if plugin_database is not None
+            else registry.all()["capabilities"]
+        )
+        return response(request, capabilities, **{"registry": registry.summary()})
 
     @app.get("/api/v1/capabilities/{capability_id}")
     def get_capability(capability_id: str, request: Request, actor=Depends(scope("desktop:read"))):
