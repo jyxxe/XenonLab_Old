@@ -210,3 +210,79 @@ def test_execution_dependencies_require_live_authorized_static_bindings():
     with pytest.raises(APIError) as error:
         unbound.resolve(root.name, actor("xelibrary:query", "xelibrary:read"))
     assert error.value.code == "CAPABILITY_DEPENDENCY_UNAVAILABLE"
+
+
+class AuthorityActor(Identity):
+    """Synthetic verified core snapshot, not a plugin/user-supplied object."""
+    def __init__(self, disabled=()):
+        super().__init__("synthetic", {"xelibrary:query", "xelibrary:read"})
+        self.lifecycle_revision = 7
+        self.disabled = set(disabled)
+
+    def require(self, scope):
+        assert scope in {'xelibrary:query', 'xelibrary:read'}
+
+    def require_capability(self, capability_id):
+        if capability_id in self.disabled:
+            raise APIError(404, 'CAPABILITY_NOT_FOUND', 'no such capability')
+
+
+def test_authority_denial_intersects_local_enablement_and_description():
+    adapters = ToolAdapters([adapter()], lifecycle_required=True)
+    capability = adapter().capability_id
+    denied = AuthorityActor([capability])
+    assert adapters.describe(denied) == []
+    assert not adapters.lifecycle_visible('xelibrary.query', denied)
+    adapters.set_enabled('xelibrary.query', True)
+    with pytest.raises(APIError) as error:
+        asyncio.run(adapters.invoke('xelibrary.query', denied, None, ToolQuery(expression='test')))
+    assert error.value.code == 'CAPABILITY_NOT_FOUND'
+    allowed = AuthorityActor()
+    assert len(adapters.describe(allowed)) == 1
+    adapters.set_enabled('xelibrary.query', False)
+    assert adapters.describe(allowed) == []
+
+
+def test_strict_lifecycle_rejects_old_or_unverified_identity_objects():
+    strict = ToolAdapters([adapter()], lifecycle_required=True)
+    for identity in (actor('xelibrary:query'), AuthorityActor()):
+        if isinstance(identity, AuthorityActor):
+            identity.lifecycle_revision = None
+        with pytest.raises(APIError) as error:
+            strict.resolve('xelibrary.query', identity)
+        assert error.value.code == 'CAPABILITY_LIFECYCLE_UNAVAILABLE'
+    assert ToolAdapters([adapter()], lifecycle_required=False).resolve('xelibrary.query', actor('xelibrary:query'))
+
+
+def test_dependency_resolution_checks_authority_state():
+    manifest = copy.deepcopy(load_registry().all())
+    root = next(c for c in manifest['capabilities'] if c['id'] == adapter().capability_id)
+    root['dependencies'] = ['builtin.platform.tool.xelibrary-search@^1.0.0']
+    registry = CapabilityRegistry(manifest)
+    adapters = ToolAdapters([
+        adapter(), replace(adapter(), name='dependency', capability_id='builtin.platform.tool.xelibrary-search'),
+    ], registry_loader=lambda: registry, lifecycle_required=True)
+    with pytest.raises(APIError) as error:
+        adapters.resolve('xelibrary.query', AuthorityActor(['builtin.platform.tool.xelibrary-search']))
+    assert error.value.code == 'CAPABILITY_NOT_FOUND'
+
+
+@pytest.mark.parametrize('flag', ['0', '1'])
+def test_http_authority_denial_is_not_bypassed_by_adapter_flag(settings, monkeypatch, flag):
+    monkeypatch.setenv('TOOL_CAPABILITY_ADAPTERS', flag)
+    app = create_app('tool-gateway', settings)
+    snapshot = AuthorityActor([adapter().capability_id])
+    app.state.authorization_resolver = lambda token: snapshot
+    called = []
+
+    async def request(*args, **kwargs):
+        called.append(True)
+        raise AssertionError('disabled capability must not forward')
+
+    monkeypatch.setattr(httpx.AsyncClient, 'request', request)
+    client = TestClient(app)
+    denied = client.post('/api/v1/tools/xelibrary.query', headers=auth(), json={'expression': 'test'})
+    assert denied.status_code == 404
+    descriptions = client.get('/api/v1/tools', headers=auth()).json()['data']
+    assert 'xelibrary.query' not in {t['function']['name'] for t in descriptions}
+    assert not called

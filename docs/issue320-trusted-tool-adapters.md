@@ -118,3 +118,72 @@ Python 3.12.14, repository dependency versions, no lockfile changes:
   (exit 127); no image build, container execution or production test performed.
 - `git diff --check`: passed. Frontend and visual verification are not applicable
   to this backend-only change and were not rerun.
+
+## Live-authority lifecycle interoperability (#331 / #332)
+
+The adapter now intersects its local gate with the core identity's
+`require_capability` hook. It checks the hook during resolution (including
+transitive tool dependencies), metadata discovery and admission to the legacy
+handler path. Thus `TOOL_CAPABILITY_ADAPTERS=0` cannot re-enable an
+authority-disabled query merely by bypassing the new adapter implementation.
+The local enable hook cannot override authority denial either. Legacy rollback
+still uses the legacy handler/manifest behavior; this does not turn it into a
+new independent service runtime.
+
+`CAPABILITY_LIFECYCLE_ENABLED=1` at adapter construction requires a callable core
+hook and a nonnegative verified snapshot revision; an old/unverified Identity is
+rejected with 503. With `0` (default), old core Identity remains compatible while
+a supplied new hook is still honored. Invalid flag values fail startup. This is
+compatibility for staged code rollout, not permission to enable control mutations
+before all invocation instances use the live, TLS-authenticated authority.
+The rollout, supported controls, account grants and core snapshot validation
+remain in PR #332; this PR supplies no authority store or management grant.
+
+Combination validation uses an isolated worktree based on `43fee56`, not a
+protected-branch merge. Apply this PR's complete diff relative to its merge base,
+then PR #332's diff except `xeonolab/services.py` and the ADR append. The combined
+service routes are this PR's routes: their `require_lifecycle` admission guard
+and metadata filtering replace #332's inline query guard/filter. All #332 core
+identity/store/discovery and lifecycle tests are included. The ADR exclusion is
+documentation only. No merge commit or protected-branch push is produced.
+
+Validated synthetic combined source index tree:
+`e2d56c240fed7d824df8cb0a0fc864c41ee1ba31`. It is a local test tree, not a commit,
+release, signature or deploy artifact. The exact runtime inputs are this PR's
+code with the authority hook update and PR #332 at `85cd891` on `43fee56`.
+
+Focused commands (prepared Python 3.12 environment):
+
+```sh
+# This branch, still without the pending core lifecycle module:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_tool_adapters.py tests/test_capability_execution_contract.py tests/test_capabilities.py tests/test_plugin_manifest.py tests/test_services.py -q
+# Combined worktree with the core lifecycle code:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_capability_lifecycle.py tests/test_tool_adapters.py tests/test_capability_execution_contract.py tests/test_accounts.py tests/test_capabilities.py tests/test_plugin_manifest.py tests/test_services.py -q
+TOOL_CAPABILITY_ADAPTERS=0 UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_capability_lifecycle.py -q
+```
+
+50 focused tests pass on this branch; 99 focused tests pass on the combined
+source. The core lifecycle suite's 26 cases also pass on the actual combined
+legacy-handler mode, including two gateway app instances, persisted restart,
+CAS/audit rollback, authority failure/missing/malformed snapshot, scope revocation,
+metadata and direct query denial. Component tests also cover local enable not
+overriding authority, authority-denied dependencies and strict old-core rejection.
+Combined Ruff, OpenAPI (no changes beyond #332's operations/model), all 11 actual
+localhost smoke processes and crash failure injection pass. No real OIDC,
+multi-host rollout, production, visual or independent service-runtime acceptance
+is claimed. Other capability lifecycle controls remain unintegrated.
+
+Full-suite follow-up for the lifecycle hook update:
+
+- This branch: **756 passed / 13 failed in 374.76s**.
+- Combined source: **784 passed / 13 failed in 392.73s**.
+- Both exact failed-name sets match the previously reproduced unmodified
+  baseline's 13 Lean sandbox preflight failures (`/proc/1/ns/net`, `mnt` stat
+  PermissionError 13). No sandbox checks were changed, skipped or weakened.
+- Both use `mkdir -p runtime` and
+  `UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/test-tmp`
+  in their separate worktrees. They ran concurrently with separate temporary
+  directories; elapsed time is not a performance comparison.
+- `docker --version` still exits 127 (`docker: command not found`). No image or
+  runtime-isolation acceptance is implied. Protected CI and maintainer acceptance
+  remain outstanding; no protected branch was merged or deployed.

@@ -213,6 +213,7 @@ def create_app(service=None, settings=None):
         app.state.tool_adapters_enabled = adapter_flag == "1"
 
         async def invoke(name, actor, request, body, legacy_handler):
+            app.state.tool_adapters.require_lifecycle(name, actor)
             if app.state.tool_adapters_enabled:
                 return await app.state.tool_adapters.invoke(name, actor, request, body)
             return await legacy_handler(request, body)
@@ -226,6 +227,7 @@ def create_app(service=None, settings=None):
                     "name": name, "description": description, "parameters": model.model_json_schema(),
                 }}
                 for name, description, model, _, _ in definitions
+                if app.state.tool_adapters.lifecycle_visible(name, actor)
             ])
 
         @app.post("/api/v1/tools/xelibrary.query")
