@@ -228,3 +228,14 @@ UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pyte
 ```
 
 No real provider/production configuration, grant or data was used or changed.
+
+
+Rebased onto maintainer base `ef4996b` after #330 merged. The ADR conflict was
+resolved by retaining both the Phase 3 proposal link and this feature section;
+own implementation files were compared byte-for-byte to the prior PR head and
+are unchanged. Targeted feature/registry/discovery/snapshot/service-contract
+regression: **118 passed**. CI-scope Ruff, regenerated OpenAPI without
+working-tree drift and diff checks pass. This rebase did not repeat each old
+full suite; the complete 1035/13 composition including PR #334 is separate
+evidence and its same 13 Lean baseline failures remain disclosed. No production
+flag, permission, merge or deployment changed.
