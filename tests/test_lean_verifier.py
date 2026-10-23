@@ -6,11 +6,10 @@ import textwrap
 import time
 from types import SimpleNamespace
 
-import xeonolab.lean_verifier as lean_verifier
-
 import pytest
 from fastapi.testclient import TestClient
 
+import xeonolab.lean_verifier as lean_verifier
 from xeonolab.lean_verifier import SERVICE, create_app, extract_axioms, load_toolchains
 from xeonolab.services import create_app as create_service_app
 

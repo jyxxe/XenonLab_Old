@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/src/style.css" />
+    <title>Account create acceptance fixture</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react';
+      import {createRoot} from 'react-dom/client';
+      import {Accounts} from '/src/Accounts.tsx';
+      import {APIRequestError} from '/src/api-error.js';
+
+      // Synthetic in-memory identity/account tree for the create-account flow.
+      // No real account, credential or write endpoint is used.
+      const scopes = ['accounts:manage', 'desktop:admin', 'desktop:read'];
+      const rows = [
+        {id: 'root', parent: null, username: 'admin', name: 'Root', enabled: true, inherit_all: false,
+          grants: [...scopes], effective_scopes: [...scopes], kind: 'human'},
+      ];
+      window.__accountCreateCalls = [];
+
+      async function api(path, init = {}) {
+        const method = init.method || 'GET';
+        if (path === '/users/me') return {subject: 'root', kind: 'human', scopes};
+        if (path === '/auth/accounts/root-scope-candidates') return {candidate_scopes: []};
+        if (path.startsWith('/auth/accounts?limit=')) return rows.map(row => ({...row}));
+        if (path.startsWith('/auth/api-keys?owner=')) return [];
+        if (path === '/auth/accounts' && method === 'POST') {
+          const body = JSON.parse(init.body);
+          window.__accountCreateCalls.push({path, method, body});
+          if (body.username === 'taken') {
+            throw new APIRequestError('username already exists', 409, 'USERNAME_EXISTS');
+          }
+          const created = {
+            id: `created-${rows.length}`,
+            parent: body.parent_id,
+            username: body.username,
+            name: body.name,
+            enabled: true,
+            inherit_all: body.inherit_all,
+            grants: body.grants,
+            effective_scopes: body.grants,
+            kind: 'human',
+          };
+          rows.push(created);
+          return created;
+        }
+        throw new Error(`Unexpected fixture API request: ${path}`);
+      }
+
+      createRoot(document.getElementById('root')).render(React.createElement(Accounts, {api}));
+    </script>
+  </body>
+</html>

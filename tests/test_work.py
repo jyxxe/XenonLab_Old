@@ -1,3 +1,5 @@
+import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -797,3 +799,237 @@ def test_renew_extends_active_claim_and_fences_stale_or_expired_holders(settings
     third = client.post(path + "/claim", headers=auth("bob"), json={}).json()["data"]
     assert third["epoch"] == second["epoch"] + 1
     assert client.post(path + "/release", headers=auth(), json={"epoch": second["epoch"]}).status_code == 409
+
+
+def test_admin_complete_closes_queue_hygiene_gaps(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+
+    stale = create(401, "Abandoned item")
+    live = create(402, "Actively held item")
+    done = create(403, "Already completed")
+    client.post(f"/api/v1/work/{live['id']}/claim", headers=auth(), json={"ttl_seconds": 3600})
+    client.post(f"/api/v1/work/{done['id']}/claim", headers=auth(), json={"ttl_seconds": 60})
+    client.post(f"/api/v1/work/{done['id']}/release", headers=auth(), json={"epoch": 1, "completed": True})
+
+    # unheld queued item: admin complete succeeds and fences via epoch+1
+    result = client.post(f"/api/v1/work/{stale['id']}/admin-complete", headers=auth())
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["status"] == "completed"
+    assert result.json()["data"]["holder"] is None
+    assert result.json()["data"]["epoch"] == stale["epoch"] + 1
+    # idempotency guard
+    assert client.post(f"/api/v1/work/{stale['id']}/admin-complete", headers=auth()).status_code == 409
+
+    # actively held claim must not be completed by an administrator
+    conflict = client.post(f"/api/v1/work/{live['id']}/admin-complete", headers=auth())
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "WORK_CLAIMED"
+    # already completed
+    assert client.post(f"/api/v1/work/{done['id']}/admin-complete", headers=auth()).status_code == 409
+    # missing item
+    assert client.post("/api/v1/work/missing/admin-complete", headers=auth()).status_code == 404
+    # unauthenticated
+    assert client.post(f"/api/v1/work/{stale['id']}/admin-complete").status_code == 401
+    # expired claim CAN be completed (queue hygiene goal): claim then age it out
+    expired = create(404, "Expired claim item")
+    client.post(f"/api/v1/work/{expired['id']}/claim", headers=auth(), json={"ttl_seconds": 3600})
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET expires=? WHERE id=?", (time.time() - 5, expired["id"]))
+        db.commit()
+    result = client.post(f"/api/v1/work/{expired['id']}/admin-complete", headers=auth())
+    assert result.status_code == 200
+    assert result.json()["data"]["status"] == "completed"
+    # audit trail records the administrative close-out
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        events = [dict(r)["event"] for r in db.execute(
+            "SELECT event FROM work_audit WHERE work_id=?", (expired["id"],))]
+    assert "work.admin_completed" in events
+
+
+def test_admin_complete_rejects_blocked_and_persists_closeout(settings):
+    """Issue #91 review: blocked items must be reconciled first, and an admin
+    close-out survives newer open-webhook events for its issue."""
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+
+    conflicted = create(411, "Source conflict item")
+    closeout = create(412, "Admin closed-out item")
+    reopenable = create(413, "Reopen after close")
+
+    # blocked (source conflict) items are refused until reconciled
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET status='blocked',holder=NULL,expires=0 WHERE id=?", (conflicted["id"],))
+        db.commit()
+    refusal = client.post(f"/api/v1/work/{conflicted['id']}/admin-complete", headers=auth())
+    assert refusal.status_code == 409
+    assert refusal.json()["error"]["code"] == "SYNC_CONFLICT"
+
+    # a close-out with a reason persists across newer open-webhook events
+    done = client.post(
+        f"/api/v1/work/{closeout['id']}/admin-complete", headers=auth(), json={"reason": "已由 PR #99 交付"}
+    )
+    assert done.status_code == 200 and done.json()["data"]["status"] == "completed"
+    ingest_webhook = client.app.state.ingest_forgejo
+
+    def issue_payload(number, title, state, stamp):
+        return {
+            "repository": {"full_name": "xenon-admin/XeonoLab"},
+            "issue": {"number": number, "title": title, "state": state, "updated_at": stamp},
+        }
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "open", "2026-10-02T12:00:00Z"))
+    still = client.get("/api/v1/work", headers=auth()).json()["data"]
+    row = next(item for item in still if item["id"] == closeout["id"])
+    assert row["status"] == "completed" and row["admin_completed"] == 1
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        events = [dict(r)["event"] for r in db.execute(
+            "SELECT event FROM work_audit WHERE work_id=?", (closeout["id"],))]
+    assert any(event.startswith("work.admin_completed") and "PR #99" in event for event in events)
+    assert "issue.sync_ignored_admin_completed" in events
+
+    # without the admin flag, a newer open event re-queues a completed item
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET status='completed',holder=NULL,expires=0,admin_completed=0 WHERE id=?", (reopenable["id"],))
+        db.commit()
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(413, "Reopen after close", "open", "2026-10-02T12:05:00Z"))
+    row = next(item for item in client.get("/api/v1/work", headers=auth()).json()["data"] if item["id"] == reopenable["id"])
+    assert row["status"] == "queued"
+
+    # a Forgejo close clears the admin flag so a later reopen re-queues normally
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "closed", "2026-10-02T12:10:00Z"))
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "open", "2026-10-02T12:15:00Z"))
+    row = next(item for item in client.get("/api/v1/work", headers=auth()).json()["data"] if item["id"] == closeout["id"])
+    assert row["status"] == "queued" and row["admin_completed"] == 0
+
+
+def test_listing_active_filter_and_lease_expired(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]["id"]
+
+    create(101, "Queued item")
+    live, expired, blocked = (create(102, "Live claim"),
+                              create(103, "Expired claim"), create(104, "Blocked item"))
+    assert client.post(f"/api/v1/work/{live}/claim", headers=auth(), json={"ttl_seconds": 3600}).status_code == 200
+    assert client.post(f"/api/v1/work/{expired}/claim", headers=auth(), json={"ttl_seconds": 3600}).status_code == 200
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET expires=? WHERE id=?", (time.time() - 100, expired))
+        db.execute("UPDATE work SET status='blocked',holder=NULL,expires=0 WHERE id=?", (blocked,))
+        db.commit()
+
+    unfiltered = client.get("/api/v1/work?limit=100", headers=auth()).json()["data"]
+    by_title = {row["title"]: row for row in unfiltered}
+    assert set(by_title) == {"Queued item", "Live claim", "Expired claim", "Blocked item"}
+    assert by_title["Expired claim"]["lease_expired"] is True
+    assert by_title["Expired claim"]["claim_active"] is False
+    for title in ("Queued item", "Live claim", "Blocked item"):
+        assert by_title[title]["lease_expired"] is False, title
+    assert by_title["Live claim"]["claim_active"] is True
+    # claim_active stays the live-lease contract: a queued item has no holder,
+    # so it must remain claimable in the UI (regression for PR #102 review).
+    assert by_title["Queued item"]["claim_active"] is False
+    assert by_title["Blocked item"]["claim_active"] is False
+
+    active_ids = {row["title"] for row in
+                  client.get("/api/v1/work?active=true&limit=100", headers=auth()).json()["data"]}
+    assert active_ids == {"Queued item", "Live claim"}
+    inactive_ids = {row["title"] for row in
+                    client.get("/api/v1/work?active=false&limit=100", headers=auth()).json()["data"]}
+    assert inactive_ids == {"Expired claim", "Blocked item"}
+
+    # work rows are uuid-keyed, so page order across items is not assumed (#92)
+    page = client.get("/api/v1/work?active=true&limit=1", headers=auth()).json()
+    assert len(page["data"]) == 1
+    first = page["data"][0]["title"]
+    assert first in {"Queued item", "Live claim"}
+    assert page["meta"]["next_cursor"]
+    follow = client.get(
+        f"/api/v1/work?active=true&limit=1&cursor={page['meta']['next_cursor']}", headers=auth()
+    ).json()
+    remaining = ({"Queued item", "Live claim"} - {first}).pop()
+    assert [row["title"] for row in follow["data"]] == [remaining]
+    assert follow["meta"]["next_cursor"] is None
+
+    assert client.get("/api/v1/work?active=maybe", headers=auth()).status_code == 422
+    error = client.get("/api/v1/work?active=maybe", headers=auth()).json()["error"]
+    assert error["code"] == "INVALID_ACTIVE"
+
+
+def test_listing_orders_fifo_filters_and_counts(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title, repository="xenon-admin/XeonoLab"):
+        body = {"repository": repository, "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]["id"]
+
+    legacy = create(201, "Legacy item")
+    create(202, "Second item")
+    create(203, "Third item")
+    other = create(204, "Other repo item", repository="other/Repo")
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET created_at=0 WHERE id=?", (legacy,))
+        db.commit()
+
+    page1 = client.get("/api/v1/work?limit=2", headers=auth()).json()
+    assert [row["title"] for row in page1["data"]] == ["Legacy item", "Second item"], "legacy rows sort first (FIFO)"
+    assert page1["data"][0]["created_at"] == 0
+    assert page1["data"][1]["created_at"] > 0
+    assert page1["meta"]["counts"] == {"queued": 4, "claimed": 0, "completed": 0, "blocked": 0}
+    repeat = client.get("/api/v1/work?limit=2", headers=auth()).json()
+    assert [row["id"] for row in repeat["data"]] == [row["id"] for row in page1["data"]], "order is deterministic"
+
+    follow = client.get(
+        f"/api/v1/work?limit=2&cursor={page1['meta']['next_cursor']}", headers=auth()
+    ).json()
+    assert [row["title"] for row in follow["data"]] == ["Third item", "Other repo item"]
+    assert follow["meta"]["next_cursor"] is None
+
+    assert client.post(f"/api/v1/work/{other}/claim", headers=auth(), json={"ttl_seconds": 3600}).status_code == 200
+    claimed = {row["title"] for row in client.get("/api/v1/work?status=claimed", headers=auth()).json()["data"]}
+    assert claimed == {"Other repo item"}
+    multi = {row["title"] for row in
+             client.get("/api/v1/work?status=queued,claimed&limit=100", headers=auth()).json()["data"]}
+    assert multi == {"Legacy item", "Second item", "Third item", "Other repo item"}
+    assert client.get("/api/v1/work?status=queued,nope", headers=auth()).json()["error"]["code"] == "INVALID_STATUS"
+    assert client.get("/api/v1/work?cursor=not-a-cursor", headers=auth()).json()["error"]["code"] == "INVALID_CURSOR"
+
+    other_only = {row["title"] for row in
+                  client.get("/api/v1/work?repository=other/Repo", headers=auth()).json()["data"]}
+    assert other_only == {"Other repo item"}
+    by_issue = {row["title"] for row in client.get("/api/v1/work?issue_id=202", headers=auth()).json()["data"]}
+    assert by_issue == {"Second item"}
+
+
+def test_created_at_survives_reconcile_and_restart(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+    body = {"repository": "xenon-admin/XeonoLab", "issue_id": 301, "title": "Persisted item"}
+    created = client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+    assert created["created_at"] > 0
+    reopened = TestClient(create_app("dev-agent", settings))
+    row = reopened.get("/api/v1/work?issue_id=301", headers=auth()).json()["data"][0]
+    assert row["created_at"] == created["created_at"], "migrated/legacy columns persist across restart"

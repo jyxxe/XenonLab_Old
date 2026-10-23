@@ -1,31 +1,37 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import type {API, APIPage} from '../shell/types';
-import {libraryPrefsStorageKey, mergeRecent, parseFieldFilters, toggleFavorite} from './logic.js';
-import type {Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
+import type {API, APIPage, APIRaw} from '../shell/types';
+import {libraryPrefsStorageKey, mergeRecent, mergeServerPrefs, mergeTombstones, retainRefreshedRow, parseFieldFilters, SEARCH_LIMIT_OPTIONS, toggleFavorite} from './logic.js';
+import {addQueryRecent, QUERY_EXPRESSION_LIMIT, queryDraftsStorageKey, readQueryDrafts, writeQueryDrafts} from './query-drafts.js';
+import type {IndexStatus, Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
 
-export const SEARCH_LIMIT = 25;
+/** Default UI cap for search results; users may raise it through SEARCH_LIMIT_OPTIONS. */
+export const SEARCH_LIMIT = SEARCH_LIMIT_OPTIONS[0];
 export const DEFAULT_QUERY = 'FROM "/**" LIMIT 100';
+export type TableSort = {key: string; direction: 'asc' | 'desc'} | null;
 
-export function useScopes(api: API) {
-  const [scopes, setScopes] = useState<string[]>([]);
-  const [subject, setSubject] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
+export function useScopes(api: API, authEpoch = 0) {
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const [identity, setIdentity] = useState<{epoch: number; scopes: string[]; subject: string | null; loaded: boolean; error?: unknown}>({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+  const current = identity.epoch === authEpoch ? identity : {epoch: authEpoch, scopes: [], subject: null, loaded: false};
   useEffect(() => {
     let active = true;
+    setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: false});
     api('/users/me')
       .then(me => {
         if (active) {
-          setScopes(me.scopes || []);
-          setSubject(typeof me.subject === 'string' ? me.subject : null);
-          setLoaded(true);
+          setIdentity({epoch: authEpoch, scopes: me.scopes || [], subject: typeof me.subject === 'string' && me.subject.trim() ? me.subject : null, loaded: true});
         }
       })
-      .catch(() => active && setLoaded(true));
+      .catch(error => active && setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: true, error}));
     return () => {
       active = false;
     };
-  }, [api]);
-  return {scopes, subject, loaded};
+  }, [api, authEpoch, reloadGeneration]);
+  const reload = useCallback(() => {
+    setIdentity({epoch: authEpoch, scopes: [], subject: null, loaded: false});
+    setReloadGeneration(value => value + 1);
+  }, [authEpoch]);
+  return {...current, reload};
 }
 
 export function useCatalogue(apiPage: APIPage) {
@@ -92,6 +98,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
   const [table, setTable] = useState<Table | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
+  const [sort, setSort] = useState<TableSort>(null);
   const [includeDeleted, setIncludeDeleted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -101,10 +108,14 @@ export function useTableSession(api: API, apiPage: APIPage) {
   const loadingMoreRef = useRef(false);
 
   const fetchRows = useCallback(
-    (tableId: string, cursorValue = '', showDeleted = false) => {
+    (tableId: string, cursorValue = '', showDeleted = false, sortValue: TableSort = null) => {
       const query = new URLSearchParams({limit: '100'});
       if (cursorValue) query.set('cursor', cursorValue);
       if (showDeleted) query.set('include_deleted', 'true');
+      if (sortValue) {
+        query.set('sort_by', sortValue.key);
+        query.set('direction', sortValue.direction);
+      }
       return apiPage(`/tables/${tableId}/rows?${query.toString()}`);
     },
     [apiPage],
@@ -116,6 +127,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
       setTable({...next});
       setRows([]);
       setCursor(null);
+      setSort(null);
       setError(null);
       setLoading(true);
       setLoadingMore(false);
@@ -123,11 +135,12 @@ export function useTableSession(api: API, apiPage: APIPage) {
       loadingMoreRef.current = false;
       setIncludeDeleted(showDeleted);
       try {
-        const [page, schema] = await Promise.all([fetchRows(next.id, '', showDeleted), api(`/tables/${next.id}/schema`)]);
+        const [page, schema] = await Promise.all([fetchRows(next.id, '', showDeleted, null), api(`/tables/${next.id}/schema`)]);
         if (view.current !== request) return;
         setRows(page.data as Row[]);
         setCursor((page.meta.next_cursor as string) || null);
         setTable({...next, ...schema});
+        return page.data as Row[];
       } catch (cause) {
         if (view.current === request) setError(cause);
       } finally {
@@ -138,28 +151,57 @@ export function useTableSession(api: API, apiPage: APIPage) {
   );
 
   const refresh = useCallback(
-    async (showDeleted = includeDeleted) => {
+    async (showDeleted = includeDeleted, retainedRow?: Row, isCurrent: () => boolean = () => true) => {
+      if (!table || !isCurrent()) return;
+      const tableId = table.id;
+      const request = ++view.current;
+      ++rowsRequest.current;
+      loadingMoreRef.current = false;
+      setCursor(null);
+      setIncludeDeleted(showDeleted);
+      setLoading(true);
+      setLoadingMore(false);
+      setError(null);
+      try {
+        const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted, sort), api(`/tables/${tableId}/schema`)]);
+        if (view.current !== request || !isCurrent()) return;
+        setRows(retainRefreshedRow(page.data as Row[], retainedRow));
+        setCursor((page.meta.next_cursor as string) || null);
+        setTable(current => (current && current.id === tableId ? {...current, ...schema} : current));
+      } catch (cause) {
+        if (view.current === request && isCurrent()) setError(cause);
+      } finally {
+        if (view.current === request) setLoading(false);
+      }
+    },
+    [api, fetchRows, includeDeleted, sort, table],
+  );
+
+  const changeSort = useCallback(
+    async (nextSort: TableSort) => {
+      setSort(nextSort);
       if (!table) return;
       const tableId = table.id;
       const request = ++view.current;
       ++rowsRequest.current;
       loadingMoreRef.current = false;
+      setRows([]);
+      setCursor(null);
       setLoading(true);
       setLoadingMore(false);
       setError(null);
       try {
-        const [page, schema] = await Promise.all([fetchRows(tableId, '', showDeleted), api(`/tables/${tableId}/schema`)]);
+        const page = await fetchRows(tableId, '', includeDeleted, nextSort);
         if (view.current !== request) return;
         setRows(page.data as Row[]);
         setCursor((page.meta.next_cursor as string) || null);
-        setTable(current => (current && current.id === tableId ? {...current, ...schema} : current));
       } catch (cause) {
         if (view.current === request) setError(cause);
       } finally {
         if (view.current === request) setLoading(false);
       }
     },
-    [api, fetchRows, includeDeleted, table],
+    [fetchRows, includeDeleted, table],
   );
 
   const loadMore = useCallback(async () => {
@@ -170,7 +212,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
     loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const page = await fetchRows(tableId, cursor, includeDeleted);
+      const page = await fetchRows(tableId, cursor, includeDeleted, sort);
       if (view.current !== viewRequest || rowsRequest.current !== request) return;
       setRows(old => {
         const seen = new Set(old.map(row => row._row_id));
@@ -185,7 +227,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
         setLoadingMore(false);
       }
     }
-  }, [cursor, fetchRows, includeDeleted, table]);
+  }, [cursor, fetchRows, includeDeleted, sort, table]);
 
   const refreshMetadata = useCallback(async () => {
     if (!table) return;
@@ -208,6 +250,7 @@ export function useTableSession(api: API, apiPage: APIPage) {
     setTable(null);
     setRows([]);
     setCursor(null);
+    setSort(null);
     setError(null);
   }, []);
 
@@ -216,12 +259,14 @@ export function useTableSession(api: API, apiPage: APIPage) {
     rows,
     setRows,
     cursor,
+    sort,
     includeDeleted,
     loading,
     loadingMore,
     error,
     open,
     refresh,
+    changeSort,
     loadMore,
     refreshMetadata,
     clear,
@@ -234,18 +279,24 @@ export function useSearch(apiPage: APIPage) {
   const [query, setQuery] = useState('');
   const [path, setPath] = useState('/**');
   const [filterText, setFilterText] = useState('');
+  const [limit, setLimit] = useState(SEARCH_LIMIT);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [meta, setMeta] = useState<SearchMeta>({});
+  // The cap actually sent with the results on screen, so "最多 N 条" never
+  // drifts from the hits while a changed limit has not been rerun yet.
+  const [resultLimit, setResultLimit] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);
   const [ran, setRan] = useState(false);
   const generation = useRef(0);
+  const [resultVersion, setResultVersion] = useState(0);
 
   const run = useCallback(
-    async (overrides: {query?: string; path?: string; filters?: Record<string, string>; kind?: 'semantic' | 'keyword'} = {}) => {
+    async (overrides: {query?: string; path?: string; filters?: Record<string, unknown>; kind?: 'semantic' | 'keyword'} = {}) => {
       const text = (overrides.query ?? query).trim();
       const scope = (overrides.path ?? path).trim() || '/**';
       const request = ++generation.current;
+      setResultVersion(version => version + 1);
       if (!text) {
         setError(new Error('请输入搜索内容'));
         setRan(true);
@@ -258,10 +309,11 @@ export function useSearch(apiPage: APIPage) {
         const keywordOnly = mode === 'fast' && (overrides.kind ?? kind) === 'keyword';
         const endpoint = keywordOnly ? '/search/text' : '/search/semantic';
         const parsed = parseFieldFilters(filterText);
+        if (parsed.errors.length) throw new Error(`字段过滤无效：${parsed.errors.join('；')}`);
         const body: Record<string, unknown> = {
           query: text,
           path: scope,
-          limit: SEARCH_LIMIT,
+          limit,
           filters: {...parsed.filters, ...(overrides.filters || {})},
         };
         if (endpoint === '/search/semantic') body.mode = mode === 'quality' ? 'quality' : 'fast';
@@ -269,44 +321,56 @@ export function useSearch(apiPage: APIPage) {
         if (request !== generation.current) return;
         setHits(page.data as SearchHit[]);
         setMeta(page.meta as SearchMeta);
+        setResultLimit(limit);
       } catch (cause) {
         if (request === generation.current) {
           setHits([]);
           setMeta({});
+          setResultLimit(null);
           setError(cause);
         }
       } finally {
         if (request === generation.current) setRunning(false);
       }
     },
-    [apiPage, filterText, kind, mode, path, query],
+    [apiPage, filterText, kind, limit, mode, path, query],
   );
 
   const changeMode = useCallback((next: SearchMode) => {
     setMode(next);
     if (next === 'quality') setKind('semantic');
     ++generation.current;
+    setResultVersion(version => version + 1);
     setRunning(false);
     setHits([]);
     setMeta({});
+    setResultLimit(null);
     setError(null);
     setRan(false);
   }, []);
 
   const reset = useCallback(() => {
     ++generation.current;
+    setResultVersion(version => version + 1);
     setRunning(false);
     setHits([]);
     setMeta({});
+    setResultLimit(null);
     setError(null);
     setRan(false);
   }, []);
 
-  return {mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, hits, meta, error, running, ran, run, reset};
+  return {resultVersion, mode, setMode: changeMode, kind, setKind, query, setQuery, path, setPath, filterText, setFilterText, limit, setLimit, hits, meta, resultLimit, error, running, ran, run, reset};
 }
 
-export function useQueryConsole(apiPage: APIPage) {
-  const [expression, setExpressionState] = useState(DEFAULT_QUERY);
+export function useQueryConsole(apiPage: APIPage, subject: string | null, identityVerified = Boolean(subject), authEpoch = 0) {
+  const [draftState, setDraftState] = useState({owner: null as string | null, expression: DEFAULT_QUERY, recent: [] as Array<{expression: string; updated_at: string}>, status: 'unverified', message: ''});
+  const ownerKey = queryDraftsStorageKey(subject);
+  const currentDraftState = draftState.owner === subject ? draftState : null;
+  const expression = currentDraftState?.expression ?? DEFAULT_QUERY;
+  const recent = currentDraftState?.recent ?? [];
+  const draftStatus = currentDraftState?.status ?? (ownerKey ? 'loading' : 'unverified');
+  const draftMessage = currentDraftState?.message ?? '';
   const [rows, setRows] = useState<any[]>([]);
   const [meta, setMeta] = useState<Record<string, any>>({});
   const [plan, setPlan] = useState<QueryExplain | null>(null);
@@ -316,11 +380,11 @@ export function useQueryConsole(apiPage: APIPage) {
   const [duration, setDuration] = useState<number | null>(null);
   const generation = useRef(0);
   const validationGeneration = useRef(0);
-
-  const setExpression = useCallback((value: string) => {
-    ++generation.current;
-    ++validationGeneration.current;
-    setExpressionState(value);
+  const observedAuthEpoch = useRef(authEpoch);
+  if (observedAuthEpoch.current !== authEpoch) {
+    observedAuthEpoch.current = authEpoch;
+    generation.current += 1;
+    validationGeneration.current += 1;
     setRows([]);
     setMeta({});
     setPlan(null);
@@ -328,10 +392,66 @@ export function useQueryConsole(apiPage: APIPage) {
     setRunning(false);
     setValidating(false);
     setDuration(null);
-  }, []);
+  }
+
+  useEffect(() => {
+    if (!ownerKey || !subject) {
+      setDraftState({owner: null, expression: DEFAULT_QUERY, recent: [], status: 'unverified', message: ''});
+      return;
+    }
+    let result;
+    try {
+      result = readQueryDrafts(window.localStorage, subject);
+    } catch (cause) {
+      result = {draft: null, recent: [], error: cause, ready: false};
+    }
+    const failed = !result.ready;
+    setDraftState({
+      owner: subject,
+      expression: result.draft?.expression ?? DEFAULT_QUERY,
+      recent: result.recent,
+      status: failed ? 'read-error' : 'ready',
+      message: failed ? '本地查询记录无法读取；当前编辑只保存在本页内存中。可重试读取。' : '',
+    });
+  }, [ownerKey, subject]);
+
+  const persistDraftState = useCallback((next: typeof draftState) => {
+    if (!subject || observedAuthEpoch.current !== authEpoch || next.owner !== subject || next.status !== 'ready') return next;
+    let result;
+    try {
+      result = writeQueryDrafts(window.localStorage, subject, {expression: next.expression, updated_at: new Date().toISOString()}, next.recent);
+    } catch (error) {
+      result = {error};
+    }
+    return result.error
+      ? {...next, status: 'write-error', message: '本地查询记录无法保存；修改仍保留在当前页面。可重试保存。'}
+      : next;
+  }, [authEpoch, subject]);
+
+  const setExpression = useCallback((value: string) => {
+    if (Array.from(value).length > QUERY_EXPRESSION_LIMIT) {
+      setDraftState(current => current.owner === subject ? {...current, message: `表达式最多 ${QUERY_EXPRESSION_LIMIT} 个 Unicode 字符；超出部分未接受。`} : current);
+      return;
+    }
+    ++generation.current;
+    ++validationGeneration.current;
+    setDraftState(current => {
+      const base = current.owner === subject ? current : {owner: subject, expression, recent: [], status: ownerKey ? 'loading' : 'unverified', message: ''};
+      const next = {...base, expression: value, message: base.status === 'ready' ? '' : base.message};
+      return ownerKey ? persistDraftState(next) : next;
+    });
+    setRows([]);
+    setMeta({});
+    setPlan(null);
+    setError(null);
+    setRunning(false);
+    setValidating(false);
+    setDuration(null);
+  }, [expression, ownerKey, persistDraftState, subject]);
 
   const validate = useCallback(
     async (text: string) => {
+      if (!identityVerified || observedAuthEpoch.current !== authEpoch) return false;
       const request = ++validationGeneration.current;
       setValidating(true);
       setError(null);
@@ -349,17 +469,25 @@ export function useQueryConsole(apiPage: APIPage) {
         if (request === validationGeneration.current) setValidating(false);
       }
     },
-    [apiPage],
+    [apiPage, authEpoch, identityVerified],
   );
 
   const run = useCallback(
-    async (text: string) => {
+    async (text: string, remember = true) => {
+      if (!identityVerified || observedAuthEpoch.current !== authEpoch) return;
       const request = ++generation.current;
       setRunning(true);
       setError(null);
       const started = performance.now();
       try {
         if (!(await validate(text)) || request !== generation.current) return;
+        if (remember && ownerKey && Array.from(text).length <= QUERY_EXPRESSION_LIMIT) {
+          setDraftState(current => {
+            const base = current.owner === subject ? current : {owner: subject, expression: text, recent: [], status: ownerKey ? 'loading' : 'unverified', message: ''};
+            const next = {...base, expression: text, recent: addQueryRecent(base.recent, text, new Date().toISOString())};
+            return persistDraftState(next);
+          });
+        }
         const page = await apiPage('/query', {method: 'POST', body: JSON.stringify({expression: text})});
         if (request !== generation.current) return;
         setRows(Array.isArray(page.data) ? page.data : []);
@@ -377,10 +505,35 @@ export function useQueryConsole(apiPage: APIPage) {
         }
       }
     },
-    [apiPage, validate],
+    [apiPage, authEpoch, identityVerified, ownerKey, persistDraftState, subject, validate],
   );
 
-  return {expression, setExpression, rows, meta, plan, error, running, validating, duration, run, validate};
+  const loadRecent = useCallback((item: {expression: string}) => setExpression(item.expression), [setExpression]);
+  const updateRecent = useCallback((nextRecent: Array<{expression: string; updated_at: string}>) => {
+    setDraftState(current => {
+      if (!subject || current.owner !== subject || current.status !== 'ready') return current;
+      return persistDraftState({...current, recent: nextRecent, message: ''});
+    });
+  }, [persistDraftState, subject]);
+  const deleteRecent = useCallback((expressionToDelete: string) => updateRecent(recent.filter(item => item.expression !== expressionToDelete)), [recent, updateRecent]);
+  const clearRecent = useCallback(() => updateRecent([]), [updateRecent]);
+  const retryStorage = useCallback(() => {
+    if (!subject || observedAuthEpoch.current !== authEpoch) return;
+    let storage;
+    try { storage = window.localStorage; } catch (error) {
+      setDraftState(current => current.owner === subject ? {...current, status: 'read-error', message: '浏览器仍拒绝访问本地存储；可继续使用查询，但不会保存。'} : current);
+      return;
+    }
+    if (draftStatus === 'write-error' && currentDraftState) {
+      const result = writeQueryDrafts(storage, subject, {expression: currentDraftState.expression, updated_at: new Date().toISOString()}, currentDraftState.recent);
+      setDraftState({...currentDraftState, status: result.error ? 'write-error' : 'ready', message: result.error ? '本地查询记录仍无法保存；当前编辑保留在本页。' : '本地查询记录已保存。'});
+    } else {
+      const result = readQueryDrafts(storage, subject);
+      setDraftState({owner: subject, expression: result.draft?.expression ?? DEFAULT_QUERY, recent: result.recent, status: result.ready ? 'ready' : 'read-error', message: result.ready ? '本地查询记录已重新读取。' : '本地查询记录仍无法读取；当前编辑只保存在本页。'});
+    }
+  }, [authEpoch, currentDraftState, draftStatus, subject]);
+
+  return {expression, setExpression, rows: identityVerified ? rows : [], meta: identityVerified ? meta : {}, plan: identityVerified ? plan : null, error: identityVerified ? error : null, running: identityVerified && running, validating: identityVerified && validating, duration: identityVerified ? duration : null, run, validate, recent, draftStatus, draftMessage, loadRecent, deleteRecent, clearRecent, retryStorage};
 }
 
 export function useTheorems(apiPage: APIPage) {
@@ -390,6 +543,7 @@ export function useTheorems(apiPage: APIPage) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [searchResults, setSearchResults] = useState<Theorem[] | null>(null);
+  const [searchPartial, setSearchPartial] = useState(false);
   const [selected, setSelected] = useState<Theorem | null>(null);
   const [relations, setRelations] = useState<{dependencies: any[]; dependents: any[]; evidence: any[]} | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -406,6 +560,7 @@ export function useTheorems(apiPage: APIPage) {
       const page = await apiPage('/theorems?limit=50');
       if (request !== listGeneration.current) return;
       setSearchResults(null);
+      setSearchPartial(false);
       setItems(page.data as Theorem[]);
       setCursor((page.meta.next_cursor as string) || null);
     } catch (cause) {
@@ -432,15 +587,18 @@ export function useTheorems(apiPage: APIPage) {
   }, [apiPage, cursor]);
 
   const search = useCallback(
-    async (query: string) => {
+    async (query: string, reviewStatus = '') => {
+      if (!query.trim()) return;
       const request = ++listGeneration.current;
       setLoading(true);
       setLoadingMore(false);
       setError(null);
+      setSearchPartial(false);
       try {
-        const page = await apiPage('/theorems/search', {method: 'POST', body: JSON.stringify({query, limit: 50})});
+        const page = await apiPage('/theorems/search', {method: 'POST', body: JSON.stringify({query: query.trim(), limit: 50, ...(reviewStatus ? {review_status: reviewStatus} : {})})});
         if (request !== listGeneration.current) return;
         setSearchResults(page.data as Theorem[]);
+        setSearchPartial(page.meta.partial === true);
       } catch (cause) {
         if (request === listGeneration.current) setError(cause);
       } finally {
@@ -481,6 +639,7 @@ export function useTheorems(apiPage: APIPage) {
   const clearSearch = useCallback(() => {
     ++listGeneration.current;
     setSearchResults(null);
+    setSearchPartial(false);
     setError(null);
     setLoading(false);
     setLoadingMore(false);
@@ -497,6 +656,7 @@ export function useTheorems(apiPage: APIPage) {
   return {
     items,
     searchResults,
+    searchPartial,
     selected,
     relations,
     detailLoading,
@@ -514,18 +674,129 @@ export function useTheorems(apiPage: APIPage) {
   };
 }
 
-export function useLibraryPrefs(subject: string | null | undefined) {
+export function useLibraryPrefs(subject: string | null | undefined, api?: API, apiRaw?: APIRaw) {
   const owner = subject || null;
   const recentKey = libraryPrefsStorageKey(owner, 'recent');
   const favoritesKey = libraryPrefsStorageKey(owner, 'favorites');
+  const tombstonesKey = libraryPrefsStorageKey(owner, 'tombstones');
   const [cache, setCache] = useState(() => ({
-    owner: owner || 'anonymous',
+    owner,
     recent: read(recentKey),
     favorites: read(favoritesKey),
+    tombstones: readTombstones(tombstonesKey),
   }));
   const cacheOwner = owner || 'anonymous';
+  // ETag of the last server read; guards PATCHes against lost updates.
+  const revisionRef = useRef<string | null>(null);
+
+  const refreshFromServer = useCallback(async () => {
+    if (!apiRaw || !owner) return null;
+    const response = await apiRaw('/users/me/preferences');
+    revisionRef.current = response.headers.get('ETag');
+    const body = await response.json();
+    return (body?.data ?? null) as {
+      library_recents?: RecentEntry[];
+      library_favorites?: RecentEntry[];
+      library_favorite_tombstones?: Array<{kind: string; id: string; at: number; deleted: boolean}>;
+    } | null;
+  }, [apiRaw, owner]);
+
+  // Issue #72: recents/favorites follow the account across devices. Writes are
+  // guarded with If-Match; on a lost update the fresh server copy is merged and
+  // the write retried once (issue #72 review: multi-device merge protocol).
+  const pushServer = useCallback(
+    async (payload: Record<string, unknown>) => {
+      if (!api && !apiRaw) return;
+      // Read the PATCH response's ETag so consecutive writes in the same session
+      // do not pay for a lost-update round trip (issue #72 review). The raw
+      // client throws on non-2xx and exposes the headers; the typed helper is
+      // only a fallback when no raw client is available.
+      const attempt = async () => {
+        const init = {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(revisionRef.current ? {'If-Match': revisionRef.current} : {}),
+          },
+          body: JSON.stringify(payload),
+        };
+        if (apiRaw) {
+          const response = await apiRaw('/users/me/preferences', init);
+          const tag = response.headers.get('ETag');
+          if (tag) revisionRef.current = tag;
+          return;
+        }
+        if (api) await api('/users/me/preferences', init);
+      };
+      try {
+        await attempt();
+      } catch (error) {
+        if (!apiRaw || !/STALE_REVISION|412/.test(String(error))) return;
+        const prefs = await refreshFromServer().catch(() => null);
+        if (!prefs) return;
+        const tombstones = mergeTombstones(readTombstones(tombstonesKey), prefs.library_favorite_tombstones);
+        const mergedFavorites = mergeServerPrefs(read(favoritesKey), prefs.library_favorites, 'favorites', tombstones);
+        const mergedRecent = mergeServerPrefs(read(recentKey), prefs.library_recents, 'recent');
+        write(favoritesKey, mergedFavorites);
+        write(recentKey, mergedRecent);
+        writeTombstones(tombstonesKey, tombstones);
+        setCache({owner: cacheOwner, recent: mergedRecent, favorites: mergedFavorites, tombstones});
+        const retry: Record<string, unknown> = {};
+        if ('library_favorites' in payload) {
+          retry.library_favorites = mergedFavorites;
+          retry.library_favorite_tombstones = tombstones;
+        }
+        if ('library_recents' in payload) retry.library_recents = mergedRecent;
+        try {
+          await attempt();
+        } catch {
+          /* best-effort sync; the next load re-merges from the server */
+        }
+      }
+    },
+    [api, apiRaw, cacheOwner, favoritesKey, recentKey, refreshFromServer, tombstonesKey],
+  );
+
+  useEffect(() => {
+    if (!api || !owner) return;
+    let active = true;
+    refreshFromServer()
+      .then(prefs => {
+        if (!active || !prefs) return;
+        const tombstones = mergeTombstones(readTombstones(tombstonesKey), prefs.library_favorite_tombstones);
+        const mergedRecent = mergeServerPrefs(read(recentKey), prefs.library_recents, 'recent');
+        const mergedFavorites = mergeServerPrefs(read(favoritesKey), prefs.library_favorites, 'favorites', tombstones);
+        write(recentKey, mergedRecent);
+        write(favoritesKey, mergedFavorites);
+        writeTombstones(tombstonesKey, tombstones);
+        setCache({owner: cacheOwner, recent: mergedRecent, favorites: mergedFavorites, tombstones});
+        // Push back what the server is missing (local-only entries or newer
+        // deletion markers) so a third device converges as well.
+        const favoritesDrift = JSON.stringify(mergedFavorites) !== JSON.stringify(prefs.library_favorites || []);
+        const tombstonesDrift =
+          JSON.stringify(tombstones) !== JSON.stringify(prefs.library_favorite_tombstones || []);
+        // Recents recorded offline must upload on remount as well, otherwise a
+        // third device never sees them (issue #72 review: only half the drift was
+        // pushed back before).
+        const recentsDrift = JSON.stringify(mergedRecent) !== JSON.stringify(prefs.library_recents || []);
+        if (favoritesDrift || tombstonesDrift || recentsDrift) {
+          const driftPayload: Record<string, unknown> = {};
+          if (favoritesDrift || tombstonesDrift) {
+            driftPayload.library_favorites = mergedFavorites;
+            driftPayload.library_favorite_tombstones = tombstones;
+          }
+          if (recentsDrift) driftPayload.library_recents = mergedRecent;
+          void pushServer(driftPayload);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [api, cacheOwner, favoritesKey, owner, pushServer, recentKey, refreshFromServer, tombstonesKey]);
+
   if (cache.owner !== cacheOwner) {
-    setCache({owner: cacheOwner, recent: read(recentKey), favorites: read(favoritesKey)});
+    setCache({owner: cacheOwner, recent: read(recentKey), favorites: read(favoritesKey), tombstones: readTombstones(tombstonesKey)});
   }
   const recent = cache.owner === cacheOwner ? cache.recent : read(recentKey);
   const favorites = cache.owner === cacheOwner ? cache.favorites : read(favoritesKey);
@@ -535,23 +806,48 @@ export function useLibraryPrefs(subject: string | null | undefined) {
       const previous = current.owner === cacheOwner ? current.recent : read(recentKey);
       const next = mergeRecent(previous, entry);
       write(recentKey, next);
-      return {owner: cacheOwner, recent: next, favorites: current.owner === cacheOwner ? current.favorites : read(favoritesKey)};
+      void pushServer({library_recents: next});
+      return {owner: cacheOwner, recent: next, favorites: current.owner === cacheOwner ? current.favorites : read(favoritesKey), tombstones: current.owner === cacheOwner ? current.tombstones : readTombstones(tombstonesKey)};
     });
-  }, [cacheOwner, favoritesKey, recentKey]);
+  }, [cacheOwner, favoritesKey, pushServer, recentKey, tombstonesKey]);
 
   const toggle = useCallback((entry: RecentEntry) => {
+    const at = Date.now();
     setCache(current => {
       const previous = current.owner === cacheOwner ? current.favorites : read(favoritesKey);
-      const next = toggleFavorite(previous, entry);
-      write(favoritesKey, next);
-      return {owner: cacheOwner, recent: current.owner === cacheOwner ? current.recent : read(recentKey), favorites: next};
+      const previousTombstones = current.owner === cacheOwner ? current.tombstones : readTombstones(tombstonesKey);
+      const next = toggleFavorite(previous, entry, previousTombstones, at);
+      write(favoritesKey, next.favorites);
+      writeTombstones(tombstonesKey, next.tombstones);
+      void pushServer({library_favorites: next.favorites, library_favorite_tombstones: next.tombstones});
+      return {owner: cacheOwner, recent: current.owner === cacheOwner ? current.recent : read(recentKey), favorites: next.favorites, tombstones: next.tombstones};
     });
-  }, [cacheOwner, favoritesKey, recentKey]);
+  }, [cacheOwner, favoritesKey, pushServer, recentKey, tombstonesKey]);
 
   return {recent, favorites, remember, toggle};
 }
 
-function read(key: string): RecentEntry[] {
+function readTombstones(key: string | null): Array<{kind: string; id: string; at: number; deleted: boolean}> {
+  if (!key) return [];
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(value) ? value.filter(item => item && item.kind && item.id && item.deleted) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTombstones(key: string | null, tombstones: Array<{kind: string; id: string; at: number; deleted: boolean}>) {
+  if (!key) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(tombstones));
+  } catch {
+    /* storage can be unavailable; sync is best-effort */
+  }
+}
+
+function read(key: string | null): RecentEntry[] {
+  if (!key) return [];
   try {
     const value = JSON.parse(localStorage.getItem(key) || '[]');
     return Array.isArray(value) ? value : [];
@@ -560,7 +856,8 @@ function read(key: string): RecentEntry[] {
   }
 }
 
-function write(key: string, value: RecentEntry[]) {
+function write(key: string | null, value: RecentEntry[]) {
+  if (!key) return;
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
@@ -612,6 +909,55 @@ export function useJobs(apiPage: APIPage, tableId: string, enabled: boolean) {
   }, [load]);
   return {
     jobs: enabled && jobsTableId === tableId ? jobs : null,
+    error: enabled && errorTableId === tableId ? error : null,
+    reload: load,
+  };
+}
+
+export function useIndexStatus(apiPage: APIPage, tableId: string, enabled: boolean) {
+  const [status, setStatus] = useState<IndexStatus | null>(null);
+  const [statusTableId, setStatusTableId] = useState('');
+  const [error, setError] = useState<unknown>(null);
+  const [errorTableId, setErrorTableId] = useState('');
+  const generation = useRef(0);
+  const load = useCallback(async () => {
+    if (!enabled || !tableId) {
+      generation.current += 1;
+      setStatus(null);
+      setStatusTableId(tableId);
+      setError(null);
+      setErrorTableId(tableId);
+      return;
+    }
+    const request = ++generation.current;
+    setError(null);
+    try {
+      const page = await apiPage(`/tables/${encodeURIComponent(tableId)}/index-status`);
+      if (request === generation.current) {
+        setStatus(page.data as IndexStatus);
+        setStatusTableId(tableId);
+      }
+    } catch (cause) {
+      if (request === generation.current) {
+        setStatus(null);
+        setStatusTableId(tableId);
+        setError(cause);
+        setErrorTableId(tableId);
+      }
+    }
+  }, [apiPage, enabled, tableId]);
+  useEffect(() => {
+    setStatus(null);
+    setStatusTableId('');
+    setError(null);
+    setErrorTableId('');
+    void load();
+    return () => {
+      generation.current += 1;
+    };
+  }, [load]);
+  return {
+    status: enabled && statusTableId === tableId ? status : null,
     error: enabled && errorTableId === tableId ? error : null,
     reload: load,
   };
