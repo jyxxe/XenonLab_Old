@@ -35,6 +35,18 @@ test('定理视图按 xelibrary:theorem:read 门控：无权限时诚实空态�
     await page.locator('.library-theorem-list li').first().waitFor();
     assert.ok((await calls()).some(call => call.path === '/theorems?limit=50'), 'an authorized identity still loads the list');
     assert.ok(await page.locator('.library-theorem-list li').count() >= 2, 'fixture theorems render');
+    // Review queue: proposed items without keyword search, then decide from the detail.
+    await page.getByRole('button', {name: /待审队列/}).click();
+    await page.waitForFunction(() => window.libraryFixture.calls.some(call => call.path.includes('review_status=proposed')));
+    assert.ok((await page.locator('.library-theorem-list li').count()) >= 2, 'proposed theorems listed without a keyword');
+    await page.locator('.library-theorem-list li button').first().click();
+    await page.locator('.library-theorem-review').waitFor();
+    assert.equal(await page.locator('.library-theorem-review [data-review]').count(), 2, 'promote and reject are offered');
+    await page.locator('.library-theorem-review [data-review=promote]').click();
+    await page.getByText('已晋升该定理').waitFor();
+    const decisionCall = (await calls()).filter(call => call.path.endsWith('/promote')).at(-1);
+    assert.equal(decisionCall.method, 'POST');
+    assert.equal(decisionCall.headers['If-Match'], '"revision:2"', 'decision sends the current theorem ETag');
   } finally {
     await browser.close();
     await server.close();

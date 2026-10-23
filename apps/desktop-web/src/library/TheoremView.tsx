@@ -16,6 +16,7 @@ function confidenceAverage(theorem: Theorem): number | null {
 
 export function TheoremView({
   canRead = true,
+  canPromote = false,
   identityReady = true,
   items,
   searchResults,
@@ -28,6 +29,16 @@ export function TheoremView({
   loadingMore,
   error,
   cursor,
+  queue = null,
+  queueCursor = null,
+  queueLoading = false,
+  queueLoadingMore = false,
+  queueError = null,
+  decisionBusy = false,
+  decisionMessage = '',
+  onReviewQueue,
+  onLoadMoreQueue,
+  onReviewDecision,
   onLoad,
   onLoadMore,
   onSearch,
@@ -36,6 +47,7 @@ export function TheoremView({
   onClose,
 }: {
   canRead?: boolean;
+  canPromote?: boolean;
   identityReady?: boolean;
   items: Theorem[];
   searchResults: Theorem[] | null;
@@ -48,6 +60,16 @@ export function TheoremView({
   loadingMore: boolean;
   error: unknown;
   cursor: string | null;
+  queue?: Theorem[] | null;
+  queueCursor?: string | null;
+  queueLoading?: boolean;
+  queueLoadingMore?: boolean;
+  queueError?: unknown;
+  decisionBusy?: boolean;
+  decisionMessage?: string;
+  onReviewQueue: () => void;
+  onLoadMoreQueue: () => void;
+  onReviewDecision: (theorem: Theorem, action: 'promote' | 'reject') => void;
   onLoad: () => void;
   onLoadMore: () => void;
   onSearch: (query: string, reviewStatus?: string) => void;
@@ -57,8 +79,12 @@ export function TheoremView({
 }) {
   const [query, setQuery] = useState('');
   const [reviewStatus, setReviewStatus] = useState('');
-  const list = searchResults ?? items;
-  const errorInfo = error ? describeError(error, '读取定理') : null;
+  const [showQueue, setShowQueue] = useState(false);
+  const list = showQueue ? (queue ?? []) : (searchResults ?? items);
+  const activeError = showQueue ? queueError : error;
+  const activeLoading = showQueue ? queueLoading : loading;
+  const activeLoadingMore = showQueue ? queueLoadingMore : loadingMore;
+  const errorInfo = activeError ? describeError(activeError, showQueue ? '读取待审队列' : '读取定理') : null;
   const detailErrorInfo = detailError ? describeError(detailError, '读取定理关联信息') : null;
 
   return (
@@ -68,7 +94,7 @@ export function TheoremView({
           <h2>定理</h2>
           <p>定理对象存储在 XeLibrary catalogue 中；形式验证与候选生成在 Library Agent / Lean 就绪前不可用。</p>
         </div>
-        {canRead && <Button size="sm" onClick={() => { setQuery(''); setReviewStatus(''); onLoad(); }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</Button>}
+        <div className="library-view-head-actions">{canRead && <Button size="sm" variant={showQueue ? 'primary' : 'ghost'} onClick={() => { const next = !showQueue; setShowQueue(next); if (next && !queue) onReviewQueue(); }}>待审队列{queue ? `（${queue.length}${queueCursor ? '+' : ''}）` : ''}</Button>}{canRead && <Button size="sm" onClick={() => { setQuery(''); setReviewStatus(''); if (showQueue) onReviewQueue(); else onLoad(); }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</Button>}</div>
       </header>
 
       {!canRead ? (
@@ -101,12 +127,12 @@ export function TheoremView({
 
           {errorInfo ? (
             <ErrorState title={errorInfo.title} message={errorInfo.message} requestId={errorInfo.requestId} errorCode={errorInfo.code} onRetry={() => query.trim() ? onSearch(query, reviewStatus) : onLoad()} />
-          ) : loading && !list.length ? (
+          ) : activeLoading && !list.length ? (
             <div className="library-result-skeleton" role="status" aria-label="正在加载定理">
               {Array.from({length: 4}, (_, index) => <Skeleton key={index} height={54} />)}
             </div>
           ) : !list.length ? (
-            <EmptyState icon="⊢" title={searchResults ? '没有匹配的定理' : '还没有定理'} description="定理由 API 创建；Library Agent 与 Lean verifier 尚未部署。" />
+            <EmptyState icon="⊢" title={showQueue ? '没有待审定理' : searchResults ? '没有匹配的定理' : '还没有定理'} description={showQueue ? '所有 proposed 定理都已处理。' : '定理由 API 创建；Library Agent 与 Lean verifier 尚未部署。'} />
           ) : (
             <>
               <ul className="library-theorem-list">
@@ -132,9 +158,11 @@ export function TheoremView({
                   );
                 })}
               </ul>
-              {!searchResults && cursor && (
-                <Button onClick={onLoadMore} disabled={loadingMore}>{loadingMore ? '加载中…' : '加载更多定理'}</Button>
-              )}
+              {showQueue ? (queueCursor && (
+                <Button onClick={onLoadMoreQueue} disabled={queueLoadingMore}>{queueLoadingMore ? '加载中…' : '加载更多待审定理'}</Button>
+              )) : (!searchResults && cursor && (
+                <Button onClick={onLoadMore} disabled={activeLoadingMore}>{activeLoadingMore ? '加载中…' : '加载更多定理'}</Button>
+              ))}
             </>
           )}
         </>
@@ -179,6 +207,17 @@ export function TheoremView({
                 {relations?.dependents?.length ? <ul>{relations.dependents.map((item, index) => <li key={index} className="mono">{typeof item === 'string' ? item : stringifyExactJSON(item)}</li>)}</ul> : <p className="muted">没有记录被依赖项。</p>}
               </section>
             </>
+          )}
+          {canPromote && selected.review_status === 'proposed' && (
+            <section className="library-theorem-review">
+              <h4>人工审阅</h4>
+              <p className="muted">晋升只改变 review_status，不代表 Lean/形式证明已验证（formal_status 单独显示）。</p>
+              <div className="library-theorem-review-actions">
+                <Button data-review="promote" disabled={decisionBusy} onClick={() => onReviewDecision(selected, 'promote')}>晋升</Button>
+                <Button data-review="reject" variant="danger" disabled={decisionBusy} onClick={() => onReviewDecision(selected, 'reject')}>拒绝</Button>
+              </div>
+              <p role="status" className="muted">{decisionMessage}</p>
+            </section>
           )}
           <section className="library-notice">
             <strong>不可用能力</strong>
