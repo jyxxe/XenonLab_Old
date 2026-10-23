@@ -12,3 +12,9 @@
 - 现有 `GET /api/v1/plugins`、`/api/v1/apps`、Dock/LaunchPad 不变；Phase 1 后续把内置应用与
   已安装插件统一到该注册表，并提供停用/兼容性检查。
 - 本增量不执行任何插件代码；`ui`/`api`/`service` 仍只是声明，运行时隔离按 ADR 0009 执行。
+
+## 运行时发现（Phase 1 续）
+
+`GET /api/v1/capabilities` 现在按调用账户聚合：内置能力 + `plugin_installs` 中**已启用**且权限
+不超过当前账户 scopes 的插件能力（来源 `plugin`，kind app/widget）。停用插件、权限已收缩的插件、
+损坏的安装快照都会被过滤/跳过，不会出现在发现结果；启动时无需迁移。

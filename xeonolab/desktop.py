@@ -682,6 +682,6 @@ def create_app(settings=None):
             db.execute("INSERT OR REPLACE INTO layouts VALUES(?,?)", (actor.sub, body.model_dump_json()))
         return response(request, body.model_dump())
 
-    install_capabilities(app)
+    install_capabilities(app, path)
 
     return app
