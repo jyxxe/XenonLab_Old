@@ -216,3 +216,14 @@ COPY regression is 321 passed. All four local adapter flags 0 before startup:
 scope, the 861/13 standalone run on ef4996b and the generated schema/probe details.
 This composition includes the pending version fix; it is not a protected merge
 or production acceptance claim for any individual PR.
+
+
+Rebased onto maintainer base `ef4996b` after #330 merged. The ADR conflict was
+resolved by retaining both the Phase 3 proposal link and this feature section;
+own implementation files were compared byte-for-byte to the prior PR head and
+are unchanged. Targeted feature/registry/discovery/snapshot/service-contract
+regression: **129 passed**. CI-scope Ruff, regenerated OpenAPI without
+working-tree drift and diff checks pass. This rebase did not repeat each old
+full suite; the complete 1035/13 composition including PR #334 is separate
+evidence and its same 13 Lean baseline failures remain disclosed. No production
+flag, permission, merge or deployment changed.
