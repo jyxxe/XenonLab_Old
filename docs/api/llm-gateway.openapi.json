@@ -111,10 +111,10 @@
             "description": "Per-process stream capacity reached; includes Retry-After."
           },
           "502": {
-            "description": "Provider request failed before streaming began."
+            "description": "Provider request failed before streaming began, or JSON completion failed."
           },
           "504": {
-            "description": "Provider response headers exceeded the request deadline before streaming began."
+            "description": "Provider request exceeded its deadline before streaming began or during JSON completion."
           }
         }
       }
