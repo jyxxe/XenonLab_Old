@@ -1,12 +1,13 @@
-# #331 / #305: durable authority controls for query and LLM
+# #331 / #305: durable authority controls for query, LLM and embedding
 
-This increment controls two existing builtin API capabilities:
-`builtin.platform.tool.xelibrary-query` and
-`builtin.platform.provider.llm-chat`. The latter covers LLM Gateway's model
-catalogue and JSON/SSE chat admission, including the original native HTTP path.
-Other providers, workers, UI installs and independent services are not
-controllable until both their discovery and invocation paths enforce the same
-state. No code loading, deployment, runtime stop or artifact upgrade is added.
+This increment controls four existing builtin groups: the query tool, LLM
+Gateway, D100M provider and Qwen provider. Query/LLM retain their specific
+admission paths. Each embedding provider root is an availability gate shared by
+its model discovery and text/image encoding paths, including the existing native
+implementation. Its encode capability keeps the separate write authorization;
+provider availability never grants or requires the read scope for encoding.
+Other providers, workers, UI installs and independent services remain outside
+this control set. No dynamic code, deployment or runtime termination is added.
 
 ## Authority and admission
 
@@ -68,7 +69,8 @@ identity snapshot. Disabled query is omitted from tool discovery and returns
 404 before forwarding. Disabled LLM is absent from capability discovery;
 `/v1/models` and both JSON/SSE `/v1/chat/completions` return 404 without reading
 the chat body, consuming a slot or preparing/calling a provider. Other tools and
-capabilities remain unaffected. Normal scope validation is retained before invocation; lifecycle
+capabilities remain unaffected. Embedding model catalogues omit a stopped provider;
+all its aliases and encoding endpoints deny before queue insertion or encoding. Normal scope validation is retained before invocation; lifecycle
 enabled state never grants a scope. Existing user Authorization/request-id
 forwarding and source API authorization remain unchanged. State/discovery/tools/model-catalogue
 and authorization responses use `Cache-Control: no-store`.
@@ -95,9 +97,9 @@ an authority remains the old behavior only while strict mode is off.
 This flag is a deployment gate, not proof that all old clients have upgraded.
 **Do not enable production mutations until every authorization consumer is
 updated to this snapshot vocabulary and every controlled invocation instance uses
-the same authority with strict-mode acceptance.** The older query-only snapshot
-parser rejects the newly disabled LLM id with 503 rather than ignoring it. Update
-all authority consumers, not just the LLM gateways, before allowing LLM mutations;
+the same authority with strict-mode acceptance.** Older query-only or query/LLM snapshot
+parsers reject newly disabled embedding ids with 503 rather than ignoring them. Update
+all authority consumers, not just the embedding gateways, before allowing new group mutations;
 otherwise even unrelated authenticated requests on old strict consumers can
 become unavailable. The protocol shape stays version 1; the supported controlled
 id vocabulary is deployment-coupled and fails closed on unknown ids. An old binary
@@ -111,7 +113,7 @@ Maintainer-only staged rollout (not performed by this PR):
 
 1. Deploy the updated authority with flag `0`; verify its new snapshot and empty
    control state. The three table additions are additive and default enabled.
-2. Deploy **every** authority consumer and query/LLM gateway with this protocol and flag `1`,
+2. Deploy **every** authority consumer and query/LLM/embedding gateway with this protocol and flag `1`,
    preserving exact TLS/issuer/account authority configuration. Verify valid
    snapshot admission and denial on missing/unavailable authority; old versions
    must be removed from routing. No developer credential authorizes this step.
@@ -260,3 +262,96 @@ UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pyte
 ```
 
 No real provider/production configuration, grant or data was used or changed.
+
+## Embedding provider availability groups (#324 / #325)
+
+Two additional controllable roots are `builtin.platform.provider.d100m` and
+`builtin.platform.provider.qwen-worker`. They are provider-wide availability
+controls, not new data permissions. A stopped root denies model discovery and
+all its encode operations, regardless of whether callers have read, write or
+both scopes. Encoding still requires only `embedding:write` at the endpoint and
+its existing write-capability floor; no read permission is added. The roots'
+`-encode` children are hidden/rejected in unified capability discovery/detail
+when their parent stops. Children are deliberately not independently mutable
+control ids, preventing a misleading half-stopped provider state.
+
+Both native and Provider paths enforce the root before queue insertion and
+worker/encoder calls. Image handling also rejects before reading the parsed
+UploadFile and still closes it. FastAPI parses JSON/multipart before entering
+these typed endpoints; this is NOT a pre-network/pre-parser upload rejection.
+The existing file/byte/model-space validation remains intact for admitted calls.
+A stopped model returns 404, not a success with synthetic output. The other
+provider and caller-scoped history/physical worker status remain available.
+Health/configuration and process metrics are not account admission decisions.
+D100M's synchronous CPU cannot be forcibly cancelled by this control; Qwen keeps
+its existing process deadline/termination. Already admitted work may finish.
+
+Protocol shape remains v1, but its supported-id vocabulary now includes all four
+roots. Update every authorization consumer before enabling these mutations;
+older parsers fail closed on new ids, potentially affecting unrelated protected
+requests. This is a rollout requirement, not something a feature flag verifies.
+All mutation flags/grants remain unchanged in real environments.
+
+Core focused suite: 97 pass. Provider focused suite: 100 pass. The combined tree
+passes 155 focused tests and four embedding lifecycle cases with
+`EMBEDDING_CAPABILITY_ADAPTERS=0`. Tests cover two gateway instances with separate
+local queue databases, alias/route coverage, read/write separation, actual image
+success/rejection/closure, durable stop/re-enable, scope/authority failures,
+no rejected job records/worker calls and parent/encode metadata filtering.
+All workers/vectors/images are explicitly synthetic; no model download or real
+embedding-quality claim. Earlier fixture mistakes were corrected before the
+successful runs; unsuccessful exploratory outputs are not acceptance.
+
+Combined source: base `acc52f3` plus current #325 Provider implementation and
+#332 core controls. Keep #325's `xeonolab/embedding.py` (its registry applies the
+same root gate) and use all core query/LLM guards. Manifest entries are explicitly
+unioned without differing duplicates; the generated embedding OpenAPI conflict
+is resolved by exporting the actual combined app, retaining its 404/409 contract.
+A separate check requires all four roots plus both encode children to exist,
+so deny-path tests cannot accidentally pass with missing declarations. Local
+staged tree `cf7d9d8664b60b6cca7fd316ce680edcee88184d` is a test tree, not a release.
+
+No real OIDC, GPU/model, multi-host, visual, production or service-runtime
+acceptance was performed. The rollout, audit/CAS, failure and rollback semantics
+above apply unchanged to these groups.
+
+
+Current embedding authority validation (Python 3.12.14, base `acc52f3`):
+
+- Provider: **750 passed / 13 failed in 419.47s**.
+- Core: **763 passed / 13 failed in 434.46s**.
+- Combined: **784 passed / 13 failed in 297.73s**.
+
+All three exact failed-name sets match the original unmodified baseline's 13
+Lean failures (`/proc/1/ns/net`, `mnt` stat PermissionError 13); no checks or
+sandbox protections were weakened/skipped. The first two ran concurrently with
+separate temporary directories; elapsed time is not a performance comparison.
+Ruff and diff checks pass. OpenAPI changes on the native core add only the
+embedding 404 admission responses; the combined Provider retains its existing
+404/409 error contract. Combined actual 11-service smoke and crash failure
+injection pass. Isolated staged Docker COPY layouts resolve both embedding roots;
+Docker CLI is unavailable (exit127), so no image was built.
+
+```sh
+# Provider worktree focused and full:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_providers.py tests/test_quality_provider.py tests/test_qwen_worker.py tests/test_embedding_queue.py tests/test_capabilities.py -q
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/embedding-authority-test-tmp
+# Core worktree focused and full:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_lifecycle.py tests/test_capability_lifecycle.py tests/test_llm_lifecycle.py tests/test_embedding_queue.py tests/test_quality_provider.py tests/test_capabilities.py -q
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/embedding-lifecycle-test-tmp
+# Combined worktree focused, fallback mode and full:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_lifecycle.py tests/test_embedding_providers.py tests/test_capability_lifecycle.py tests/test_llm_lifecycle.py tests/test_embedding_queue.py tests/test_quality_provider.py tests/test_qwen_worker.py tests/test_capabilities.py tests/test_accounts.py -q
+EMBEDDING_CAPABILITY_ADAPTERS=0 UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_lifecycle.py -q
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/embedding-combined-test-tmp
+```
+
+The successful core focused run is 97 cases, including a corrected worker-like
+image fixture with the existing default truncation argument and a closable
+read-tripwire. The old unsupported-control negative test now uses the still
+unintegrated index worker and independent encode child, because D100M is now
+intentionally supported. Earlier unsuccessful exploratory runs are not counted.
+No real weights, GPU, OIDC, model quality, multi-host, production or visual
+acceptance was performed; protected CI and maintainer acceptance remain pending.

@@ -16,7 +16,18 @@ from .common import APIError, connect, identity, response, transaction
 QUERY_CAPABILITY = "builtin.platform.tool.xelibrary-query"
 # Expand only alongside an actual invocation + discovery integration and tests.
 LLM_CAPABILITY = "builtin.platform.provider.llm-chat"
-CONTROLLABLE = frozenset({QUERY_CAPABILITY, LLM_CAPABILITY})
+D100M_CAPABILITY = "builtin.platform.provider.d100m"
+QWEN_CAPABILITY = "builtin.platform.provider.qwen-worker"
+CONTROLLABLE = frozenset({QUERY_CAPABILITY, LLM_CAPABILITY, D100M_CAPABILITY, QWEN_CAPABILITY})
+PROVIDER_PARENTS = {
+    D100M_CAPABILITY + "-encode": D100M_CAPABILITY,
+    QWEN_CAPABILITY + "-encode": QWEN_CAPABILITY,
+}
+
+
+def capability_disabled(capability_id, disabled):
+    return capability_id in disabled or PROVIDER_PARENTS.get(capability_id) in disabled
+
 MAX_GENERATION = 2**63 - 1
 
 

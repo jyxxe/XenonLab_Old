@@ -194,8 +194,13 @@ class Identity:
         if scope not in self.scopes:
             raise APIError(403, "FORBIDDEN", f"scope required: {scope}")
 
+    def capability_disabled(self, capability_id):
+        from .capability_lifecycle import capability_disabled
+
+        return capability_disabled(capability_id, self.disabled_capabilities)
+
     def require_capability(self, capability_id):
-        if capability_id in self.disabled_capabilities:
+        if self.capability_disabled(capability_id):
             raise APIError(404, "CAPABILITY_NOT_FOUND", "no such capability")
 
 
@@ -605,7 +610,7 @@ def base_app(service, settings=None):
 
         duration = time.monotonic() - started
         result.headers["X-Request-ID"] = request.state.request_id
-        if request.url.path.startswith(("/api/v1/auth/", "/api/v1/capabilities")) or request.url.path in {"/api/v1/tools", "/v1/models"}:
+        if request.url.path.startswith(("/api/v1/auth/", "/api/v1/capabilities")) or request.url.path in {"/api/v1/tools", "/v1/models", "/api/v1/embed/models"}:
             result.headers["Cache-Control"] = "no-store"
         record_request(result.status_code, duration)
         return result
