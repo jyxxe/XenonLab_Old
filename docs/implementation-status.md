@@ -303,3 +303,7 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 
 `POST /api/v1/exports` + `GET /api/v1/exports/{job_id}` + `/download`：按表导出 JSONL/CSV 快照，行级读 ACL 过滤（无读权限的行不会出现），下载与状态仅 owner 或 `xelibrary:admin`。`POST /api/v1/imports` + 状态 + `/cancel`：内容上限 `XELIBRARY_IMPORT_MAX_BYTES`（默认 2MB，超限 413），导出行快照与纯值对象均可导入（往返无缝），逐条结果与错误定位、部分失败不丢弃已应用行；取消为协作式（queued 直接 cancelled，running 由 worker 行间检查），取消/失败清理输出文件。作业持久化扩展 #83 的 `BulkJobStore`（output/cancel_requested 列与 complete/set_done/request_cancel/finish_cancelled），重启恢复语义一致。集成时与 #83 的作用域 batch_id、载荷摘要与恢复对账合并且迁移同时覆盖旧表与导出列；OpenAPI 重新生成。
 >>>>>>> origin/feature/platform-v1
+
+### Issue #117 XeLibrary 数据生命周期设计（设计稿，未实现）
+
+`docs/design/xelibrary-data-lifecycle.md` 定义 `__xl_changes` 保留窗口（每表 5 万条/30 天，显式维护端点、默认 dry-run、audit）、共享附件对象 GC（跨表引用差集 + 24h 宽限期 + 待删清单对账）、派生索引/向量与模型空间迁移边界、import/export 输出清理与增长指标。实现（维护端点、GC 编排、指标接线）作为后续独立增量，不在本设计内自动启用。
