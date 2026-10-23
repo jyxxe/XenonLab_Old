@@ -145,6 +145,7 @@ interfaces for Tool Gateway/providers must be designed per contract before any
 business module moves, and service plugins remain blocked on the Phase 3
 security design and Deploy Gateway integration.
 
+
 ### Phase 2: first trusted LLM Provider migration (#322)
 
 `ChatProvider` / `PreparedChat` separate static provider configuration and canonical
@@ -156,3 +157,12 @@ HTTP binding (0). JSON now shares the gateway's absolute deadline/error boundary
 Details, process-local lifecycle limits, rollback and validation are recorded in
 `docs/issue322-chat-provider.md`. Persistent cross-service lifecycle coordination,
 Embedding adaptation and service runtime security are still separate work.
+
+## Phase 3 design proposal
+
+[ADR 0010](0010-service-plugin-runtime-security.md) proposes the independent
+service admission, identity, execution-policy and fenced lifecycle boundaries.
+Its offline declaration contract is not a runtime registry, deployment grant or
+security acceptance. Existing `runtime=service` metadata and Phase 2 trusted
+adapters must not enable third-party server code execution implicitly.
+

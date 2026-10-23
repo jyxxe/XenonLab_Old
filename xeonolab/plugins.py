@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import Depends, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .common import APIError, connect, etag, precondition, response, scope, transaction
 
@@ -139,8 +139,16 @@ def _installed_manifest(install):
 
     Catalogue edits must not silently change an installed app or widget. Only an
     explicit reinstall (which re-checks permissions) advances the snapshot.
+    Return None for invalid schema or mismatched identity; callers isolate that
+    installation without exposing validation details or changing stored state.
     """
-    return PluginManifest.model_validate_json(install["manifest"])
+    try:
+        manifest = PluginManifest.model_validate_json(install["manifest"])
+    except ValidationError:
+        return None
+    if manifest.id != install["plugin_id"]:
+        return None
+    return manifest
 
 
 def _install_row(db, owner, plugin_id):
@@ -172,6 +180,7 @@ def installed_app_ids(db):
 def _catalog_item(db, row, owner, scopes):
     manifest = _manifest(row)
     install = _install_row(db, owner, manifest.id)
+    accepted = _installed_manifest(install) if install is not None else None
     missing = [value for value in manifest.permissions if value not in scopes]
     return {
         **manifest.model_dump(),
@@ -179,8 +188,8 @@ def _catalog_item(db, row, owner, scopes):
         "published_at": row["published_at"],
         "updated_at": row["updated_at"],
         "installed": install is not None,
-        "installed_app": bool(install is not None and _installed_manifest(install).app is not None),
-        "installed_widget": bool(install is not None and _installed_manifest(install).widget is not None),
+        "installed_app": bool(accepted is not None and accepted.app is not None),
+        "installed_widget": bool(accepted is not None and accepted.widget is not None),
         "enabled": bool(install["enabled"]) if install is not None else False,
         "installed_version": install["installed_version"] if install is not None else None,
         "installed_at": install["installed_at"] if install is not None else None,
@@ -203,7 +212,7 @@ def installed_apps(db, owner, scopes):
     entries = []
     for row in rows:
         manifest = _installed_manifest(row)
-        if manifest.app is None or not set(manifest.permissions) <= scopes:
+        if manifest is None or manifest.app is None or not set(manifest.permissions) <= scopes:
             continue
         entries.append(
             {
@@ -228,7 +237,7 @@ def installed_widgets(db, owner, scopes):
     widgets = []
     for row in rows:
         manifest = _installed_manifest(row)
-        if manifest.widget is None or not set(manifest.permissions) <= scopes:
+        if manifest is None or manifest.widget is None or not set(manifest.permissions) <= scopes:
             continue
         widgets.append(
             {
@@ -431,7 +440,10 @@ def install_plugins(app, path, check_origin):
             item = _catalog_item(db, row, actor.sub, actor.scopes)
         return response(request, item)
 
-    @app.patch("/api/v1/plugins/{plugin_id}/install")
+    @app.patch(
+        "/api/v1/plugins/{plugin_id}/install",
+        responses={409: {"description": "PLUGIN_SNAPSHOT_INVALID: explicitly reinstall to repair the snapshot"}},
+    )
     def update_install(
         plugin_id: str, body: InstallPatch, request: Request, actor=Depends(scope("desktop:read"))
     ):
@@ -443,7 +455,10 @@ def install_plugins(app, path, check_origin):
             if body.enabled:
                 # Enabling applies the snapshot the account actually installed, not
                 # an unreviewed catalogue update.
-                check_install_scope(_installed_manifest(install), actor)
+                accepted = _installed_manifest(install)
+                if accepted is None:
+                    raise APIError(409, "PLUGIN_SNAPSHOT_INVALID", "reinstall plugin to repair its installed snapshot")
+                check_install_scope(accepted, actor)
             db.execute(
                 "UPDATE plugin_installs SET enabled=? WHERE owner=? AND plugin_id=?",
                 (1 if body.enabled else 0, actor.sub, plugin_id),
