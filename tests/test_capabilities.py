@@ -189,3 +189,17 @@ def test_version_requirement_is_enforced_by_the_endpoint(tmp_path, monkeypatch):
     assert bad.status_code == 409 and bad.json()["error"]["code"] == "CAPABILITY_INCOMPATIBLE"
     invalid = client.get(f"/api/v1/capabilities/{target}", params={"require": "nope"}, headers=auth("alice"))
     assert invalid.status_code == 422
+
+
+def test_plugin_migration_example_manifest_is_valid_and_namespaced():
+    import json as jsonlib
+    from pathlib import Path as PathType
+
+    from xeonolab.capabilities import CapabilityRegistry
+
+    example = PathType(__file__).resolve().parents[1] / "infra/plugins/examples/knowledge-app.manifest.json"
+    registry = CapabilityRegistry(jsonlib.loads(example.read_text()))
+    manifest = registry.all()
+    assert manifest["source"] == "declared"
+    assert manifest["capabilities"][0]["id"].startswith(manifest["id"] + ".")
+    assert {item["kind"] for item in manifest["capabilities"]} == {"app", "widget"}
