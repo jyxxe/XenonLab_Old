@@ -172,33 +172,13 @@ def create_app(service=None, settings=None):
 
             return JSONResponse(result.json(), status_code=result.status_code)
 
-        @app.get("/api/v1/tools")
-        def tools(request: Request, actor=Depends(scope("xelibrary:query"))):
-            return response(
-                request,
-                [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "description": description,
-                            "parameters": model.model_json_schema(),
-                        },
-                    }
-                    for name, description, model in [
-                        ("xelibrary.search", "Search authorized knowledge", Search),
-                        ("xelibrary.query", "Query authorized knowledge with DSL", ToolQuery),
-                        ("xelibrary.get", "Read an authorized row", ToolGet),
-                    ]
-                ],
-            )
-
-        @app.post("/api/v1/tools/xelibrary.query")
-        async def query(body: ToolQuery, request: Request, actor=Depends(scope("xelibrary:query"))):
+        async def query_handler(request, body):
             return await forward(request, "POST", "/api/v1/query", body.model_dump())
 
-        @app.post("/api/v1/tools/xelibrary.get")
-        async def get(body: ToolGet, request: Request, actor=Depends(scope("xelibrary:read"))):
+        async def search_handler(request, body):
+            return await forward(request, "POST", "/api/v1/search/semantic", body.model_dump())
+
+        async def get_handler(request, body):
             # UUID validation prevents tool input changing the upstream URL path.
             from uuid import UUID
 
@@ -215,9 +195,50 @@ def create_app(service=None, settings=None):
                 return JSONResponse(data)
             return result
 
+        from .tool_adapters import ToolAdapter, ToolAdapters
+
+        definitions = [
+            ("xelibrary.search", "Search authorized knowledge", Search, "xelibrary:query", search_handler),
+            ("xelibrary.query", "Query authorized knowledge with DSL", ToolQuery, "xelibrary:query", query_handler),
+            ("xelibrary.get", "Read an authorized row", ToolGet, "xelibrary:read", get_handler),
+        ]
+        app.state.tool_adapters = ToolAdapters([
+            ToolAdapter(name, "builtin.platform.tool." + name.replace(".", "-"), description, model,
+                        frozenset([permission]), handler)
+            for name, description, model, permission, handler in definitions
+        ])
+        adapter_flag = os.getenv("TOOL_CAPABILITY_ADAPTERS", "1")
+        if adapter_flag not in {"0", "1"}:
+            raise ValueError("TOOL_CAPABILITY_ADAPTERS must be 0 or 1")
+        app.state.tool_adapters_enabled = adapter_flag == "1"
+
+        async def invoke(name, actor, request, body, legacy_handler):
+            if app.state.tool_adapters_enabled:
+                return await app.state.tool_adapters.invoke(name, actor, request, body)
+            return await legacy_handler(request, body)
+
+        @app.get("/api/v1/tools")
+        def tools(request: Request, actor=Depends(scope("xelibrary:query"))):
+            if app.state.tool_adapters_enabled:
+                return response(request, app.state.tool_adapters.describe(actor))
+            return response(request, [
+                {"type": "function", "function": {
+                    "name": name, "description": description, "parameters": model.model_json_schema(),
+                }}
+                for name, description, model, _, _ in definitions
+            ])
+
+        @app.post("/api/v1/tools/xelibrary.query")
+        async def query(body: ToolQuery, request: Request, actor=Depends(scope("xelibrary:query"))):
+            return await invoke("xelibrary.query", actor, request, body, query_handler)
+
+        @app.post("/api/v1/tools/xelibrary.get")
+        async def get(body: ToolGet, request: Request, actor=Depends(scope("xelibrary:read"))):
+            return await invoke("xelibrary.get", actor, request, body, get_handler)
+
         @app.post("/api/v1/tools/xelibrary.search")
         async def search(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
-            return await forward(request, "POST", "/api/v1/search/semantic", body.model_dump())
+            return await invoke("xelibrary.search", actor, request, body, search_handler)
 
     elif service == "dev-agent":
         from .triage import install as install_triage
