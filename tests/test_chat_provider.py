@@ -251,3 +251,66 @@ def test_registry_defensively_rejects_a_corrupted_in_memory_budget():
     with pytest.raises(APIError) as error:
         registry.resolve(Identity("synthetic", {"llm:use"}))
     assert error.value.code == "CAPABILITY_INVALID" and not registry.ready()
+
+
+class LifecycleActor(Identity):
+    def __init__(self, disabled=False):
+        super().__init__('synthetic', {'llm:use'})
+        self.lifecycle_revision = 3
+        self.disabled = disabled
+
+    def require_capability(self, capability_id):
+        assert capability_id == 'builtin.platform.provider.llm-chat'
+        if self.disabled:
+            raise APIError(404, 'CAPABILITY_NOT_FOUND', 'no such capability')
+
+
+def test_authority_denial_cannot_be_overridden_by_local_enable():
+    registry = ChatProviderRegistry(SyntheticProvider(None), lifecycle_required=True)
+    denied = LifecycleActor(True)
+    registry.set_enabled(True)
+    with pytest.raises(APIError) as error:
+        registry.resolve(denied)
+    assert error.value.status == 404
+    assert registry.resolve(LifecycleActor()).provider.configured()
+    registry.set_enabled(False)
+    with pytest.raises(APIError):
+        registry.resolve(LifecycleActor())
+
+
+def test_strict_chat_registry_requires_a_verified_core_snapshot():
+    registry = ChatProviderRegistry(SyntheticProvider(None), lifecycle_required=True)
+    unverified = LifecycleActor()
+    unverified.lifecycle_revision = None
+    for identity in (Identity('old-core', {'llm:use'}), unverified):
+        with pytest.raises(APIError) as error:
+            registry.resolve(identity)
+        assert error.value.code == 'CAPABILITY_LIFECYCLE_UNAVAILABLE'
+    # Actorless process readiness is not an account authorization decision.
+    assert registry.ready()
+
+
+@pytest.mark.parametrize('flag', ['0', '1'])
+def test_authority_gate_precedes_body_capacity_and_both_provider_paths(settings, monkeypatch, flag):
+    from starlette.requests import Request
+
+    monkeypatch.setenv('LLM_CAPABILITY_ADAPTERS', flag)
+    app, client = gateway(settings)
+    denied = LifecycleActor(True)
+    app.state.authorization_resolver = lambda token: denied
+    app.state.chat_providers.set_enabled(True)
+    assert client.get('/v1/models', headers=auth()).status_code == 404
+    for stream in (False, True):
+        assert client.post('/v1/chat/completions', headers=auth(), json={'stream': stream}).status_code == 404
+    endpoint = next(r.endpoint for r in app.routes if getattr(r, 'path', '') == '/v1/chat/completions')
+    before = app.state.llm_stream_slots.qsize()
+
+    async def run():
+        async def receive():
+            pytest.fail('stopped capability must not read a request body')
+        request = Request({'type': 'http', 'method': 'POST', 'path': '/v1/chat/completions', 'headers': []}, receive)
+        with pytest.raises(APIError) as error:
+            await endpoint(request, denied)
+        assert error.value.status == 404
+    asyncio.run(run())
+    assert app.state.llm_stream_slots.qsize() == before

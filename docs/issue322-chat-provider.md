@@ -149,3 +149,82 @@ Exact focused command for this refresh:
 ```sh
 UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_chat_provider.py tests/test_llm_gateway.py tests/test_capabilities.py tests/test_plugin_manifest.py -q
 ```
+
+## Persistent authority interoperability (#331 / #332)
+
+ChatProviderRegistry now intersects local enablement with the core Identity's
+`require_capability` hook. `CAPABILITY_LIFECYCLE_ENABLED=1` requires that hook and
+a verified nonnegative snapshot revision, otherwise 503. Default mode remains
+compatible with old Identity objects until rollout; a supplied hook is always
+honored. This branch does not itself create an authority or management grant.
+
+The service checks authority before the Provider/legacy flag branch and before
+reading a chat body or taking a capacity slot. `LLM_CAPABILITY_ADAPTERS=0` and
+local `set_enabled(True)` cannot override a global stop. `/v1/models`, JSON and
+SSE refuse a stopped capability with 404. Scope checks, alias/credential mapping,
+TLS, deadlines and resource cleanup remain unchanged. Healthy model responses
+use no-store; #332's core applies it to denied discovery responses too.
+
+Actorless readiness deliberately does not authorize any account; it checks local
+binding/configuration. A stream already admitted from a valid snapshot may drain
+within its existing budget after disable. New requests fetch the live authority
+and are denied; this is not remote process termination or service deployment.
+
+The #332 extension checks both native LLM endpoints before the adapter interface
+is installed and adds the matching builtin descriptor. It exposes no additional
+controls for other providers/workers. All authority consumers must be upgraded
+before LLM mutations: query-only parsers reject the new disabled id, rather than
+silently ignoring it. Rollout remains default off, with the dedicated human
+management grant and strict account-authority configuration; no real flags or
+grants were modified here.
+
+Validation: 55 Provider/LLM/capability/schema focused tests pass on this branch;
+79 authority/LLM/account/capability focused tests pass on standalone #332.
+Combined source passes 110 focused tests and four LLM lifecycle tests with
+`LLM_CAPABILITY_ADAPTERS=0`. These exercise actual synthetic authority mutations,
+metadata/JSON/SSE boundaries, two gateway instances/restart, strict snapshot
+failure, scope denial, pre-body/pre-slot rejection, local enable intersection,
+and admitted-stream cleanup followed by new-call denial. Ruff/OpenAPI export
+pass, with no new response schema changes. Exact combined source construction
+and tree are recorded in `docs/issue331-capability-lifecycle.md`.
+
+No real provider, OIDC, production, multi-host, visual or service runtime
+acceptance was performed. COPY-layout probes confirm manifest presence only;
+Docker CLI still exits 127, so no image was built. Full-suite results below refer
+to these updated sources; earlier counts above retain their source snapshots.
+
+
+Current full-suite results (Python 3.12.14, base `acc52f3`):
+
+- Provider branch: **751 passed / 13 failed in 412.09s**.
+- Core lifecycle branch: **759 passed / 13 failed in 428.55s**.
+- Combined source: **781 passed / 13 failed in 290.73s**.
+
+All three exact failure-name sets match the previously reproduced unmodified
+baseline's 13 Lean verifier failures (`/proc/1/ns/net`, `mnt` stat PermissionError
+13). No sandbox checks were skipped or weakened. The first two suites ran
+concurrently; durations are not a performance comparison. The small subsequent
+fixture re-export correction changed no test behavior; its four cases were
+rerun. Source branches pass Ruff, export OpenAPI without new API-schema drift
+and diff check. Combined 11-service smoke and crash failure injection pass.
+Current protected CI and maintainer acceptance remain outstanding.
+
+```sh
+# Provider branch:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_chat_provider.py tests/test_llm_gateway.py tests/test_capabilities.py tests/test_plugin_manifest.py -q
+# Core branch:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_llm_lifecycle.py tests/test_capability_lifecycle.py tests/test_llm_gateway.py tests/test_accounts.py tests/test_capabilities.py -q
+# Combined source:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_llm_lifecycle.py tests/test_chat_provider.py tests/test_capability_lifecycle.py tests/test_llm_gateway.py tests/test_accounts.py tests/test_capabilities.py tests/test_plugin_manifest.py tests/test_services.py -q
+LLM_CAPABILITY_ADAPTERS=0 UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_llm_lifecycle.py -q
+# Each source in its own worktree/temporary directory:
+mkdir -p runtime
+# In the Provider worktree:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/llm-authority-test-tmp
+# In the core worktree:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/llm-lifecycle-test-tmp
+# In the combined worktree:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/llm-combined-test-tmp
+```
+
+No real provider/production configuration, grant or data was used or changed.

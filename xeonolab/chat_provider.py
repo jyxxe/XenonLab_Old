@@ -113,16 +113,23 @@ class ResolvedChatProvider:
     timeout_seconds: int | None = None
 
 
+CHAT_CAPABILITY = "builtin.platform.provider.llm-chat"
+
+
 class ChatProviderRegistry:
     """One trusted active binding; replacement/enablement are kernel-only hooks."""
 
-    def __init__(self, provider, *, capability_id="builtin.platform.provider.llm-chat", require="^1.0.0",
-                 registry_loader=load_registry):
+    def __init__(self, provider, *, capability_id=CHAT_CAPABILITY, require="^1.0.0",
+                 registry_loader=load_registry, lifecycle_required=None):
         self._provider = provider
         self._enabled = True
         self._capability_id = capability_id
         self._require = require
         self._registry_loader = registry_loader
+        mode = os.getenv("CAPABILITY_LIFECYCLE_ENABLED", "0")
+        if mode not in {"0", "1"}:
+            raise ValueError("CAPABILITY_LIFECYCLE_ENABLED must be 0 or 1")
+        self._lifecycle_required = mode == "1" if lifecycle_required is None else lifecycle_required
 
     def replace(self, provider):
         self._provider = provider
@@ -130,7 +137,17 @@ class ChatProviderRegistry:
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
 
+    def require_lifecycle(self, actor):
+        check = getattr(actor, "require_capability", None)
+        revision = getattr(actor, "lifecycle_revision", None)
+        if self._lifecycle_required and (not callable(check) or type(revision) is not int or revision < 0):
+            raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "verified lifecycle snapshot required")
+        if callable(check):
+            check(self._capability_id)
+
     def _resolve(self, actor=None):
+        if actor is not None:
+            self.require_lifecycle(actor)
         if not self._enabled:
             raise APIError(404, "CAPABILITY_NOT_FOUND", "no such chat provider capability")
         capability = self._registry_loader().lookup(self._capability_id)

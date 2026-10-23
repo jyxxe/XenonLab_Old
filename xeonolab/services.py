@@ -301,6 +301,7 @@ def create_app(service=None, settings=None):
         app.state.llm_capability_adapters = provider_flag == "1"
 
         def resolved_provider(actor):
+            app.state.chat_providers.require_lifecycle(actor)
             if app.state.llm_capability_adapters:
                 return app.state.chat_providers.resolve(actor)
             return ResolvedChatProvider(default_provider)
@@ -313,7 +314,9 @@ def create_app(service=None, settings=None):
         def models(actor=Depends(scope("llm:use"))):
             provider = resolved_provider(actor).provider
             try:
-                return {"object": "list", "data": provider.models()}
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"object": "list", "data": provider.models()}, headers={"Cache-Control": "no-store"})
             except Exception:
                 raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
 
@@ -332,6 +335,7 @@ def create_app(service=None, settings=None):
             },
         )
         async def chat(request: Request, actor=Depends(scope("llm:use"))):
+            app.state.chat_providers.require_lifecycle(actor)
             started = asyncio.get_running_loop().time()
             deadline = started + app.state.llm_stream_timeout_seconds
             try:
