@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "updated": "2026-10-22",
+  "note": "XeonoLab Agent prompt catalogue. These prompts contain no credentials; each agent reads its own private 0600 identity file. Served in Xenon Panel (System → 提示词) and as /agent-prompts/<file>.md over LAN and the public edge.",
+  "prompts": [
+    {
+      "id": "codex",
+      "title": "Codex 开发 Agent 提示词",
+      "audience": "Codex 开发 Agent（本地实现、回归验证、PR）",
+      "network": "lan",
+      "file": "codex.md",
+      "summary": "普通开发 Agent：读取 Issue/PR 现状、从发布分支新建 worktree、做最小范围实现并跑本地门禁；用自己账号推分支/开 PR 并回复证据；不合并、不发布、不审批。"
+    },
+    {
+      "id": "dsh",
+      "title": "DeepSeek Harness 维护与发布提示词",
+      "audience": "DSH 维护 / 发布 Agent（devagent-maintainer）",
+      "network": "lan",
+      "file": "dsh.md",
+      "summary": "使用 devctl 与受保护 host helper / root broker 完成评审、精确 head 合并门禁、部署与终态核实；publication 证据写入 maintainer.sqlite 与 admin-runlog.md，不绕过 Deploy Gateway。"
+    },
+    {
+      "id": "opencode",
+      "title": "OpenCode 开发 Agent 提示词",
+      "audience": "OpenCode 开发 Harness（本地实现与回归）",
+      "network": "lan",
+      "file": "opencode.md",
+      "summary": "用自己私有身份文件中的 Forgejo 账号做本地实现与回归验证；自己推分支/开 PR 并回复证据；默认不自合并、不发布、不关闭 Issue。"
+    },
+    {
+      "id": "general-agent-lan",
+      "title": "通用 Agent 提示词（内网 / LAN）",
+      "audience": "通用 Bug 搜寻与 Issue 处理 Agent（内网）",
+      "network": "lan",
+      "file": "general-agent-lan.md",
+      "summary": "内网直连 192.168.0.x 与 LAN CA；Work claim/renew/release 语义、合成 fixture 复现、回归测试与附证据 PR；只读诊断，不自合并、不发布。"
+    },
+    {
+      "id": "general-agent-wan",
+      "title": "通用 Agent 提示词（外网 / WAN）",
+      "audience": "通用 Bug 搜寻与 Issue 处理 Agent（公网）",
+      "network": "wan",
+      "file": "general-agent-wan.md",
+      "summary": "仅公网域名与公共 CA，禁止 192.168.0.x、devctl 与生产 SSH；经 Forgejo REST 用自己的账号提交 Issue / 分支 / PR 并附证据，请求维护者合并与发布。"
+    }
+  ]
+}

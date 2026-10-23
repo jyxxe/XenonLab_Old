@@ -35,3 +35,16 @@ Existing model/OIDC dependencies remain as before. Rollback: revert the frontend
 PR and rebuild its artifact. No production activation is claimed.
 
 Submission base update: safely fast-forwarded from `a2d62a0` to `43c0aae`; the only base additions were the firewall template and runbook. All listed gates were rerun on the new base, with unchanged frontend build hashes. The intended PR is a draft against the #142 branch until #144 merges.
+
+## Coordinator integration (2026-10-23)
+
+Refreshed onto release base `4c475f17` (the #142 branch this was drafted against has
+long been merged, so the PR base is now `feature/platform-v1`). Conflicts were CSS
+(both the batch-input rules and the newer unrelated styles kept) and two shell-fixture
+hunks: the fixture control object keeps the branch's embedding flags plus the base's
+newer scenario flags, and the identity response keeps the base's scenario handling
+with the branch's `embeddingReadOnly` conditional. The backend `/api/v1/embed/text`
+already accepts a string or a list of strings, so no API change is needed.
+
+Final gates: 579 pytest, full-repository Ruff, OpenAPI no diff, frontend unit tests,
+tsc + Vite build, the extended shell acceptance and the full 71/71 browser regression.

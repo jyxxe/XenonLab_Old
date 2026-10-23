@@ -1,0 +1,161 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import {spawn,execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {createServer} from '../../../apps/desktop-web/node_modules/vite/dist/node/index.js';
+import {chromium} from '../../../apps/desktop-web/node_modules/playwright-core/index.mjs';
+
+const helper=path.dirname(new URL(import.meta.url).pathname);
+const source=path.resolve(helper,'../../..');
+const evidence=path.join(source,'runtime/verification/iframe-navigation-status');
+await fs.mkdir(evidence,{recursive:true});
+const appRoot=path.join(source,'apps/desktop-web');
+const fixtureTsx=path.join(appRoot,'tests/__agent_round31_origin_update_fixture.tsx');
+const fixtureHtml=path.join(appRoot,'tests/__agent_round31_origin_update_fixture.html');
+const temp=await fs.mkdtemp(path.join(os.tmpdir(),'xeonolab-round31-origin-'));
+const port=async()=>{const server=net.createServer();await new Promise((ok,no)=>server.listen(0,'127.0.0.1',ok).once('error',no));const n=server.address().port;await new Promise(ok=>server.close(ok));return n};
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function waitFor(fn,label){const until=Date.now()+30000;while(Date.now()<until){try{const result=await fn();if(result)return result}catch{}await sleep(100)}throw new Error(`Timed out waiting for ${label}`)}
+await fs.copyFile(path.join(helper,'fixture.tsx'),fixtureTsx);await fs.copyFile(path.join(helper,'fixture.html'),fixtureHtml);
+const apiPort=await port(),vitePort=await port(),originAPort=await port(),originBPort=await port();
+const api=spawn('uv',['run','python',path.join(helper,'local_desktop_api.py')],{cwd:source,env:{...process.env,PYTHONPATH:source,ROUND31_DATA_DIR:path.join(temp,'api-data'),ROUND31_API_PORT:String(apiPort)},stdio:'ignore'});
+let vite,browser,originAListening=false,originBListening=false;
+const responses={originA:0,originB:0},requestPaths={originA:[],originB:[]};
+const originA=http.createServer((request,response)=>{requestPaths.originA.push(request.url);if(request.url?.split('?')[0]==='/')responses.originA++;response.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});response.end('<!doctype html><main id="r31-origin-a">Origin A confirmed this app via app.ready</main><script>parent.postMessage({type:"app.ready"},"*")</script>')});
+const pendingResponses=[];
+const originB=http.createServer((request,response)=>{if(request.url?.startsWith('/hang')){pendingResponses.push(response);return;} requestPaths.originB.push(request.url);if(request.url?.split('?')[0]==='/')responses.originB++;response.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});response.end('<!doctype html><main id="r31-origin-b">Origin B page loaded; no app.ready message is implemented</main>'+ (request.url?.startsWith('/ready') ? '<script>parent.postMessage({type:"app.ready"},"*")</script>' : request.url?.startsWith('/error') ? '<script>parent.postMessage({type:"app.status",status:"auth-error"},"*")</script>' : request.url?.startsWith('/network') ? '<script>parent.postMessage({type:"app.status",status:"network-error"},"*")</script>' : ''))});
+const token='round31-local-synthetic-token';
+async function stop(child){if(child.exitCode!==null||child.signalCode!==null)return;const exited=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGTERM');await Promise.race([exited,sleep(3000)]);if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL')}
+try{
+  await Promise.all([
+    new Promise((ok,no)=>originA.listen(originAPort,'127.0.0.1',ok).once('error',no)),
+    new Promise((ok,no)=>originB.listen(originBPort,'127.0.0.1',ok).once('error',no)),
+  ]);originAListening=true;originBListening=true;
+  await waitFor(async()=>{try{return(await fetch(`http://127.0.0.1:${apiPort}/health/live`)).ok}catch{return false}},'local Desktop API');
+  vite=await createServer({root:appRoot,server:{host:'127.0.0.1',port:vitePort,strictPort:true,watch:null,proxy:{'/api/v1':{target:`http://127.0.0.1:${apiPort}`,changeOrigin:false}}}});await vite.listen();
+  browser=await chromium.launch({headless:true,executablePath:'/usr/bin/google-chrome',args:['--no-sandbox','--disable-dev-shm-usage']});
+  const page=await browser.newPage({viewport:{width:1440,height:1000}});const pageErrors=[];page.on('pageerror',error=>pageErrors.push(error.message));
+  const origin=`http://127.0.0.1:${vitePort}`;await page.goto(`${origin}/tests/__agent_round31_origin_update_fixture.html`);
+  await page.locator('.desktop').waitFor({state:'visible'});
+  await page.locator('nav.dock button[title="系统设置"]').click();
+  const settings=page.locator('.window[data-app-id=settings]');await settings.waitFor({state:'visible'});
+  await settings.getByRole('button',{name:'应用',exact:true}).click();
+  const panel=page.locator('.registry-panel');await panel.waitFor({state:'visible'});await panel.getByRole('button',{name:'新增应用'}).click();
+  await panel.getByLabel('应用标识').fill('round31-editor');
+  await panel.getByLabel('名称').fill('Round 31 Editor');
+  await panel.getByLabel('图标').fill('🧪');
+  await panel.getByLabel('应用来源').fill(`http://127.0.0.1:${originAPort}`);
+  await panel.getByLabel('入口路径').fill('/');
+  await panel.getByRole('button',{name:'保存应用'}).click();
+  await panel.getByRole('status').filter({hasText:'应用目录已更新'}).waitFor({state:'visible'});
+  const apiHeaders={Authorization:`Bearer ${token}`};
+  const readApp=async()=>{const r=await fetch(`http://127.0.0.1:${apiPort}/api/v1/apps/round31-editor`,{headers:apiHeaders});assert.equal(r.status,200);return (await r.json()).data};
+  const created=await readApp();assert.equal(created.origin,`http://127.0.0.1:${originAPort}`);
+  await page.locator('nav.dock button[title="LaunchPad"]').click();
+  await page.getByRole('option',{name:/Round 31 Editor/}).click();
+  const appWindow=page.locator('.window[data-app-id=round31-editor]');await appWindow.waitFor({state:'visible'});
+  const frame=()=>page.frameLocator('.window[data-app-id=round31-editor] iframe');
+  await frame().locator('#r31-origin-a').waitFor({state:'visible'});
+  await waitFor(async()=>await appWindow.locator('.iframe-toolbar').innerText().then(text=>text.includes('应用已连接')),'Origin A app.ready is accepted');
+  assert.ok(responses.originA>=1);
+
+  // Change only the registered origin while the application window remains open.
+  await page.locator('nav.dock button[title="系统设置"]').click();
+  await settings.getByRole('button',{name:'应用',exact:true}).click();
+  await panel.getByRole('button',{name:/Round 31 Editor/}).click();
+  await panel.getByLabel('应用来源').fill(`http://127.0.0.1:${originBPort}`);
+  await panel.getByRole('button',{name:'保存应用'}).click();
+  await panel.getByRole('status').filter({hasText:'应用目录已更新'}).waitFor({state:'visible'});
+  const edited=await waitFor(async()=>{const value=await readApp();return value.revision===2?value:null},'updated app registry revision');
+  await frame().locator('#r31-origin-b').waitFor({state:'visible'});
+  await page.waitForTimeout(1500);
+  const iframeUrl=await appWindow.locator('iframe').getAttribute('src');
+  const toolbarText=await appWindow.locator('.iframe-toolbar').innerText();
+  const bodyText=await frame().locator('#r31-origin-b').innerText();
+  const alertCount=await appWindow.getByRole('alert').count();
+  await appWindow.locator('iframe').evaluate(element=>{(window).__r31CurrentIframe=element;return element.id});
+  // Focus the existing app from its running Dock entry, preserving its iframe node,
+  // so the screenshot shows the loaded document and current unconfirmed state.
+  await page.locator('nav.dock button[title="Round 31 Editor"]').click();
+  await waitFor(async()=>await appWindow.getAttribute('data-window-active')==='true','edited app foregrounded from Dock');
+  assert.equal(await frame().locator('#r31-origin-b').innerText(),bodyText,'Origin B remains the current document after focusing the window');
+  assert.equal(await appWindow.locator('iframe').evaluate(element=>element===(window).__r31CurrentIframe),true,'foregrounding retains the existing iframe DOM');
+  // The shell can move existing window DOM when focusing; retain-node is the lifecycle contract.
+  const foregroundToolbar=await appWindow.locator('.iframe-toolbar').innerText();
+  assert.ok(foregroundToolbar.includes('页面已载入；认证和业务连接尚未确认。'));
+  await page.screenshot({path:path.join(evidence,'origin-b-loaded-unconfirmed.png'),fullPage:true});
+  const checks=['origin A ready then origin B load without ready clears connection; API revision 2 readback'];
+  const save=async({origin:targetOrigin,entry='/',title='Round 31 Editor'})=>{
+    console.log('save',entry,title);
+    await page.locator('nav.dock button[title="系统设置"]').click();
+    await panel.getByRole('button',{name:/Round 31 Editor/}).click();
+    await panel.getByLabel('应用来源').fill(targetOrigin);
+    await panel.getByLabel('入口路径').fill(entry);
+    await panel.getByLabel('名称').fill(title);
+    await panel.getByRole('button',{name:'保存应用'}).click();
+    await waitFor(async()=>{const row=await readApp();return row.origin===targetOrigin&&row.entry===entry&&row.title===title},'saved registry fields');
+  };
+  const status=async(text)=>waitFor(async()=> (await appWindow.locator('.iframe-toolbar').innerText()).includes(text),text);
+  const b=`http://127.0.0.1:${originBPort}`;
+  await save({origin:b,entry:'/ready'});await status('应用已连接');
+  checks.push('same origin new entry accepts current ready');
+  await appWindow.locator('iframe').evaluate(el=>window.__sameFrame=el);
+  const requestsBefore=requestPaths.originB.length;
+  await save({origin:b,entry:'/ready',title:'Round 31 Editor renamed'});
+  assert.equal(await appWindow.locator('iframe').evaluate(el=>el===window.__sameFrame),true);
+  assert.equal(requestPaths.originB.length,requestsBefore);
+  checks.push('title edit retains connected document without reload');
+  await save({origin:b,entry:'/error'});await status('应用需要登录或重新授权');
+  await save({origin:b,entry:'/'});await status('页面已载入；认证和业务连接尚未确认。');
+  checks.push('navigation clears previous error');
+  await save({origin:b,entry:'/network'});await status('应用连接失败');
+  await save({origin:b,entry:'/ready'});await status('应用已连接');
+  await page.locator('nav.dock button[title="Round 31 Editor"]').click();
+  const beforeRetry=requestPaths.originB.length;
+  await appWindow.locator('.iframe-toolbar').getByRole('button',{name:'重新加载',exact:true}).click();
+  await waitFor(()=>requestPaths.originB.length>beforeRetry,'retry requests page');await status('应用已连接');
+  checks.push('normal app status and explicit retry');
+  await appWindow.locator('iframe').evaluate(el=>window.__sameFrame=el);
+  await appWindow.locator('button[title="最小化"]').click();
+  await page.locator('nav.dock button[title="Round 31 Editor"]').click();
+  assert.equal(await appWindow.locator('iframe').evaluate(el=>el===window.__sameFrame),true);
+  checks.push('minimize and singleton reopen preserve frame');
+  const probe=await browser.newPage();probe.on('pageerror',error=>pageErrors.push(error.message));
+  await probe.goto(`${origin}/tests/__agent_round31_origin_update_fixture.html?probe=1&a=${encodeURIComponent(b)}&b=${encodeURIComponent(b)}`);
+  await waitFor(async()=> (await probe.locator('.iframe-toolbar').innerText()).includes('应用已连接'),'probe initial ready');
+  await probe.locator('iframe').evaluate(el=>window.__probeFrame=el);
+  const beforeTheme=requestPaths.originB.length;
+  await probe.getByRole('button',{name:'Theme',exact:true}).click();
+  assert.equal(await probe.locator('iframe').evaluate(el=>el===window.__probeFrame),true);
+  assert.equal(requestPaths.originB.length,beforeTheme);
+  await probe.getByRole('button',{name:'Navigate B',exact:true}).click();
+  await waitFor(async()=> (await probe.locator('.iframe-toolbar').innerText()).includes('尚未确认'),'probe silent entry');
+  assert.equal(await probe.getByLabel('AI 草稿内容').inputValue(),'Unsent local test draft');
+  assert.equal(await probe.getByRole('button',{name:'复制草稿',exact:true}).count(),1);
+  checks.push('theme keeps frame; unsent AskAI draft persists across navigation');
+  await probe.getByRole('button',{name:'Hang',exact:true}).click();
+  await waitFor(()=>pendingResponses.length>0,'current navigation request pending');
+  await waitFor(async()=> (await probe.locator('.iframe-toolbar').innerText()).includes('应用连接失败'),'fresh navigation load timeout');
+  await probe.getByRole('button',{name:'Ready',exact:true}).click();
+  await waitFor(async()=> (await probe.locator('.iframe-toolbar').innerText()).includes('应用已连接'),'navigation after timeout ready');
+  for(const response of pendingResponses)response.end('<main>late previous document</main>');
+  await probe.screenshot({path:path.join(evidence,'draft-and-ready.png'),fullPage:true});
+  checks.push('new navigation gets its own load deadline; ready navigation recovers from timeout');
+  await probe.close();
+  assert.equal(pageErrors.length,0);
+  await page.screenshot({path:path.join(evidence,'ready-after-entry-retry.png'),fullPage:true});
+  const sourceRevision=execFileSync('git',['-C',source,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
+  const sourceHashes={};for(const file of ['apps/desktop-web/src/shell/IFrameApp.tsx','apps/desktop-web/src/shell/DesktopShell.tsx'])sourceHashes[file]=createHash('sha256').update(await fs.readFile(path.join(source,file))).digest('hex');
+  const report={sourceRevision,sourceHashes,source,checks,pageErrors,created,edited,requestPaths,scope:'real DesktopShell/Settings/AppRegistry/IFrameApp, actual local FastAPI temporary SQLite and synthetic development admin; loopback benign pages only'};
+  await fs.writeFile(path.join(evidence,'browser-report.json'),JSON.stringify(report,null,2));
+  console.log(JSON.stringify(report,null,2));
+}finally{
+  if(browser)await browser.close();if(vite)await vite.close();
+  if(originAListening)await new Promise(resolve=>originA.close(resolve));if(originBListening)await new Promise(resolve=>originB.close(resolve));
+  await stop(api);await fs.rm(temp,{recursive:true,force:true,maxRetries:5,retryDelay:100});
+  await Promise.all([fixtureTsx,fixtureHtml].map(file=>fs.rm(file,{force:true})));
+}

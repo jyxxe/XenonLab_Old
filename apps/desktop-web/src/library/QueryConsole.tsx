@@ -1,7 +1,9 @@
-import React, {useState} from 'react';
+import {stringifyExactJSON} from './json.js';
+import React, {useEffect, useRef, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Skeleton, Textarea} from '../design-system/primitives';
 import {describeError, formatNumber, withQueryPagination} from './logic.js';
 import {QUERY_EXPRESSION_LIMIT, queryExpressionLength} from './query-drafts.js';
+import {serializeQueryResultsTSV} from './query-results-tsv.js';
 import type {QueryExplain} from './types';
 
 const KNOWN_UNSUPPORTED = [
@@ -34,6 +36,7 @@ export function QueryConsole({
   onClearRecent,
   onRetryStorage,
   tableName,
+  tableNameForCopy,
 }: {
   expression: string;
   onExpression: (value: string) => void;
@@ -56,11 +59,41 @@ export function QueryConsole({
   onClearRecent: () => void;
   onRetryStorage: () => void;
   tableName: (tableId: string) => string;
+  tableNameForCopy: (tableId: string) => string;
 }) {
   const [showUnsupported, setShowUnsupported] = useState(false);
   const [copyState, setCopyState] = useState('');
-  const [offset, setOffset] = useState(0);
+  const offset = plan?.offset ?? 0;
   const errorInfo = error ? describeError(error, '执行查询') : null;
+  const canCopyResults = queryEnabled && !running && !validating && !error && rows.length > 0;
+  const copyContext = useRef({rows, enabled: canCopyResults, generation: 0, busy: false});
+  if (copyContext.current.rows !== rows || copyContext.current.enabled !== canCopyResults) {
+    copyContext.current = {rows, enabled: canCopyResults, generation: copyContext.current.generation + 1, busy: false};
+  }
+  const [resultCopy, setResultCopy] = useState<{generation: number; busy: boolean; error: boolean; message: string} | null>(null);
+  const currentResultCopy = resultCopy?.generation === copyContext.current.generation ? resultCopy : null;
+  useEffect(() => () => { copyContext.current.generation += 1; }, []);
+
+  async function copyResults() {
+    const context = copyContext.current;
+    if (!context.enabled || context.busy) return;
+    const request = ++context.generation;
+    const isCurrent = () => copyContext.current === context && context.generation === request;
+    context.busy = true;
+    setResultCopy({generation: request, busy: true, error: false, message: ''});
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('剪贴板不可用');
+      const text = serializeQueryResultsTSV(context.rows, tableNameForCopy);
+      // Clipboard writes cannot be cancelled; a page/session change discards
+      // only this operation's feedback, without blocking a new page's copy.
+      await navigator.clipboard.writeText(text);
+      if (isCurrent()) setResultCopy({generation: request, busy: false, error: false, message: `已复制当前结果页 ${context.rows.length} 行为 TSV。`});
+    } catch {
+      if (isCurrent()) setResultCopy({generation: request, busy: false, error: true, message: '复制失败，请检查浏览器剪贴板权限后重试；当前结果已保留。'});
+    } finally {
+      if (isCurrent()) context.busy = false;
+    }
+  }
 
   const pageQuery = (nextOffset: number) => withQueryPagination(expression, plan?.limit ?? 100, nextOffset);
 
@@ -79,7 +112,7 @@ export function QueryConsole({
         aria-label="查询表达式"
         spellCheck={false}
         value={expression}
-        onChange={event => { setOffset(0); onExpression(event.target.value); }}
+        onChange={event => onExpression(event.target.value)}
         onKeyDown={event => {
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') onRun(expression);
         }}
@@ -111,7 +144,8 @@ export function QueryConsole({
         <Button
           onClick={async () => {
             try {
-              await navigator.clipboard?.writeText(expression);
+              if (!navigator.clipboard?.writeText) throw new Error('剪贴板不可用');
+              await navigator.clipboard.writeText(expression);
               setCopyState('已复制');
             } catch {
               setCopyState('复制失败');
@@ -121,11 +155,14 @@ export function QueryConsole({
         >
           复制查询
         </Button>
+        {rows.length > 0 && <Button loading={currentResultCopy?.busy} disabled={!canCopyResults} onClick={() => void copyResults()}>复制当前结果页为 TSV（{rows.length} 行）</Button>}
         <Button variant="ghost" onClick={() => setShowUnsupported(value => !value)}>已知未实现语法</Button>
         {copyState && <span className="muted" role="status">{copyState}</span>}
         {duration != null && <span className="muted">耗时 {duration} ms</span>}
         <span className="muted">结果 {formatNumber(rows.length)} 行</span>
       </div>
+
+      {currentResultCopy?.message && <p className="muted" role={currentResultCopy.error ? 'alert' : 'status'}>{currentResultCopy.message}</p>}
 
       {showUnsupported && (
         <div className="library-notice">
@@ -140,7 +177,7 @@ export function QueryConsole({
           <div><dt>路径</dt><dd className="mono">{plan.path}</dd></div>
           <div><dt>LIMIT</dt><dd>{plan.limit}</dd></div>
           <div><dt>OFFSET</dt><dd>{plan.offset}</dd></div>
-          <div><dt>ORDER BY</dt><dd>{plan.order_by ? JSON.stringify(plan.order_by) : '无'}{plan.descending ? ' DESC' : ''}</dd></div>
+          <div><dt>ORDER BY</dt><dd>{plan.order_by ? stringifyExactJSON(plan.order_by) : '无'}{plan.descending ? ' DESC' : ''}</dd></div>
           <div><dt>执行器</dt><dd>{plan.execution}</dd></div>
         </dl>
       )}
@@ -165,7 +202,7 @@ export function QueryConsole({
                     <td>{item.path}</td>
                     <td className="mono">{String(item._row_id).slice(0, 10)}…</td>
                     <td>r{item._revision}</td>
-                    <td title={JSON.stringify(item.values)}>{JSON.stringify(item.values).slice(0, 160)}</td>
+                    <td title={stringifyExactJSON(item.values)}>{stringifyExactJSON(item.values).slice(0, 160)}</td>
                     <td><Button size="sm" variant="ghost" onClick={() => onOpenRow(item.table_id, item._row_id)}>定位</Button></td>
                   </tr>
                 ))}
@@ -173,14 +210,14 @@ export function QueryConsole({
             </table>
           </div>
           <div className="library-query-pagination">
-            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); setOffset(next); onRun(pageQuery(next), false); }}>
+            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); onRun(pageQuery(next), false); }}>
               上一页
             </Button>
             <span className="muted">OFFSET {offset}</span>
             <Button
               size="sm"
               disabled={rows.length < (plan?.limit ?? 100) || running}
-              onClick={() => { const next = offset + (plan?.limit ?? 100); setOffset(next); onRun(pageQuery(next), false); }}
+              onClick={() => { const next = offset + (plan?.limit ?? 100); onRun(pageQuery(next), false); }}
             >
               下一页
             </Button>

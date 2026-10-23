@@ -18,7 +18,7 @@ async function jsonResponse(response: Response): Promise<any> {
   return body;
 }
 
-export function Embedding({api, apiPage, apiRaw}: AppViewProps) {
+export function Embedding({api, apiPage, apiRaw, openApp}: AppViewProps) {
   const [scopes, setScopes] = useState<string[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [jobs, setJobs] = useState<QueueJob[]>([]);
@@ -66,7 +66,7 @@ export function Embedding({api, apiPage, apiRaw}: AppViewProps) {
           setCounts(page.meta.counts && typeof page.meta.counts === 'object' ? page.meta.counts : {});
         }).catch(error => { if (active) setQueueError(errorText(error)); });
       } else { setJobs([]); setCounts({}); }
-    }).catch(error => { if (active) setIdentityError(errorText(error)); })
+    }).catch(error => { if (active) { setScopes([]); setIdentityError(errorText(error)); } })
       .finally(() => { if (active) setRefreshing(false); });
     return () => { active = false; };
   }, [api, apiPage, apiRaw, tick]);
@@ -128,7 +128,18 @@ export function Embedding({api, apiPage, apiRaw}: AppViewProps) {
       <div className="embedding-panel-head"><div><h3 id="embedding-queue-title">知识库 Embedding 索引任务</h3><p>显示此账户最新 50 个索引作业；同步文本编码不会排队，这里也不代表全局模型 worker 队列。</p></div></div>
       {!canReadQueue ? <EmptyState title="需要 embedding:read 权限" description="当前账户没有读取本人索引任务的权限。"/> : queueError ? <ErrorState title="队列读取失败" message={queueError} onRetry={() => setTick(value => value + 1)}/> : <>
         <div className="embedding-counts" aria-label="本人索引任务计数">{['queued','running','completed','failed'].map(status => <span key={status}>{({queued:'排队',running:'运行中',completed:'完成',failed:'失败'} as Record<string,string>)[status]} <b>{counts[status] ?? 0}</b></span>)}</div>
-        {jobs.length ? <div className="embedding-queue-scroll"><table className="ds-table"><thead><tr><th>任务</th><th>知识表</th><th>状态</th><th>更新时间</th></tr></thead><tbody>{jobs.map(job => <tr key={job.job_id}><td>{job.job_id}</td><td>{job.table_id}</td><td>{job.status}</td><td>{job.updated_at || job.created_at || '—'}{job.error ? <small className="embedding-job-error">{job.error}</small> : null}</td></tr>)}</tbody></table></div> : <EmptyState title="没有可显示的索引任务" description="队列 API 没有返回当前账户的任务。"/>}
+        {jobs.length ? <div className="embedding-queue-scroll"><table className="ds-table">
+          <thead><tr><th>任务</th><th>知识表</th><th>状态</th><th>更新时间</th></tr></thead>
+          <tbody>{jobs.map(job => <tr key={job.job_id}>
+            <td>{job.job_id}</td>
+            <td><div className="embedding-table-target">
+              <span title={job.table_id}>{job.table_id}</span>
+              {scopes.includes('xelibrary:read') && <Button size="sm" variant="ghost" onClick={() => openApp('knowledge', {action: 'openTable', table_id: job.table_id})}>在知识库中打开</Button>}
+            </div></td>
+            <td>{job.status}</td>
+            <td>{job.updated_at || job.created_at || '—'}{job.error ? <small className="embedding-job-error">{job.error}</small> : null}</td>
+          </tr>)}</tbody>
+        </table></div> : <EmptyState title="没有可显示的索引任务" description="队列 API 没有返回当前账户的任务。"/>}
       </>}
     </section>
   </main>;

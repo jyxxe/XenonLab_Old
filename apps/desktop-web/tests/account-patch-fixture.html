@@ -45,7 +45,8 @@
         throw new Error(`Unexpected fixture API request: ${path}`);
       }
 
-      createRoot(document.getElementById('root')).render(React.createElement(Accounts, {api}));
+      const apiPage = async (path, init) => ({data: await api(path, init), meta: {}});
+      createRoot(document.getElementById('root')).render(React.createElement(Accounts, {api, apiPage}));
     </script>
   </body>
 </html>

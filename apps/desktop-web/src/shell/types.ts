@@ -12,10 +12,14 @@ export type WindowState = Rect & {
   restore?: Rect;
 };
 
-export type API<T = any> = (path: string, init?: RequestInit) => Promise<T>;
+/** Optional request flags. `soft` keeps a failed optional read from moving the
+ * whole session into the global retry state; the caller handles the failure. */
+export type APIOptions = {soft?: boolean};
+export type API<T = any> = (path: string, init?: RequestInit, options?: APIOptions) => Promise<T>;
 export type APIPage<T = any> = (
   path: string,
   init?: RequestInit,
+  options?: APIOptions,
 ) => Promise<{data: T; meta: {request_id?: string; next_cursor?: string | null; [key: string]: any}}>;
 export type APIRaw = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -24,6 +28,8 @@ export type Sandbox = {allow_scripts: boolean; allow_forms: boolean; allow_downl
 export type DockPreference = 'small' | 'medium' | 'large';
 export type WallpaperMode = 'solid' | 'gradient' | 'image';
 export type WidgetId = 'clock' | 'status' | 'calendar' | 'app-shortcuts' | 'work' | 'notes' | 'search';
+
+export type PreferenceApplyOptions = {previewOnly?: boolean; keepalive?: boolean};
 
 export type UserPreferences = {
   theme: 'system' | 'light' | 'dark';
@@ -37,6 +43,7 @@ export type UserPreferences = {
   wallpaper_dim?: number;
   timezone: string;
   widgets: WidgetId[];
+  plugin_widgets: string[];
   shortcut_apps: string[];
   custom_wallpaper_available?: boolean;
   notes?: string;
@@ -58,11 +65,30 @@ export type RegistryApp = {
   permissions?: string[];
   sandbox?: Sandbox;
   revision?: number;
+  plugin_id?: string;
+  plugin_version?: string;
+  plugin_name?: string;
+  description?: string;
+};
+
+/** Installed widget declaration exposed by /users/me/plugin-widgets. The
+ * widget runs as a sandboxed cross-origin iframe; no bearer token is passed. */
+export type PluginWidget = {
+  plugin_id: string;
+  plugin_name: string;
+  plugin_version: string;
+  id: string;
+  title: string;
+  origin: string;
+  entry: string;
+  icon: string;
+  height: number;
+  permissions: string[];
 };
 
 /** `askAI` carries an editable draft composed by XeLibrary's selection
  * extension point; the chat side receives it as the initial user input. */
-export type AppIntent = {id: string; action: 'search' | 'query' | 'theorems' | 'refresh' | 'askAI'; query?: string; prompt?: string};
+export type AppIntent = {id: string; action: 'search' | 'query' | 'theorems' | 'refresh' | 'askAI' | 'openTable'; query?: string; prompt?: string; table_id?: string};
 export type AppMenuEntry = {id: string; label: string; intent?: Omit<AppIntent, 'id'>; action?: 'refresh' | 'reload' | 'external'};
 
 export type DesktopApp = {
@@ -80,6 +106,7 @@ export type DesktopApp = {
   dock: boolean;
   description?: string;
   menu?: AppMenuEntry[];
+  plugin_id?: string;
   component?: React.ComponentType<AppViewProps>;
 };
 
@@ -87,6 +114,7 @@ export type AppViewProps = {
   api: API;
   apiPage: APIPage;
   apiRaw: APIRaw;
+  authEpoch?: number;
   app: DesktopApp;
   apps: DesktopApp[];
   openApp: (id: string, intent?: Omit<AppIntent, 'id'>) => void;

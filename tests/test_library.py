@@ -537,6 +537,238 @@ def test_deleted_rows_are_opt_in_and_still_acl_checked(library):
     assert [row["_row_id"] for row in visible.json()["data"]] == [rid]
 
 
+
+def test_deleted_row_detail_is_opt_in_and_preserves_read_acl(library):
+    tid, rid = seed(library)
+    path = f"/api/v1/tables/{tid}/rows/{rid}"
+    assert library.delete(path, headers=auth(**{"If-Match": '"revision:1"'})).status_code == 200
+    assert library.get(path, headers=auth()).status_code == 404
+    assert library.get(path + "?include_deleted=false", headers=auth()).status_code == 404
+    detail = library.get(path + "?include_deleted=true", headers=auth())
+    assert detail.status_code == 200
+    assert detail.json()["data"]["_deleted_at"]
+    assert detail.json()["data"]["_revision"] == 2
+    assert detail.headers["etag"] == '"revision:2"'
+    assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{rid}", {}).status_code == 200
+    assert library.get(path + "?include_deleted=true", headers=auth("bob")).status_code == 403
+    assert put_acl(library, "row", f"{tid}:{rid}", {"bob": ["read"]}).status_code == 200
+    assert library.get(path + "?include_deleted=true", headers=auth("bob")).status_code == 200
+    missing = f"/api/v1/tables/{tid}/rows/{uuid4()}?include_deleted=true"
+    assert library.get(missing, headers=auth("bob")).status_code == 404
+
+def test_table_rows_sort_across_cursor_pages_with_stable_ties(library):
+    table = library.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/排序验收",
+            "name": "stable-sort",
+            "columns": [
+                {"name": "score", "type": "int64", "nullable": True},
+                {"name": "title", "type": "string", "nullable": True},
+            ],
+        },
+    )
+    assert table.status_code == 201, table.text
+    tid = table.json()["data"]["table_id"]
+    created = []
+    for score, title in [(2, "two-a"), (None, "null"), (1, "one"), (2, "two-b"), (3, "three")]:
+        result = library.post(
+            f"/api/v1/tables/{tid}/rows", headers=auth(), json={"values": {"score": score, "title": title}}
+        )
+        assert result.status_code == 201, result.text
+        created.append(result.json()["data"])
+
+    rows_path = f"/api/v1/tables/{tid}/rows"
+    expected_asc = sorted(
+        created,
+        key=lambda row: (
+            row["values"]["score"] is not None,
+            row["values"]["score"] if row["values"]["score"] is not None else 0,
+            row["_row_id"],
+        ),
+    )
+    first = library.get(
+        rows_path, params={"limit": 2, "sort_by": "score", "direction": "asc"}, headers=auth()
+    )
+    assert first.status_code == 200, first.text
+    assert [row["_row_id"] for row in first.json()["data"]] == [row["_row_id"] for row in expected_asc[:2]]
+    cursor = first.json()["meta"]["next_cursor"]
+    assert cursor and cursor.startswith("sort1.")
+
+    second = library.get(
+        rows_path,
+        params={"limit": 2, "sort_by": "score", "direction": "asc", "cursor": cursor},
+        headers=auth(),
+    )
+    assert second.status_code == 200, second.text
+    third = library.get(
+        rows_path,
+        params={"limit": 2, "sort_by": "score", "direction": "asc", "cursor": second.json()["meta"]["next_cursor"]},
+        headers=auth(),
+    )
+    assert third.status_code == 200, third.text
+    actual = first.json()["data"] + second.json()["data"] + third.json()["data"]
+    assert [row["_row_id"] for row in actual] == [row["_row_id"] for row in expected_asc]
+    assert len({row["_row_id"] for row in actual}) == len(created)
+    assert second.json()["meta"]["next_cursor"] and third.json()["meta"]["next_cursor"] is None
+
+    expected_desc = sorted(
+        created,
+        key=lambda row: (
+            row["values"]["score"] is None,
+            -(row["values"]["score"] or 0),
+            row["_row_id"],
+        ),
+    )
+    descending = library.get(
+        rows_path, params={"limit": 2, "sort_by": "score", "direction": "desc"}, headers=auth()
+    )
+    assert [row["_row_id"] for row in descending.json()["data"]] == [
+        row["_row_id"] for row in expected_desc[:2]
+    ]
+    descending_rows = descending.json()["data"]
+    descending_cursor = descending.json()["meta"]["next_cursor"]
+    while descending_cursor:
+        page = library.get(
+            rows_path,
+            params={
+                "limit": 2,
+                "sort_by": "score",
+                "direction": "desc",
+                "cursor": descending_cursor,
+            },
+            headers=auth(),
+        )
+        assert page.status_code == 200, page.text
+        descending_rows.extend(page.json()["data"])
+        descending_cursor = page.json()["meta"]["next_cursor"]
+    assert [row["_row_id"] for row in descending_rows] == [row["_row_id"] for row in expected_desc]
+
+    mismatch = library.get(
+        rows_path,
+        params={"limit": 2, "sort_by": "score", "direction": "desc", "cursor": cursor},
+        headers=auth(),
+    )
+    assert mismatch.status_code == 422
+    assert mismatch.json()["error"]["code"] == "INVALID_CURSOR"
+
+    legacy = library.get(rows_path, params={"limit": 2}, headers=auth())
+    assert [row["_row_id"] for row in legacy.json()["data"]] == sorted(row["_row_id"] for row in created)[:2]
+    assert legacy.json()["meta"]["next_cursor"] == legacy.json()["data"][-1]["_row_id"]
+
+
+def test_ascending_sort_pages_from_null_group_into_non_null_rows(library):
+    table = library.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/排序验收",
+            "name": "null-boundary-sort",
+            "columns": [{"name": "score", "type": "int64", "nullable": True}],
+        },
+    )
+    assert table.status_code == 201, table.text
+    tid = table.json()["data"]["table_id"]
+    created = []
+    for score in (None, None, 1):
+        result = library.post(
+            f"/api/v1/tables/{tid}/rows", headers=auth(), json={"values": {"score": score}}
+        )
+        assert result.status_code == 201, result.text
+        created.append(result.json()["data"])
+
+    rows_path = f"/api/v1/tables/{tid}/rows"
+    first = library.get(
+        rows_path, params={"limit": 2, "sort_by": "score", "direction": "asc"}, headers=auth()
+    )
+    assert first.status_code == 200, first.text
+    assert [row["values"]["score"] for row in first.json()["data"]] == [None, None]
+    cursor = first.json()["meta"]["next_cursor"]
+    assert cursor
+
+    second = library.get(
+        rows_path,
+        params={"limit": 2, "sort_by": "score", "direction": "asc", "cursor": cursor},
+        headers=auth(),
+    )
+    assert second.status_code == 200, second.text
+    assert [row["values"]["score"] for row in second.json()["data"]] == [1]
+    assert second.json()["meta"]["next_cursor"] is None
+    paged = first.json()["data"] + second.json()["data"]
+    assert {row["_row_id"] for row in paged} == {row["_row_id"] for row in created}
+    assert paged[-1]["values"]["score"] == 1
+
+
+def test_sorted_row_cursors_preserve_acl_deleted_filter_and_reject_bad_sort(library):
+    table = library.post(
+        "/api/v1/tables",
+        headers=auth(),
+        json={
+            "path": "/排序验收",
+            "name": "acl-sort",
+            "columns": [{"name": "score", "type": "int64", "nullable": False}],
+        },
+    )
+    assert table.status_code == 201, table.text
+    tid = table.json()["data"]["table_id"]
+    rows = {}
+    for score in (1, 2, 3, 4):
+        result = library.post(
+            f"/api/v1/tables/{tid}/rows", headers=auth(), json={"values": {"score": score}}
+        )
+        assert result.status_code == 201, result.text
+        rows[score] = result.json()["data"]
+
+    assert put_acl(library, "table", tid, {"bob": ["read"]}).status_code == 200
+    assert put_acl(library, "row", f"{tid}:{rows[1]['_row_id']}", {"bob": []}).status_code == 200
+    deleted_path = f"/api/v1/tables/{tid}/rows/{rows[2]['_row_id']}"
+    deleted = library.delete(deleted_path, headers=auth("admin", **{"If-Match": '"revision:1"'}))
+    assert deleted.status_code == 200, deleted.text
+
+    rows_path = f"/api/v1/tables/{tid}/rows"
+    first = library.get(
+        rows_path,
+        params={"limit": 1, "sort_by": "score", "direction": "asc"},
+        headers=auth("bob"),
+    )
+    assert [row["values"]["score"] for row in first.json()["data"]] == [3]
+    cursor = first.json()["meta"]["next_cursor"]
+    mismatch = library.get(
+        rows_path,
+        params={"limit": 1, "sort_by": "score", "direction": "asc", "include_deleted": "true", "cursor": cursor},
+        headers=auth("bob"),
+    )
+    assert mismatch.status_code == 422
+    assert mismatch.json()["error"]["code"] == "INVALID_CURSOR"
+    next_page = library.get(
+        rows_path,
+        params={"limit": 1, "sort_by": "score", "direction": "asc", "cursor": cursor},
+        headers=auth("bob"),
+    )
+    assert [row["values"]["score"] for row in next_page.json()["data"]] == [4]
+    assert next_page.json()["meta"]["next_cursor"] is None
+
+    with_deleted = library.get(
+        rows_path,
+        params={"limit": 1, "sort_by": "score", "direction": "asc", "include_deleted": "true"},
+        headers=auth("bob"),
+    )
+    assert [row["values"]["score"] for row in with_deleted.json()["data"]] == [2]
+
+    invalid_field = library.get(
+        rows_path, params={"sort_by": "score) OR 1=1 --", "direction": "asc"}, headers=auth("admin")
+    )
+    invalid_direction = library.get(
+        rows_path, params={"sort_by": "score", "direction": "sideways"}, headers=auth("admin")
+    )
+    direction_without_field = library.get(rows_path, params={"direction": "asc"}, headers=auth("admin"))
+    for result in (invalid_field, invalid_direction, direction_without_field):
+        assert result.status_code == 422
+        assert result.json()["error"]["code"] == "INVALID_SORT"
+
+
 def test_row_write_refreshes_table_revision_for_schema_and_move(library):
     tid, rid = seed(library)
     row_path = f"/api/v1/tables/{tid}/rows/{rid}"

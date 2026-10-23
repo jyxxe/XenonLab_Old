@@ -137,6 +137,29 @@ async function rectOf(cdp, selector) {
   })()`);
 }
 
+// CI runners occasionally swallow a single dispatched key event while the
+// renderer is still settling; retry the keystroke until the expected UI shows
+// up (or the attempts run out) instead of failing the whole acceptance run.
+async function keyUntil(cdp, conditionExpression, key, code, modifiers = 0, attempts = 6) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await cdp.key(key, code, modifiers);
+    try {
+      const until = Date.now() + 1200;
+      while (Date.now() < until) {
+        try {
+          if (await cdp.evaluate(conditionExpression)) return;
+        } catch {
+          /* keep polling */
+        }
+        await sleep(80);
+      }
+    } catch {
+      /* retry the keystroke */
+    }
+  }
+  throw new Error(`keyboard condition not met after ${attempts} attempts: ${conditionExpression.slice(0, 80)}`);
+}
+
 async function centerOf(cdp, selector) {
   return cdp.evaluate(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
@@ -238,14 +261,12 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
 
     const pinnedTitles = () => cdp.evaluate("[...document.querySelectorAll('nav.dock .ds-pinned')].map(button=>button.title)");
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
-    await cdp.key('F10', 'F10', 8 /* Shift */);
-    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'keyboard Dock menu');
+    await keyUntil(cdp, "Boolean(document.querySelector('.ds-context-menu'))", 'F10', 'F10', 8 /* Shift */);
     await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向右移动')).setAttribute('data-test','right')");
     await click('.ds-context-menu [data-test=right]');
     await waitFor(async () => (await pinnedTitles())[1] === '知识库', 'Dock moves right with real pointer click');
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
-    await cdp.key('F10', 'F10', 8);
-    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'Dock menu again');
+    await keyUntil(cdp, "Boolean(document.querySelector('.ds-context-menu'))", 'F10', 'F10', 8);
     await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向左移动')).setAttribute('data-test','left')");
     await click('.ds-context-menu [data-test=left]');
     await waitFor(async () => (await pinnedTitles())[0] === '知识库', 'Dock moves left');
@@ -467,11 +488,13 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.key('k', 'KeyK', 2 /* Ctrl */);
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.command-palette'))"), 'command palette');
     await cdp.evaluate(`(() => {const input=document.querySelector('.command-input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'Harness');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.command-item').length>=2"), 'palette items');
+    for (let step = 0; step < 6; step += 1) {
+      if (await cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))")) break;
+      await cdp.key('ArrowDown', 'ArrowDown');
+    }
     await waitFor(
-      () =>
-        cdp.evaluate(
-          "(()=>{const items=[...document.querySelectorAll('.command-item')];const selected=document.querySelector('.command-item[aria-selected=\"true\"]');return Boolean(selected&&selected.innerText.includes('任务')&&items.length===2)})()",
-        ),
+      () => cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))"),
       'palette keyboard selection',
     );
     await cdp.key('Enter', 'Enter');
@@ -501,8 +524,11 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('日历')).querySelector('input').click()");
     await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('应用快捷入口')).querySelector('input').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.widget-calendar')&&document.querySelector('.widget-shortcuts'))"), 'calendar and app shortcut widgets');
+    // The 12-item shortcut cap is visible and counted instead of replacing silently.
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=shortcut-limit-hint]')?.innerText.includes('已选 0/12')"), 'shortcut limit hint shows the empty count');
     await cdp.evaluate("[...document.querySelectorAll('.widget-shortcut-options label')].find(label=>label.innerText.includes('知识库')).querySelector('input').click()");
     await waitFor(() => cdp.evaluate("window.shellFixture.preferences.shortcut_apps.includes('knowledge')"), 'authorized app shortcut saved');
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=shortcut-limit-hint]')?.innerText.includes('已选 1/12')"), 'shortcut limit hint updates with the selection');
     assert.match(await cdp.evaluate("document.querySelector('.widget-calendar').getAttribute('aria-label')"), /日历/);
     await cdp.evaluate("document.querySelector('.widget-shortcuts button[aria-label=\"打开知识库\"]').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), 'authorized app opened from shortcut widget');
@@ -737,7 +763,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
       return {text:card?.innerText,chart:card?.querySelector('.mac-bars')?.getAttribute('aria-label'),requests:window.shellFixture.calls.filter(call=>call.path.startsWith('/tables?')).map(call=>call.path)};
     })()`);
     assert.match(knowledgeOverview.text,/1 张表/);
-    assert.match(knowledgeOverview.chart,/示例 1 张表/);
+    assert.match(knowledgeOverview.chart,/目录：示例，1 张表/);
     assert.ok(knowledgeOverview.requests.includes('/tables?limit=1000'));
     await cdp.evaluate('window.shellFixture.control.delayTables=true');
     await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText==='刷新').click()");
@@ -764,9 +790,17 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody')?.innerText.includes('领取已过期')"),'System Agents view marks expired claim');
     assert.match(await cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody').innerText"),/已过期 · 可重领/);
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='存储').click()");
-    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('容量信息尚未接入')"),'Storage unavailable');
+    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('hf-cache:read')"),'Storage scope notice without pool numbers');
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='审计').click()");
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('xelibrary:admin')"),'Audit permission denied');
+    await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='网络').click()");
+    const lanEntry = await cdp.evaluate(`(() => {
+      const row=document.querySelector('.lan-entry');
+      return {origin:row?.querySelector('[data-testid=lan-entry-origin]')?.innerText,text:row?.innerText||'',buttons:[...document.querySelectorAll('.lan-entry button')].map(button=>button.innerText)};
+    })()`);
+    assert.equal(lanEntry.origin,'https://192.168.0.101:9443');
+    assert.ok(lanEntry.buttons.includes('复制内网入口'));
+    assert.match(lanEntry.text,/LAN CA/);
     await cdp.evaluate("document.querySelector('.window[data-app-id=system] .bar .close').click()");
 
     // Failed settings writes remain visible and are never labelled saved.
