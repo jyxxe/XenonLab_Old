@@ -114,3 +114,29 @@ Python 3.12.14, repository dependencies, no lockfile changes:
   development host (exit 127), and production validation was not performed.
 - `git diff --check`: passed. No real model/Qdrant, frontend or visual acceptance
   performed. New integration tests use synthetic embeddings and mock Qdrant.
+
+
+## Baseline refresh after desktop discovery (#319)
+
+Rebased onto `feature/platform-v1@acc52f3`. Every current builtin UI entry
+is retained exactly, as is every previous backend entry; the capability id set
+is the exact union without duplicates. Backend provider/chunker source files
+are byte-identical to the pre-refresh backup; this fixes the manifest conflict
+without changing their implementations. Only this Agent's feature branch is
+updated, never the protected base.
+
+Current validation: **88 focused tests pass; 747 full-suite tests
+pass / 13 baseline Lean failures in 431.63s**. The exact failed-name set
+matches the previously reproduced unmodified baseline (`/proc/1/ns/net`, `mnt`
+stat PermissionError 13). No sandbox protections were changed or skipped.
+CI-scope Ruff, OpenAPI export (no extra generated diff) and diff check pass.
+Earlier counts above refer to earlier snapshots and selected test sets.
+
+```sh
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_document_chunker.py tests/test_search.py tests/test_qdrant_search.py tests/test_index_status.py tests/test_quality_search.py tests/test_capabilities.py -q
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/rebase-test-tmp
+```
+
+No real model/production/visual acceptance, deployment, approval or merge was
+performed. Current protected CI and maintainer acceptance remain outstanding.
