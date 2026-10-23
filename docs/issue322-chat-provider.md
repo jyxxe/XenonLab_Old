@@ -119,3 +119,33 @@ Python 3.12.14, repository dependency versions, no lockfile changes:
 - The LLM manifest/binding also resolves with PR #321's stricter manifest
   validator. This checks validator compatibility, not a full merged deployment.
 - `git diff --check`: passed. No frontend, visual or production test performed.
+
+
+## Baseline refresh after desktop discovery (#319)
+
+Rebased onto `feature/platform-v1@acc52f3`. The manifest conflict was resolved
+field by field: every current builtin UI entry is unchanged, every prior backend
+entry is unchanged, and the id set is exactly the union, without duplicates.
+No provider/tool business implementation was changed by this refresh. Local
+pre-refresh backup refs were retained; only the Agent's own feature branch will
+be updated, never the protected base.
+
+Current validation: **51 focused tests pass; 747 full-suite tests pass /
+13 baseline Lean failures in 415.64s**. Exact failed names match the prior
+unmodified baseline (`/proc/1/ns/net`, `mnt` stat PermissionError 13). No checks
+were skipped or weakened. CI-scope Ruff, OpenAPI export (no extra generated
+diff) and `git diff --check` pass. Full suite command:
+
+```sh
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/rebase-test-tmp
+```
+
+Earlier validation counts above refer to their earlier source snapshots. This
+refresh is not production or visual acceptance, deployment, approval or merge.
+
+Exact focused command for this refresh:
+
+```sh
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_chat_provider.py tests/test_llm_gateway.py tests/test_capabilities.py tests/test_plugin_manifest.py -q
+```
