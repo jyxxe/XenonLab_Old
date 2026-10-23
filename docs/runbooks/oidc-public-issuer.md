@@ -68,6 +68,27 @@ mapping and rejects payloads that differ from the shared policy; it updates
 only the two issuer maps and this role-map variable in each service env, while
 preserving all other entries and file metadata.
 
+## Realm roles and account-tree adoption
+
+The shared policy defines two realm roles. `platform-admin` keeps the full
+scope set; `embedding-admin` maps to `desktop:read embedding:read
+embedding:write` so an operator can provision an Embedding administrator by
+assigning that realm role in Keycloak. Assigning a realm role only takes effect
+after the guarded role-map rollout above has staged and loaded the updated
+`OIDC_ROLE_SCOPES_JSON` in every service.
+
+Realm roles never widen a registered managed account: identities registered in
+the account tree resolve their effective scopes from account grants only, and
+a root's grants are the snapshot taken at bootstrap. When a release adds new
+scopes to a role (theorem scopes in the original policy, embedding scopes
+later), existing roots must explicitly adopt them before children can be
+granted them: sign in as the human root, open the account panel on the root
+account where `root-scope-candidates` lists the not-yet-adopted scopes, save
+the updated grants, then grant the scopes to child accounts. Grant requests
+that exceed the parent tree fail with `PERMISSION_ESCALATION`, which names the
+exact scopes that are not grantable. Never widen a role map to work around a
+missing adoption.
+
 Never put client secrets, signing private keys, or tokens in these maps or in
 source control. The existing `OIDC_PUBLIC_KEY`, audience, CA, and private
 credential-file handling remain separate.
@@ -139,3 +160,36 @@ Do not remove the explicit legacy IP issuer from service validation until the
 operator has verified session migration/expiry and approved a separate cleanup.
 No live discovery, browser, Keycloak, firewall or production acceptance was
 performed as part of this local implementation.
+
+## Forwarded host must keep the port
+
+Keycloak derives the advertised issuer from the trusted `X-Forwarded-Host`
+header. Caddy's `{host}` placeholder strips the port, while
+`{http.request.hostport}` keeps it (and equals the plain host for default-port
+hosts). Both edges must therefore send:
+
+```caddyfile
+header_up X-Forwarded-Host {http.request.hostport}
+header_up X-Forwarded-Proto https
+```
+
+Observed failure (2026-10-22): after the operator-managed LAN include was synced
+with `header_up X-Forwarded-Host {host}`, a direct-IP request to
+`https://192.168.0.101:9444` made Keycloak advertise
+`https://192.168.0.101/realms/xeonolab`. The deploy gateway validates the exact
+`OIDC_ISSUER=https://192.168.0.101:9444/realms/xeonolab`, so release creation
+returned `401 Unauthorized` and the deployment failed in the preflight/staging
+phase before any gateway record existed. Restoring `{http.request.hostport}` and
+reloading Caddy made discovery advertise the ported issuer again.
+
+After any Caddy change on either edge, verify the issuer before publishing:
+
+```sh
+curl -sS -k https://192.168.0.101:9444/realms/xeonolab/.well-known/openid-configuration \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["issuer"])'
+# must print https://192.168.0.101:9444/realms/xeonolab
+```
+
+The public edge is covered by activation; the LAN include is operator-synced, so
+this check belongs to the LAN sync procedure in
+[`cloudflare-caddy-include.md`](cloudflare-caddy-include.md).

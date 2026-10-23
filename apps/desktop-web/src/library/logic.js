@@ -9,6 +9,15 @@ export function formatNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
 }
 
+/** Inclusive range in the current loaded view, independent of virtual mounting. */
+export function rowSelectionRange(visibleIds, anchorId, targetId) {
+  const to = visibleIds.indexOf(targetId);
+  if (to < 0) return [];
+  const from = visibleIds.indexOf(anchorId);
+  if (from < 0) return [targetId];
+  return visibleIds.slice(Math.min(from, to), Math.max(from, to) + 1);
+}
+
 export function formatBytes(value) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return '—';
   if (value < 1024) return `${value} B`;
@@ -213,9 +222,9 @@ export function classifySchemaChange(current = [], draft = []) {
   };
 }
 
-/** Parse `field = value` lines used by search filters into an exact-match dict. */
+/** Parse exact-match filters: JSON literals retain types; ordinary text is a string. */
 export function parseFieldFilters(text) {
-  const filters = {};
+  const entries = [];
   const errors = [];
   for (const line of String(text || '').split(/\n+/)) {
     const trimmed = line.trim();
@@ -225,9 +234,36 @@ export function parseFieldFilters(text) {
       errors.push(`无法解析「${trimmed}」，请使用 字段 = 值`);
       continue;
     }
-    filters[match[1]] = match[2];
+    const raw = match[2];
+    let value = raw;
+    if (/^(?:"|\[|\{|[+-]?(?:\d|\.\d)|true$|false$|null$|NaN$|[+-]?Infinity$)/.test(raw)) {
+      try {
+        value = JSON.parse(raw);
+        const pending = [value];
+        while (pending.length) {
+          const item = pending.pop();
+          if (typeof item === 'number' && (!Number.isFinite(item) || (Number.isInteger(item) && !Number.isSafeInteger(item)))) {
+            throw new Error('数值必须有限，整数必须在 JavaScript 安全整数范围内');
+          }
+          if (item && typeof item === 'object') pending.push(...Object.values(item));
+        }
+      } catch (cause) {
+        errors.push(`字段「${match[1]}」的 JSON 值无效：${cause.message}；字符串请使用双引号`);
+        continue;
+      }
+    }
+    entries.push([match[1], value]);
   }
-  return {filters, errors};
+  return {filters: Object.fromEntries(entries), errors};
+}
+
+/** Choices offered for the search `limit` field; the API contract caps at 100. */
+export const SEARCH_LIMIT_OPTIONS = [25, 50, 100];
+
+export function searchResultSummary(limit, hitCount) {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) return null;
+  if (typeof hitCount !== 'number' || !Number.isFinite(hitCount) || hitCount < 1) return null;
+  return `最多 ${limit} 条 · 返回 ${hitCount} 条`;
 }
 
 export function searchWarnings(meta = {}) {
@@ -279,15 +315,134 @@ export function indexStatusFromJobs(jobs = []) {
   return {state, detail, latest};
 }
 
+export function libraryPrefsKey(entry) {
+  return `${entry.kind}:${entry.id}`;
+}
+
+// Deletion markers travel with the favorites list (issue #72 review): a
+// tombstone newer than an entry suppresses that entry's revival on any device
+// that still has a stale cached copy.
+export function mergeServerPrefs(local, server, kind, tombstones = []) {
+  const newestDeletion = new Map();
+  for (const tombstone of tombstones || []) {
+    if (!tombstone || !tombstone.kind || !tombstone.id) continue;
+    const key = libraryPrefsKey(tombstone);
+    const at = Number(tombstone.at) || 0;
+    if (at > (newestDeletion.get(key) ?? -Infinity)) newestDeletion.set(key, at);
+  }
+  const merged = new Map();
+  for (const entry of server || []) {
+    if (!entry || !entry.kind || !entry.id || entry.deleted) continue;
+    const key = libraryPrefsKey(entry);
+    if (Number(entry.at) <= (newestDeletion.get(key) ?? -Infinity)) continue;
+    merged.set(key, {...entry});
+  }
+  for (const entry of local || []) {
+    if (!entry || !entry.kind || !entry.id || entry.deleted) continue;
+    const key = libraryPrefsKey(entry);
+    if (Number(entry.at) <= (newestDeletion.get(key) ?? -Infinity)) continue;
+    const existing = merged.get(key);
+    if (!existing || Number(entry.at) > Number(existing.at)) merged.set(key, {...entry});
+  }
+  const list2 = [...merged.values()];
+  if (kind === 'recent') return list2.sort((a, b) => Number(b.at) - Number(a.at)).slice(0, 8);
+  return list2.slice(0, 50);
+}
+
+// Union of deletion markers keyed by kind+id, keeping the newest per key.
+export function mergeTombstones(local, server) {
+  const merged = new Map();
+  for (const tombstone of [...(server || []), ...(local || [])]) {
+    if (!tombstone || !tombstone.kind || !tombstone.id || !tombstone.deleted) continue;
+    const key = libraryPrefsKey(tombstone);
+    const existing = merged.get(key);
+    if (!existing || Number(tombstone.at) > Number(existing.at)) merged.set(key, {...tombstone});
+  }
+  return [...merged.values()];
+}
+
+export function indexStatusFromServer(status) {
+  if (!status || typeof status !== 'object') {
+    return {state: 'unavailable', tone: 'neutral', label: '—', detail: '索引状态数据不可用。'};
+  }
+  const rows = Number(status.row_count) || 0;
+  const embedded = Number(status.embedded_rows) || 0;
+  const pending = Number(status.pending_rows) || 0;
+  const state = String(status.state || '');
+  const base = {state, rows, embedded, pending, last_job: status.last_job || null};
+  if (state === 'ready') return {...base, tone: 'success', label: 'ready', detail: `全部 ${rows} 行已按当前版本建立向量索引。`};
+  if (state === 'stale') return {...base, tone: 'warning', label: 'stale', detail: `有 ${pending} 行变更待重新索引；当前已索引 ${embedded}/${rows} 行。`};
+  if (state === 'queued') return {...base, tone: 'warning', label: 'queued', detail: '索引任务已排队，等待 Embedding worker。'};
+  if (state === 'indexing') return {...base, tone: 'warning', label: 'indexing', detail: '索引任务正在运行。'};
+  if (state === 'failed') return {...base, tone: 'danger', label: 'failed', detail: `最近一次索引任务失败${status.last_job?.error ? `：${status.last_job.error}` : '。'}`};
+  if (state === 'empty') return {...base, tone: 'neutral', label: 'empty', detail: '表内暂无行；写入数据后再重建索引。'};
+  if (state === 'not_indexed') return {...base, tone: 'neutral', label: 'not_indexed', detail: rows ? `${rows} 行尚未建立向量索引；语义搜索不会覆盖该表。` : '表内暂无行。'};
+  return {...base, tone: 'neutral', label: state || '—', detail: '索引状态未知。'};
+}
+
+/** Maximum visible Recent entries in the sidebar before an explicit expand. */
+export const RECENT_VISIBLE_LIMIT = 6;
+
+/**
+ * Sidebar Recent display state (issue #255): the count shows every saved entry,
+ * so when more than RECENT_VISIBLE_LIMIT exist offer an accessible "show all"
+ * control instead of silently hiding them. Consumes only the in-memory recent
+ * list; no request or server history claim is added.
+ */
+export function recentListDisplay(recent, showAll = false) {
+  const list = Array.isArray(recent) ? recent : [];
+  const collapsed = list.length > RECENT_VISIBLE_LIMIT;
+  const expanded = Boolean(showAll) && collapsed;
+  return {
+    visible: expanded ? list : list.slice(0, RECENT_VISIBLE_LIMIT),
+    expanded,
+    toggle: collapsed,
+    hidden: collapsed && !expanded ? list.length - RECENT_VISIBLE_LIMIT : 0,
+    label: collapsed ? (expanded ? '收起到 6 项' : `显示全部 ${list.length} 项`) : '',
+  };
+}
+
 export function mergeRecent(list, entry, limit = 8) {
   const filtered = list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
   return [entry, ...filtered].slice(0, limit);
 }
 
-export function toggleFavorite(list, entry) {
+
+/** Display legacy/generic and duplicate theorem titles without changing stored IDs. */
+export function recentEntryPresentation(entry, list = []) {
+  if (entry.kind !== 'theorem') return {title: entry.title, identifier: '', label: entry.title};
+  const title = theoremRecentTitle(entry);
+  const sameTitle = list.some(item => item.kind === 'theorem' && item.id !== entry.id && theoremRecentTitle(item) === title);
+  if (title !== '定理' && !sameTitle) return {title, identifier: '', label: title};
+  const id = String(entry.id);
+  const suffix = id.slice(-8);
+  const collision = list.some(item => item.kind === 'theorem' && item.id !== entry.id && String(item.id).slice(-8) === suffix);
+  const identifier = collision ? id : suffix;
+  return {title, identifier, label: `${title} · ${identifier}`};
+}
+
+function theoremRecentTitle(entry) {
+  return typeof entry.title === 'string' && entry.title.trim() ? entry.title.trim() : '定理';
+}
+
+// Toggling favorites also maintains deletion tombstones so the removal wins
+// over stale cached copies on other devices (issue #72 review).
+export function toggleFavorite(list, entry, tombstones = [], at = Date.now()) {
   const exists = list.some(item => item.kind === entry.kind && item.id === entry.id);
-  if (exists) return list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
-  return [...list, entry].slice(0, 50);
+  const key = libraryPrefsKey(entry);
+  if (exists) {
+    return {
+      favorites: list.filter(item => !(item.kind === entry.kind && item.id === entry.id)),
+      tombstones: [
+        ...tombstones.filter(tombstone => libraryPrefsKey(tombstone) !== key),
+        {kind: entry.kind, id: entry.id, title: entry.title || '', at, deleted: true},
+      ].slice(-200),
+    };
+  }
+  return {
+    favorites: [...list, {...entry, at}].slice(0, 50),
+    tombstones: tombstones.filter(tombstone => libraryPrefsKey(tombstone) !== key),
+  };
 }
 
 export function libraryPrefsStorageKey(subject, section) {
@@ -495,4 +650,47 @@ export function buildSelectionPrompt(action, table, rows, columns, question = ''
     lines.push(`问题：${String(question || '').trim() || '（请在发送前补充你的问题）'}`);
   }
   return lines.join('\n');
+}
+
+// Only a deleted row actually returned by the current authenticated include_deleted page
+// replaces the default detail read. Active/unloaded rows retain their existing read path.
+export function loadedDeletedRow(rows, rowId) {
+  return rows?.find(row => row._row_id === rowId && row._deleted_at) || null;
+}
+
+// Keep the precise mutation result when refreshing only the first page. A newer
+// server page containing the same row takes precedence over the retained value.
+export function retainRefreshedRow(rows, retainedRow) {
+  if (!retainedRow || rows.some(row => row._row_id === retainedRow._row_id)) return rows;
+  return [...rows, retainedRow];
+}
+
+/** Resolve a local field order against the current schema; system fields stay outside it. */
+export function orderedColumns(columns, preference) {
+  const byName = new Map(columns.map(column => [column.name, column]));
+  const names = Array.isArray(preference) ? preference.filter(name => typeof name === 'string' && byName.has(name)) : [];
+  return [...new Set([...names, ...columns.map(column => column.name)])].map(name => byName.get(name));
+}
+
+export function moveColumn(columns, preference, name, direction) {
+  const names = orderedColumns(columns, preference).map(column => column.name);
+  const index = names.indexOf(name);
+  const next = index + direction;
+  if (index < 0 || next < 0 || next >= names.length || ![1, -1].includes(direction)) return names;
+  [names[index], names[next]] = [names[next], names[index]];
+  return names;
+}
+
+/** Shared pixel preference limits for both pointer and keyboard column resizing. */
+export function clampColumnWidth(width) {
+  return Math.max(80, Math.min(520, Number.isFinite(width) ? width : 160));
+}
+
+export function keyboardColumnWidth(width, key, shift = false) {
+  if (key === 'Home') return 80;
+  if (key === 'End') return 520;
+  const step = shift ? 40 : 10;
+  if (key === 'ArrowLeft') return clampColumnWidth(width - step);
+  if (key === 'ArrowRight') return clampColumnWidth(width + step);
+  return null;
 }

@@ -7,4 +7,6 @@ export class APIRequestError extends Error {
 
 export function isUnregisteredAccountError(error: unknown): boolean;
 
+export function readableErrorMessage(error: unknown): string;
+
 export function apiErrorFromResponse(response: Response, payload: unknown): APIRequestError;
