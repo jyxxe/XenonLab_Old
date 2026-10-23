@@ -327,8 +327,8 @@ def create_app(service=None, settings=None):
                 408: {"description": "The inbound request body exceeded its read deadline."},
                 413: {"description": "Request body exceeds the configured byte limit."},
                 429: {"description": "Per-process stream capacity reached; includes Retry-After."},
-                502: {"description": "Provider request failed before streaming began."},
-                504: {"description": "Provider response headers exceeded the request deadline before streaming began."},
+                502: {"description": "Provider request failed before streaming began, or JSON completion failed."},
+                504: {"description": "Provider request exceeded its deadline before streaming began or during JSON completion."},
             },
         )
         async def chat(request: Request, actor=Depends(scope("llm:use"))):

@@ -111,7 +111,7 @@ Python 3.12.14, repository dependency versions, no lockfile changes:
   PermissionError 13 statting `/proc/1/ns/net` and `/proc/1/ns/mnt`; Lean source and
   tests are unchanged. No sandbox checks were weakened or skipped.
 - `uv run --no-sync ruff check xeonolab tests scripts`: passed (CI scope).
-- `uv run --no-sync python scripts/export_openapi.py`: passed, no OpenAPI diff.
+- `uv run --no-sync python scripts/export_openapi.py`: passed; only the LLM Gateway 502/504 descriptions change to cover JSON completion errors/deadlines.
 - `uv run --no-sync python scripts/smoke_services.py`: all 11 services passed.
 - `uv run --no-sync python scripts/verify_failure_injection.py`: all passed.
 - Staged Docker COPY layout: isolated Python resolved the LLM capability and
