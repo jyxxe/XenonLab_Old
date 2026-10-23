@@ -104,7 +104,7 @@ recorded on #305 comment 3574. No branch's independent tests are replaced by it.
 The new integration tree starts at c1274bb and inventories all 31 non-document
 source/test/schema files changed by #321/#323/#325/#327/#330/#332. Every
 single-owner file was checked byte-for-byte against its PR head, except the
-explicitly changed version registry and regenerated service schema. Shared
+explicitly changed version registry and service version field/tests/generated schema. Shared
 `services.py` preserves the trusted Tool/Chat adapters and pre-body authority
 checks; `search.py` preserves the live checkpoint and trusted chunker. #321's
 strict registry validation is retained, while its older comparator is replaced
@@ -183,3 +183,10 @@ complete-composition rollback configuration (all four local adapter flags 0
 before startup) records 49 lifecycle passes. No protected CI success is inferred
 from these local runs, and no merge, approval, release or production flag/grant
 change was performed.
+
+
+Final complete-composition focus after the packaging case: **321 passed**. Final
+staged index and source-inventory notes are retained with the integration tree;
+this focus includes both all adapter version/dependency cases and the public
+manifest packaging regression. Eleven service smokes pass for the standalone
+and composed trees. The COPY regression does not assert that Docker itself ran.
