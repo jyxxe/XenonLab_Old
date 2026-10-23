@@ -18,3 +18,9 @@
 `GET /api/v1/capabilities` 现在按调用账户聚合：内置能力 + `plugin_installs` 中**已启用**且权限
 不超过当前账户 scopes 的插件能力（来源 `plugin`，kind app/widget）。停用插件、权限已收缩的插件、
 损坏的安装快照都会被过滤/跳过，不会出现在发现结果；启动时无需迁移。
+
+## 版本兼容性检查（Phase 1 续）
+
+`GET /api/v1/capabilities/{id}?require=<constraint>` 支持精确版本、`^x.y.z`（同 major，>=）、
+`~x.y.z`（同 major.minor，>=）与 `*`；不满足返回 409 `CAPABILITY_INCOMPATIBLE`，约束语法非法返回
+422 `INVALID_VERSION_CONSTRAINT`，无 `require` 时行为不变。调用方应在按能力调用前先做该检查。

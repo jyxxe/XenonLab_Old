@@ -180,6 +180,41 @@ def runtime_capabilities(registry, database, owner, scopes):
     return items
 
 
+
+def satisfies(version, constraint):
+    """Minimal semver constraint check for capability compatibility.
+
+    Supported: exact ("1.2.3"), caret ("^1.2.3" -> same major, >= version),
+    tilde ("~1.2.3" -> same major.minor, >= version) and wildcard "*".
+    Anything else raises ValueError so callers fail closed.
+    """
+    def parts(value):
+        core = value.split("-", 1)[0]
+        pieces = core.split(".")
+        if len(pieces) != 3 or not all(piece.isdigit() for piece in pieces):
+            raise ValueError(f"invalid semver: {value}")
+        return tuple(int(piece) for piece in pieces)
+
+    current = parts(version)
+    if constraint == "*":
+        return True
+    if constraint.startswith("^"):
+        target = parts(constraint[1:])
+        return current[0] == target[0] and current >= target
+    if constraint.startswith("~"):
+        target = parts(constraint[1:])
+        return current[:2] == target[:2] and current >= target
+    return current == parts(constraint)
+
+
+class CapabilityIncompatible(APIError):
+    def __init__(self, capability_id, version, constraint):
+        super().__init__(
+            409,
+            "CAPABILITY_INCOMPATIBLE",
+            f"capability {capability_id} version {version} does not satisfy {constraint}",
+        )
+
 def load_registry(path=None):
     """Load the builtin manifest; missing/invalid manifests fail closed with 503."""
     target = Path(path) if path is not None else DEFAULT_MANIFEST
@@ -205,9 +240,22 @@ def install(app, plugin_database=None):
         return response(request, capabilities, **{"registry": registry.summary()})
 
     @app.get("/api/v1/capabilities/{capability_id}")
-    def get_capability(capability_id: str, request: Request, actor=Depends(scope("desktop:read"))):
+    def get_capability(
+        capability_id: str,
+        request: Request,
+        require: str = "",
+        actor=Depends(scope("desktop:read")),
+    ):
         registry = load_registry()
         capability = registry.lookup(capability_id)
         if capability is None:
             raise APIError(404, "CAPABILITY_NOT_FOUND", "no such capability")
-        return response(request, capability)
+        compatible = None
+        if require:
+            try:
+                compatible = satisfies(capability["version"], require)
+            except ValueError as error:
+                raise APIError(422, "INVALID_VERSION_CONSTRAINT", str(error)) from None
+            if not compatible:
+                raise CapabilityIncompatible(capability_id, capability["version"], require)
+        return response(request, capability, compatible=compatible if require else None)

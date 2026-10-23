@@ -153,3 +153,39 @@ def test_runtime_capabilities_include_only_enabled_plugins(tmp_path):
 
     other = runtime_capabilities(registry, database, "bob", ["desktop:read"])
     assert not any(item["source"] == "plugin" for item in other)
+
+
+def test_capability_version_constraints_and_incompatibility():
+    from xeonolab.capabilities import CapabilityIncompatible, satisfies
+    from xeonolab.common import APIError
+
+    assert satisfies("1.2.3", "1.2.3")
+    assert satisfies("1.2.4", "^1.2.3")
+    assert not satisfies("2.0.0", "^1.2.3")
+    assert satisfies("1.2.9", "~1.2.3")
+    assert not satisfies("1.3.0", "~1.2.3")
+    assert satisfies("0.0.1", "*")
+    for bad in ("1.2", "x.y.z", "1.2.3.4"):
+        try:
+            satisfies("1.2.3", bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(bad)
+    assert issubclass(CapabilityIncompatible, APIError)
+
+
+def test_version_requirement_is_enforced_by_the_endpoint(tmp_path, monkeypatch):
+
+    settings = __import__("xeonolab.common", fromlist=["Settings"]).Settings(
+        tmp_path, "development",
+        dev_tokens={"alice": {"sub": "alice", "scope": "desktop:read", "agent_kind": "human"}},
+    )
+    client = TestClient(create_app("desktop-web", settings))
+    target = "builtin.platform.app.knowledge"
+    ok = client.get(f"/api/v1/capabilities/{target}", params={"require": "^1.0.0"}, headers=auth("alice"))
+    assert ok.status_code == 200 and ok.json()["meta"]["compatible"] is True
+    bad = client.get(f"/api/v1/capabilities/{target}", params={"require": "^2.0.0"}, headers=auth("alice"))
+    assert bad.status_code == 409 and bad.json()["error"]["code"] == "CAPABILITY_INCOMPATIBLE"
+    invalid = client.get(f"/api/v1/capabilities/{target}", params={"require": "nope"}, headers=auth("alice"))
+    assert invalid.status_code == 422
