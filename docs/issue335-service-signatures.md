@@ -206,3 +206,24 @@ scope evidence, not substituted for the final corrected full runs.
 Final corrected full runs use separate clean basetemp directories and the same
 locked dependency versions. Ruff, OpenAPI and platform smoke/failure-injection
 checks are repeated on the final sources as recorded below.
+
+
+## Final corrected regression evidence
+
+After the offline-dependency correction, full standalone regression recorded
+**879 passed / the identical 13 baseline Lean failures**, 444.34 s. Complete
+composition of the trusted adapters, strict execution registry, lifecycle,
+canonical versions, service declarations and this signature component recorded
+**1121 passed / the identical 13 baseline failures**, 491.64 s. Both failure-name
+set comparisons passed. Interrupted/older runs are not substituted for these
+corrected terminal results. Final focus is 145 signature/contract/auth/deploy
+cases and 242 signature/contract/execution-registry/Tool/version cases in the
+composition. Ruff, locked consistency, OpenAPI without drift, 11 service smokes
+and transaction/process/crash injection pass. The generated policy schema and
+deny example were also checked with a real Draft202012 validator in the prepared
+schema environment (system Python lacks jsonschema).
+
+The maintainer then merged #321 at protected base `529e335`; this feature is
+synchronized onto it before publication. The composition already includes that
+strict registry, and rebase-specific validation is recorded separately. No
+runtime is enabled and no policy/root/grant is installed by the synchronization.
