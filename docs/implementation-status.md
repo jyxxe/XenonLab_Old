@@ -34,7 +34,7 @@
 | 1 skeleton | 已实现独立入口与 OpenAPI；CI 工作流已提供；生产 readiness 仍需扩展依赖探针 |
 | 2 数据核心 | bootstrap 已可用；PostgreSQL catalogue、路径对象、完整 DSL、批量作业、import/restore/purge、分片待实施 |
 | 3 D100M | 实际推理与 Qdrant fast_text 生产连接已验证；后台自动索引队列、优先级调度和领域检索评测待实施 |
-| 4 Qwen | 尚无模型 worker、vision、quality rerank/cache；质量请求返回 unavailable |
+| 4 Qwen | #23已实现可选离线CPU worker与typed text/image facade（可选artifact tokenizers0.22.2；版本进入预处理空间），合成进程/API控制流可验证；真实weights、兼容CPU artifact、资源/吞吐/上线未验收，未配置仍503；vision、quality rerank/cache、优先级调度仍不属于本增量，见[Qwen worker](qwen-worker.md) |
 | 5 UI/Tools | 桌面和只读网关已实现；OIDC 浏览器 PKCE 登录已接入；OpenWebUI 原生用户 token exchange 尚未接入 |
 | 6 Library Agent | 只有 skeleton；推理、证据、proposal、Lean sandbox 未实现 |
 | 7 DevAgent | V1 已部署至 VM111：OpenCode 1.18.34、deepseek-v4.1-flash、2 分钟 watcher 与 30 分钟 reconciliation；自动模式只做协调和 Issue 路由，不修改代码。生产部署/重启验证及权限边界见 [DevAgent runbook](runbooks/devagent-maintainer.md) 与 [deployment runbook](runbooks/deployment.md)。多副本共享队列库仍未实施 |
@@ -238,6 +238,7 @@ Coordinator 本地验证：38 项前端测试、235 项后端测试、TypeScript
 
 Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 commit `44e5d1a2b2875b122f70eb27daa9afbe6d83361f`，release `85b605ea-46ba-4a26-bcd5-26d1caa79d75`，deployment `33a0af38-94e2-4a60-8d1a-3b6248c281e4` completed，租约已释放。工作队列、索引队列、知识库概览及 readiness 读取失败时统一展示带键盘可用重试的 ErrorState；合成浏览器验收覆盖工作队列失败与恢复。235 后端测试、38 前端测试、TypeScript/Vite build、OpenAPI 导出和 diff check 通过；LAN 五个服务 readiness、桌面 JS/CSS 发布哈希及未认证 API 401 验收通过。未做真实登录态浏览器验收；#71 保持开放。
 
+
 ### Issue #80 过期 Work 认领状态区分（2026-10-01，已部署）
 
 `c16efc35c99ce7deb1b457dad35da08ca805542d` 将 `queued` 与有效 `claimed` 统一作为活动项；过期领取独立计数、展示并允许重领，覆盖 Dashboard、状态小组件、Dock badge、Development、Issues、System Agents 和 Work。Deploy Gateway release `03fd828d-399d-498e-8e7d-e27049ab0da4` / deployment `2083222b-8a1d-4615-bc99-4cd2b671ff9b` 已完成，租约已释放。39 项前端、279 项后端、41 项 Work API 测试通过；TypeScript/Vite build、OpenAPI 无 diff 和 diff check 通过。部署后静态资源与构建哈希一致，5/5 readiness、匿名 API 401；只读生产 Work API 显示活动 21 项、过期领取 20 项。尚未在发布后重新运行登录态 Chrome 流程，因此 #80 暂保持开放，完整 V1 Plan 仍未完成。验收细节见 `docs/acceptance/issue-80-2026-10-01.md`。
@@ -246,6 +247,50 @@ Issue #71 System 概览错误状态增量（2026-10-01）已部署：代码 comm
 
 首次目录请求、重试及定时刷新等待期间，System Dashboard 显示明确的读取状态，不再把尚未返回的数据误报为 0 张表。功能提交 `9565f03dc0b5a865ffa7b13ef51c1f7b8e5ff84c`，部署提交 `51a859c2e349c51e14a4a9d50bfec6de3b2db797`；release `da941881-eba2-4d91-aa34-74baff428470` / deployment `c27a59c5-8b32-4a4c-a5d0-b03630b94bb3` completed，租约已释放。39 项前端、279 项后端测试和 TypeScript/Vite build 通过；公网登录态浏览器 44/44 检查通过，五服务 readiness、静态 JS/CSS hash 与本机构建一致。此增量没有 API/schema/数据迁移；Issue #71 和完整 `plan.md` 仍未完成。详情见 `docs/acceptance/issue-71-dashboard-loading-2026-10-01.md`。
 
-### Issue #83 Bulk rows API（zcode 本地交付，plan §23）
+### Issue #72 子项：收藏/最近跨设备持久化（已集成部署）
 
-分支 `zcode/issue-83-bulk-rows`（基于 `e3c1b30`）。新增 `POST /api/v1/tables/{id}/rows:bulkInsert|rows:bulkUpdate|rows:bulkDelete` 与 `GET /api/v1/tables/{id}/rows:bulk/{job_id}`。语义要点：**每条操作逐条复用单行语义**（schema/type 校验、表+行 ACL、逐条 revision 一致性检查、`__xl_changes` 变更日志、FTS/CJK 维护、Qdrant 点清理、删除审计），每条独立事务提交——部分成功不回滚已应用行，响应按条带 `index/status/error{code,message}` 定位失败。批量 ≤ `XELIBRARY_BULK_SYNC_LIMIT`（默认 100）同步执行并直接返回逐条结果；超过则 202 返回 `data.job_id`，由后台任务（BackgroundTasks）从**持久化**载荷（catalogue `bulk_jobs` 表，新模块 `bulk_jobs.py`）逐条应用，进度 done/failed/results 实时落库可查；`XELIBRARY_BULK_MAX_ROWS`（默认 5000）超限 413 `BULK_TOO_LARGE`；`batch_id`（≥8 字符）幂等——重复提交返回原 job 引用且不重复应用；进程重启时 running/queued 作业标记 failed 并保留部分结果（可定位余量重提）；finished 作业滚动保留最近 200 条。行级 purge 不提供批量入口（保持 admin 单行语义）。验证：新增 9 项测试（部分成功/错误定位/stale revision/软删除/表+行 ACL 混合/异步作业与状态查询/幂等/上限/重启恢复，全库 392 项通过），改动文件 Ruff 通过，OpenAPI 导出仅 xelibrary.openapi.json 增加 4 路径。未实现/后续：取消与断点续跑 API、作业列表分页端点、前端批量 UI、真实 API 验收（发布后由协调器补）。
+分支 `zcode/issue-72-prefs-sync`（基于 `e3c1b30`）：桌面偏好新增规范化 `library_recents`/`library_favorites`（条目仅保留 kind/id/title/at、标题截断 200、列表上限 50、无效条目丢弃，PATCH/GET/重启持久化、账号隔离）；前端 `useLibraryPrefs` 挂载时把服务端副本与本地缓存按 `kind:id` 合并（保留较新时间戳，recent 按时间排序），remember/toggle 变更经 PATCH 推回服务器，localStorage 继续作离线缓存。新增 1 项桌面测试（往返/清洗/隔离/重启）与 1 项 logic 合并测试（前端 46 项、后端 384 项通过）。
+Coordinator 集成与发布（2026-10-22）：分支已并入 release base `8d1575a`。冲突解决：`xeonolab/desktop.py` 将本分支的偏好 revision/ETag 与 base 的 `preferences_from_definition()` 兼容读取、`custom_wallpaper_available` 及插件迁移合并（GET 保留兼容读取并返回 ETag；PATCH 保留 If-Match 且返回新 ETag；壁纸移除写入同时推进 revision）；`tests/test_desktop.py`、`docs/implementation-status.md`、`apps/desktop-web/src/library/*` 与 `library-logic.test.mjs` 按并集保留双方新增函数与测试；`docs/api/desktop-web.openapi.json` 由 `scripts/export_openapi.py` 重新生成（仅新增偏好字段）。评审 P2 一并修复：挂载合并现在同时回推 `library_recents` drift（此前只回推 favorites/tombstones，离线 recent 在重挂载后不会上传）；`PATCH /users/me/preferences` 响应返回新 ETag，前端写后更新 `revisionRef`，同会话连续写入不再先吃一次 412；补充两台设备的多设备用例（ETag/If-Match 412 与刷新后重试、A 删除后 tombstone 抑制旧缓存、离线 recent 上传后另一设备可见）。两条既有浏览器验收（附件选择器、批量选择）原断言“只有 GET/不产生写请求”，因 LibraryApp 现在会同步账号偏好而按新行为适配：允许且仅允许 `/users/me/preferences` 的偏好同步写入，记录/AI 写入仍被禁止（断言改为过滤偏好路径后检查，并给出更明确的失败信息）。验证：551 后端 pytest、全仓 Ruff、OpenAPI 无意外 diff；前端 135 单测、tsc/Vite build 与完整浏览器回归。仍不关闭 #72（自动索引流水线等子项另行处理）。
+### Issue #74 可视 Embedding 队列增量（已集成部署）
+
+分支 `zcode/issue-74-embedding-queue`（worktree `runtime/agent-worktrees/issue-74-embedding-queue`，基于 `a2f264e`）。Embedding 服务新增 `EmbeddingRequestStore`（`xeonolab/embedding_requests.py`，SQLite `embedding-requests.sqlite3`）：每个到达 D100M worker 的请求记录 running→completed/failed（模型、文本数、字符数、truncation、tokens、耗时、错误码、调用方 sub），忙时 429 拒绝也记为 failed/EMBEDDING_BUSY；未配置/未知模型请求不入库。已完成历史滚动保留最近 1000 条，running 行永不剪枝，进程重启时遗留 running 行标记 WORKER_RESTARTED（沿用 index_jobs 恢复语义）。新增只读端点 `GET /api/v1/embedding/queue`（active+counts+worker 状态）与 `GET /api/v1/embedding/requests?limit=&cursor=&status=`（新到旧 cursor 分页），scope 均为 `dev:read`（与 work/issues 运维只读视图一致，默认桌面身份可见）；队列不含任何输入文本，避免知识内容经 dev:read 泄露。`infra/network/xeonolab.caddy` 与 `cloudflare-origin.caddy` 新增 `/api/v1/embedding/queue*`、`/api/v1/embedding/requests*` → 192.168.0.107:8104 路由。桌面新增原生应用「Embedding 队列」（`EmbeddingQueue.tsx` + `embedding-queue-logic.js`，注册于 `shell/apps.tsx`，permissions `dev:read`，10 秒轮询 + 陈旧响应丢弃 + cursor 去重），展示 worker 忙碌/就绪/未配置、运行中/已完成/失败计数、未完成请求列表与最近请求表（加载更多分页）。验证：新增 8 项后端测试（全库 243 项通过）、5 项前端逻辑单测（全库 44 项通过）、tsc+vite build、OpenAPI 重新导出（仅 embedding.openapi.json 增加两路径）、合成数据 headless Chrome 验收通过（截图 `runtime/acceptance-artifacts/issue-74-embedding-queue-1440x900.png`，测试数据全部为本地合成 fixture）。未做真实登录态浏览器验收与生产路由验收，需发布后由协调器补充；忙时拒绝请求会占用每身份 embedding-fast 限流窗口之外的额外写库（可忽略量级）。
+
+Coordinator 集成与发布（2026-10-22）：分支已并入 release base `e031b073`，唯一冲突为本文档同点插入（已按双方段落并集解决）与生成文件 `docs/api/embedding.openapi.json`（已用 `scripts/export_openapi.py` 重新生成，diff 仅新增两路 queue 端点）。同时把新浏览器验收 `tests/browser-acceptance-embedding-queue.test.mjs` 注册进 `run-browser-regression.mjs`，使 CI 实际执行该验收；并同步更新两条按目录数量断言的既有浏览器验收（`browser-acceptance-icons` 的 dock/LaunchPad 图标数 8→9、`browser-acceptance-launchpad-origin` 的全目录数 11→12、native 8→9），因为新增的「Embedding 队列」应用（`dev:read`、dock 可见）确实扩大了应用目录。新浏览器验收按既有 raw-CDP 验收的约定，在 root CI 容器内自动追加 `--no-sandbox`（本地保持沙箱），修复 CI 容器中 Chrome 无法启动的问题。验证：后端 537 项 pytest、Ruff 全通过、OpenAPI 导出无 diff；前端 122 项单测、TypeScript/Vite build、新 Embedding 队列浏览器验收通过；随后走精确 head CI、受保护 preflight、独立审批、合并与发布验证，并在生产边缘同步新增的 `/api/v1/embedding/queue*`、`/api/v1/embedding/requests*` 路由（LAN caddy 为运维同步文件，部署后单独校验）。仍不做等待/优先级调度：繁忙请求保持 429，历史保留最近 1000 条且按账户隔离。
+### Issue #72 每表索引状态 API 增量（已集成部署）
+
+分支 `zcode/issue-72-index-status`（worktree `runtime/agent-worktrees/issue-72-index-status`，基于 `24ee54e`）。补齐 #72 交付报告列出的首要缺口「每表 Index Status API 缺失，普通用户无 `xelibrary:admin` 读不到任务」：新增 `GET /api/v1/tables/{tid}/index-status`（scope `xelibrary:read` + 既有表读 ACL），从表文件本身推导真实覆盖——`row_count`（未删除行）、`embedded_rows`/`missing_rows`（`__xl_vectors` 按行当前 `_revision` 联结统计）、`pending_rows`（`__xl_changes` 中 `revision > indexed_revision` 的去重行数）、`chunk_count`、`last_job`（最近一条索引任务，不限 owner），并派生 `state`：queued/indexing/failed（最近任务）、empty（无行）、not_indexed（从未嵌入）、stale（有待索引变更或部分覆盖）、ready（全部覆盖）。模型/分词器升级导致的过期块不并入计数（搜索结果已单独提示）。前端 `library/hooks.ts` 新增 `useIndexStatus`（generation 守卫防串表），`logic.js` 新增 `indexStatusFromServer` 纯映射，Inspector「索引」标签改为优先展示真实覆盖统计与最近任务，无此 API 的旧后端或无权限时回退原 jobs 视图/提示；重建索引按钮与刷新语义不变。验证：新增 3 项后端测试（空表/未索引/ready/stale 推导、失败任务、401/403 ACL），全库 282 项通过；改动文件 Ruff 通过；OpenAPI 重新导出仅 xelibrary.openapi.json 增加一路径；前端 49 项测试通过（`indexStatusFromServer` 6 断言组 + library 浏览器验收新增已索引行/向量块计数断言），tsc+vite build 通过；合成数据截图 `runtime/acceptance-artifacts/issue-72-index-status-1440x900.png`。未做真实登录态浏览器验收；自动索引流水线（行变更后自动排队）涉及成本与触发策略决策，另行提案，不在本增量。
+
+Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release base `887bd14`（唯一冲突为本文档同点插入，已按双方段落并集解决），并补齐评审 non-blocking nit：Inspector「最近任务」仅在 `job_id` 存在时渲染 id（共享表读者的最小摘要不再显示前导 `·`），客户端 `IndexStatus.last_job` 类型同时允许该最小摘要（`job_id`/`owner` 可选）。验证：后端 528 项 pytest、Ruff 全通过、OpenAPI 重新导出无 diff；前端 117 项单测、TypeScript/Vite build 与 XeLibrary 浏览器验收通过；随后走精确 head CI、受保护 preflight、独立审批、合并与发布验证。仍未做真实登录态生产浏览器验收；自动索引流水线（行变更自动排队）不在本增量。
+
+### Issue #94 修复（zcode 本地交付）
+
+公网边缘（`cloudflare-origin.caddy` 站点块）补齐与 LAN `(xeonolab-desktop)` snippet 一致的安全头——`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`，并按 Issue 建议的灰度值在两侧同时加 `Strict-Transport-Security "max-age=300"`（公网源站为 HTTP，经 Cloudflare HTTPS 边缘下发后浏览器按 HTTPS 响应生效；max-age 短窗灰度，可后续调大）。
+
+首个增量（PR #106）用共享 `security-headers.caddy` snippet，但 VM101 的激活路径只安装 `infra/network/cloudflare-origin.caddy`，不安装被 import 的兄弟文件与 `xeonolab.caddy`；2026-10-22 的部署因此在 Caddy reload 时报 `File to import not found: security-headers.caddy` 并在激活后自动回滚（生产保持上一版本，未受影响）。随后修订为部署兼容方案：两个文件均内联同样的三条头（不再新增/import 文件），`tests/test_edge_security_headers.py` 改为按大括号作用域提取两个站点块，断言必需头齐全、值精确、两侧集合一致，且禁止 import 激活清单之外的文件。VM101 的 `xeonolab.caddy` 仍为运维手工管理文件（激活不覆盖），由操作者按仓库内容同步。CSP 的完整方案（iframe 应用白名单等）需单独评估，不在本增量内。
+
+### Issue #116 桌面自定义能力（本地，未发布）
+
+本地分支新增单账户自定义壁纸：`desktop:read` scope 下由 API 使用认证主体隔离，服务端限制 5 MiB/1600 万像素/单帧，解码验证 JPEG、PNG、WebP 后重新编码为 WebP，客户端路径和 MIME 不作为信任依据；API 提供读取、上传和重置。保留账户图片之外的纯色/渐变配置与压暗层，将图片数据留在受限资产 API、不写入偏好 JSON，并兼容旧版 `wallpaper=custom` 图片偏好。桌面组件包含时钟、系统状态、时区日历、按授权 registry 过滤的应用快捷入口、按当前权限显示的工作队列和 XeLibrary 搜索，以及账户偏好中的快速便签。便签显示保存状态并在失焦、pagehide 和组件卸载时尝试 flush；移动组件条适配 390 px 并可用键盘访问。验证覆盖账号隔离、重启持久化、旧偏好兼容、无效/超限图片、背景压暗叠放、工作项状态筛选、权限收缩、便签 pagehide 保存与键盘可用性。
+
+本地全量后端 398 项、前端 48 项、浏览器合成验收、TypeScript/Vite build、目标 Ruff 与 OpenAPI 导出通过。后续加固在 `xeonolab/wallpaper_backup.py` 提供有界图片处理及本地桌面+壁纸备份/校验/隔离恢复：重编码输出受 5 MiB 限制；壁纸上传、替换、删除和快照使用同一个数据根文件锁，SQLite Backup API 快照后按快照中的不可变 UUID 复制文件，并校验元数据、哈希和实际 WebP 解码；备份默认总数据预算 512 MiB、1,000 个资产、预留 64 MiB 空间，可由 CLI 调整；空间预检不是并发写入下的绝对保证。每个服务进程两个图片处理中槽位，超容量返回 429（多进程部署的上限按进程数相乘），取消请求会等待受限线程真正结束后清理并释放槽位。`tests/test_wallpaper_backup.py` 覆盖 Alice/Bob 恢复、错 owner/缺文件拒绝、替换并发快照、事件循环响应、容量拒绝和编码失败清理。未部署或做真实登录生产验收。此 helper 仅涵盖 `desktop.sqlite` 与自定义壁纸，不代表账户/会话数据或平台管理秘密的全局备份；生产仍需独立存储、保留/监控和端到端恢复演练。旧版本不兼容 `wallpaper=custom`，回滚必须恢复匹配的旧桌面快照；操作步骤见 `docs/runbooks/desktop-wallpaper-backup-restore.md`。
+
+### Issue #85 修复（zcode 本地交付）
+
+分支 `zcode/issue-85-issues-toolbar`（基于 `754ff27`）：`.ds-tabs` 的 `flex-shrink:0` 使任务页状态筛选条在 390px 视口撑宽 `.issues-app`（实测 scrollWidth 523 > clientWidth 380）并裁切筛选选项。修复限定在 `.issues-toolbar` 作用域：`ds-tabs` 允许 `flex-wrap:wrap;flex-shrink:1;min-width:0`，表格保留自身横向滚动。新增 390×844 合成 fixture 与浏览器验收（app/toolbar 无横向溢出、每个筛选选项完整落在视口内、截图 `runtime/acceptance-artifacts/issue-85-issues-toolbar-390x844.png`）。全前端 45 项测试与构建通过。
+
+### Issue #96 修复（zcode 本地交付）
+
+分支 `zcode/issue-96-blocked-claim`（基于 `754ff27`）：blocked 状态的 work 项不再渲染必然 409 的「领取」按钮，操作列改为「来源冲突 · 不可领取」提示（`work-state.ts` 新增 `isBlockedWorkItem`）；work 浏览器验收新增 blocked 行无按钮断言。全前端 45 项测试与构建通过。
+
+### Issue #93 修复（zcode 本地交付）
+
+分支 `zcode/issue-93-work-active`（基于 `754ff27`）：`GET /api/v1/work` 新增 `?active=true|false` 服务端过滤（SQL 级，游标分页语义不变）并在每行显式返回 `lease_expired` 布尔（claimed 且租约已过期），客户端不再各自实现 `expires > now` 比较；计算列由 SQLite 产出后转回 JSON 布尔以保持既有契约。新增 1 项测试覆盖五种状态的过滤/标记/游标/422（全库 353 项通过），改动文件 Ruff 通过，OpenAPI 导出仅 dev-agent.openapi.json 增加查询参数。
+
+### Issue #91 管理员收尾端点（zcode 本地交付）
+
+分支 `zcode/issue-91-work-complete`（基于 `e3c1b30`）：`POST /api/v1/work/{id}/admin-complete`（scope `dev:write`）补齐队列卫生缺口——无人认领或认领已过期的项可由管理员标记完成（status=completed、holder 清空、epoch+1 fencing），**活跃认领一律 409 `WORK_CLAIMED`**、已完成项 409，写 `work.admin_completed` 审计事件；与 reconcile（Issue 关闭→completed）互补。新增 1 项测试覆盖 queued/过期认领/活跃认领/已完成/404/401/幂等（全库 384 项通过），Ruff 与 OpenAPI 导出通过。
+### Issue #83 Bulk rows API（已集成部署）
+
+`POST /api/v1/tables/{id}/rows:bulkInsert|rows:bulkUpdate|rows:bulkDelete` 与 `GET /api/v1/tables/{id}/rows:bulk/{job_id}`：逐条复用单行语义（schema/type 校验、表+行 ACL、逐条 revision 检查、`__xl_changes`、FTS/CJK、Qdrant 清理、删除审计），每条独立事务提交，部分成功按条返回 `index/status/error{code,message}`。批量 ≤ `XELIBRARY_BULK_SYNC_LIMIT`（默认 100）同步执行；超过则 202 + `data.job_id`，后台任务从 catalogue `bulk_jobs` 持久化载荷逐条应用，进度实时可查；`XELIBRARY_BULK_MAX_ROWS` 超限 413 `BULK_TOO_LARGE`；finished 作业保留最近 200 条。
+
+审查修复（PR #109 复审）：`batch_id` 由全局唯一改为 `(owner, table_id, kind)` 作用域——同一作用域相同载荷为幂等重复（返回原 job），不同载荷返回 409 `BATCH_CONFLICT`（旧表在启动时幂等迁移重建）；每条已应用结果在**同一个表事务**内写 `__xl_bulk_applied` 标记，进程重启后从标记对账补回丢失的持久结果再标 failed（提交窗口不再丢记录/误报余量）；删除表时若有 queued/running bulk 作业返回 409 `TABLE_BULK_ACTIVE`。未包含：取消/断点续跑、作业列表分页、前端批量 UI。

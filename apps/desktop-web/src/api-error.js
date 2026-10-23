@@ -23,6 +23,20 @@ export function apiErrorFromResponse(response, payload) {
   );
 }
 
+/**
+ * Human-readable status text for UI messages.
+ *
+ * `String(error)` renders `APIRequestError: <message>`, leaking an internal class
+ * name into user-facing status lines. Prefer the server-provided message, then a
+ * generic fallback that never exposes the class name.
+ */
+export function readableErrorMessage(error) {
+  const message = typeof error?.message === 'string' ? error.message.trim() : '';
+  if (message) return message;
+  const text = typeof error === 'string' ? error.trim() : '';
+  return text || '请稍后重试';
+}
+
 export function isUnregisteredAccountError(error) {
   return error instanceof APIRequestError && error.status === 404 && error.code === 'ACCOUNT_NOT_FOUND';
 }

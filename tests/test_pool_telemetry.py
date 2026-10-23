@@ -7,6 +7,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from socketserver import ThreadingMixIn
 
 import pytest
 
@@ -260,7 +261,7 @@ def test_http_receiver_does_not_log_credentials_or_request_content(tmp_path, cap
     assert not path.exists()
 
 
-def test_http_receiver_bounds_slow_clients_and_concurrent_requests(tmp_path):
+def test_http_receiver_bounds_slow_clients_and_concurrent_requests(tmp_path, monkeypatch):
     store = store_at(tmp_path / "pool.json")
     entered = threading.Event()
     release = threading.Event()
@@ -272,7 +273,30 @@ def test_http_receiver_bounds_slow_clients_and_concurrent_requests(tmp_path):
         accept(*args)
 
     store.accept = slow_accept
-    server = Receiver(
+    cleanup_entered = threading.Event()
+    cleanup_release = threading.Event()
+    worker_finished = threading.Event()
+    workers = []
+    process_request_thread = ThreadingMixIn.process_request_thread
+
+    def controlled_cleanup(self, request, client_address):
+        process_request_thread(self, request, client_address)
+        # The socket is closed, but Receiver still owns its concurrency slot.
+        cleanup_entered.set()
+        assert cleanup_release.wait(timeout=2)
+
+    monkeypatch.setattr(ThreadingMixIn, "process_request_thread", controlled_cleanup)
+
+    class ObservedReceiver(Receiver):
+        def process_request_thread(self, request, client_address):
+            workers.append(threading.current_thread())
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                # Observe the real Receiver finally, including slot release.
+                worker_finished.set()
+
+    server = ObservedReceiver(
         ("127.0.0.1", 0), handler_for(store), request_timeout=0.15, max_concurrent_requests=1
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -306,6 +330,10 @@ def test_http_receiver_bounds_slow_clients_and_concurrent_requests(tmp_path):
         release.set()
         request_thread.join(timeout=2)
         assert first_result == [204]
+        assert cleanup_entered.wait(timeout=2)
+        assert not worker_finished.is_set(), "client completion precedes worker slot release"
+        cleanup_release.set()
+        assert worker_finished.wait(timeout=2), "body timeout requires a released receiver slot"
 
         slow = socket.create_connection(("127.0.0.1", server.server_port), timeout=1)
         try:
@@ -319,10 +347,14 @@ def test_http_receiver_bounds_slow_clients_and_concurrent_requests(tmp_path):
             slow.close()
     finally:
         release.set()
+        cleanup_release.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
         request_thread.join(timeout=3)
+        for worker in workers:
+            worker.join(timeout=3)
+        assert all(not worker.is_alive() for worker in workers)
 
 
 def test_receiver_refuses_group_or_world_writable_target(tmp_path):

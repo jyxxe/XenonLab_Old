@@ -1,7 +1,10 @@
 """Account trees and centrally enforced, revocable API keys."""
 
+import base64
+import binascii
 import hashlib
 import json
+import math
 import os
 import secrets
 import ssl
@@ -70,6 +73,28 @@ class KeyCreate(BaseModel):
     owner: str
     name: str = Field(min_length=1, max_length=80)
     scopes: list[str] = Field(max_length=64)
+
+
+def audit_cursor(at: float, event_id: str) -> str:
+    value = json.dumps([at, event_id], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def audit_boundary(cursor: str) -> tuple[float, str]:
+    try:
+        if len(cursor) > 512:
+            raise ValueError
+        value = json.loads(base64.b64decode(cursor + "=" * (-len(cursor) % 4), altchars=b"-_", validate=True))
+        if not isinstance(value, list) or len(value) != 2:
+            raise ValueError
+        at, event_id = value
+        if isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(at):
+            raise ValueError
+        if not isinstance(event_id, str) or not 1 <= len(event_id) <= 128:
+            raise ValueError
+        return float(at), event_id
+    except (ValueError, TypeError, OverflowError, binascii.Error):
+        raise APIError(422, "INVALID_CURSOR", "invalid account audit cursor") from None
 
 
 class Keycloak:
@@ -156,6 +181,7 @@ def install(app):
         CREATE TABLE IF NOT EXISTS account_audit(
           id TEXT PRIMARY KEY, actor TEXT NOT NULL, event TEXT NOT NULL,
           target TEXT NOT NULL, at REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS account_audit_order ON account_audit(at DESC, id DESC);
         """)
     with transaction(path) as db:
         if "credential_epoch" not in {row[1] for row in db.execute("PRAGMA table_info(accounts)")}:
@@ -208,8 +234,24 @@ def install(app):
             raise APIError(403, "ACCOUNT_MANAGEMENT_REQUIRED", "account management permission required")
 
     def validate(grants, available):
-        if not set(grants) <= SCOPES or not set(grants) <= available:
-            raise APIError(403, "PERMISSION_ESCALATION", "grants must be a subset of inherited permissions")
+        requested = set(grants)
+        if not requested <= SCOPES or not requested <= available:
+            # Name the exact scopes so an operator can see whether the parent
+            # lacks them or the request contains unknown scope names.
+            missing = sorted((requested - SCOPES) | (requested - available))
+            raise APIError(
+                403,
+                "PERMISSION_ESCALATION",
+                "grants must be a subset of inherited permissions; not grantable: " + ", ".join(missing),
+            )
+
+    def request_scopes(actor):
+        # Keep validated token claims distinct from active account grants so
+        # a root can explicitly adopt a new OIDC role scope. Child managers
+        # remain limited to their delegated effective account scopes.
+        if not actor.ancestors and actor.token_scopes is not None:
+            return actor.token_scopes
+        return actor.scopes
 
     def audit(db, actor, event, target):
         db.execute(
@@ -255,6 +297,9 @@ def install(app):
                 actor.issued_at,
                 actor.credential_epoch,
                 tuple(row["id"] for row in chain(db, actor.sub)[1:]),
+                # Only token_identity's verified OIDC claims are candidate
+                # grants. API-key scopes are database policy, not JWT claims.
+                token_scopes=None if token.startswith("xek_") else actor.token_scopes,
             )
 
     app.state.authorization_resolver = resolve
@@ -324,6 +369,20 @@ def install(app):
                 scope_catalog=sorted(SCOPES),
             )
 
+    @app.get("/api/v1/auth/accounts/root-scope-candidates")
+    def root_scope_candidates(request: Request, actor=Depends(identity)):
+        # This endpoint reveals only what this signed-in human root could
+        # explicitly add to their own root grants. It is not delegated to
+        # account managers or API keys and does not activate any permission.
+        if actor.kind != "human" or actor.token_scopes is None:
+            raise APIError(403, "SIGNED_HUMAN_ROOT_REQUIRED", "signed-in human root required")
+        with connect(path) as db:
+            row = load(db, actor.sub)
+            if row["parent"] is not None:
+                raise APIError(403, "SIGNED_HUMAN_ROOT_REQUIRED", "signed-in human root required")
+            candidates = (actor.token_scopes & SCOPES) - effective(db, actor.sub)
+            return response(request, {"candidate_scopes": sorted(candidates)})
+
     @app.post("/api/v1/auth/accounts", status_code=201)
     def create(body: Child, request: Request, actor=Depends(identity)):
         interactive(request)
@@ -335,9 +394,9 @@ def install(app):
                 raise APIError(422, "INVALID_PARENT", "human parent and maximum depth 128 required")
             if not all(node["enabled"] for node in chain(db, body.parent_id)):
                 raise APIError(409, "PARENT_DISABLED", "parent disabled")
-            validate(body.grants, effective(db, body.parent_id) & actor.scopes)
+            validate(body.grants, effective(db, body.parent_id) & request_scopes(actor))
             if body.inherit_all:
-                validate(effective(db, body.parent_id), actor.scopes)
+                validate(effective(db, body.parent_id), request_scopes(actor))
             if db.execute(
                 "SELECT 1 FROM accounts WHERE lower(username)=lower(?)", (body.username,)
             ).fetchone():
@@ -378,7 +437,9 @@ def install(app):
             # Existing grants may become ineffective after parent permissions shrink.
             if body.grants is not None:
                 validate(
-                    grants, (effective(db, row["parent"]) if row["parent"] else actor.scopes) & actor.scopes
+                    grants,
+                    (effective(db, row["parent"]) if row["parent"] else request_scopes(actor))
+                    & request_scopes(actor),
                 )
             if row["parent"] is None and (
                 body.enabled is False or not {"desktop:read", "desktop:admin"} <= set(grants)
@@ -481,13 +542,24 @@ def install(app):
         return response(request, {"revoked": True})
 
     @app.get("/api/v1/auth/accounts/audit/events")
-    def events(request: Request, actor=Depends(identity)):
+    def events(request: Request, cursor: str = "", limit: int = 200, actor=Depends(identity)):
+        if not 1 <= limit <= 1000:
+            raise APIError(422, "INVALID_LIMIT", "limit must be 1..1000")
+        boundary = audit_boundary(cursor) if cursor else None
+        clause = " AND (e.at < ? OR (e.at = ? AND e.id < ?))" if boundary else ""
+        parameters = (boundary[0], boundary[0], boundary[1]) if boundary else ()
         with connect(path) as db:
             rows = db.execute(
                 """WITH RECURSIVE children(id) AS (
                 SELECT ? UNION SELECT a.id FROM accounts a JOIN children c ON a.parent=c.id)
-                SELECT e.* FROM account_audit e WHERE e.actor IN (SELECT id FROM children)
-                OR e.target IN (SELECT id FROM children) ORDER BY e.at DESC LIMIT 200""",
-                (actor.sub,),
+                SELECT e.* FROM account_audit e WHERE (e.actor IN (SELECT id FROM children)
+                OR e.target IN (SELECT id FROM children))""" + clause +
+                " ORDER BY e.at DESC, e.id DESC LIMIT ?",
+                (actor.sub, *parameters, limit + 1),
             ).fetchall()
-            return response(request, [dict(row) for row in rows])
+            return response(
+                request,
+                [dict(row) for row in rows[:limit]],
+                next_cursor=audit_cursor(rows[limit - 1]["at"], rows[limit - 1]["id"])
+                if len(rows) > limit else None,
+            )

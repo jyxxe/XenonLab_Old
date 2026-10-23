@@ -93,12 +93,28 @@
         "operationId": "chat_v1_chat_completions_post",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "JSON completion, or SSE stream. Midstream failures are safe error data events without data: [DONE].",
             "content": {
               "application/json": {
                 "schema": {}
-              }
+              },
+              "text/event-stream": {}
             }
+          },
+          "408": {
+            "description": "The inbound request body exceeded its read deadline."
+          },
+          "413": {
+            "description": "Request body exceeds the configured byte limit."
+          },
+          "429": {
+            "description": "Per-process stream capacity reached; includes Retry-After."
+          },
+          "502": {
+            "description": "Provider request failed before streaming began."
+          },
+          "504": {
+            "description": "Provider response headers exceeded the request deadline before streaming began."
           }
         }
       }
