@@ -16,3 +16,16 @@ test('TSV represents objects and arrays as JSON text in quoted cells', () => {
   assert.equal(serializeTSV(['object','array'], [[{key:'tab\tline\n'},[1,'two',null]]]),
     'object\tarray\r\n"{""key"":""tab\\tline\\n""}"\t"[1,""two"",null]"');
 });
+
+
+
+test('spreadsheet text protection is opt-in and leaves numeric scalars unchanged', () => {
+  const labels = ['=synthetic label', '+synthetic label', '-synthetic label', '@synthetic label', ' \t=synthetic label', '\tplain label', '\rplain label', '\u0000plain label', '\ufeff@synthetic label'];
+  for (const label of labels) {
+    const guarded = serializeTSV(['Text'], [[label]], {spreadsheetTextColumns: [0]});
+    const expected = "'" + label;
+    assert.equal(guarded, 'Text\r\n' + (/[\t\r\n"]/.test(expected) ? `"${expected.replaceAll('"', '""')}"` : expected));
+    assert.equal(serializeTSV(['Text'], [[label]]), 'Text\r\n' + (/[\t\r\n"]/.test(label) ? `"${label.replaceAll('"', '""')}"` : label), 'legacy callers retain original bytes');
+  }
+  assert.equal(serializeTSV(['Number','Flag','Null','Text'], [[-3,false,null,' ordinary label']], {spreadsheetTextColumns: [0,1,2,3]}), 'Number\tFlag\tNull\tText\r\n-3\tfalse\t\t ordinary label');
+});
