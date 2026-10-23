@@ -1303,6 +1303,16 @@
               "type": "string",
               "title": "Capability Id"
             }
+          },
+          {
+            "name": "require",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Require"
+            }
           }
         ],
         "responses": {

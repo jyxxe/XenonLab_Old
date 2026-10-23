@@ -307,3 +307,7 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 ### Issue #117 XeLibrary 数据生命周期设计（设计稿，未实现）
 
 `docs/design/xelibrary-data-lifecycle.md` 定义 `__xl_changes` 保留窗口（每表 5 万条/30 天，显式维护端点、默认 dry-run、audit）、共享附件对象 GC（跨表引用差集 + 24h 宽限期 + 待删清单对账）、派生索引/向量与模型空间迁移边界、import/export 输出清理与增长指标。实现（维护端点、GC 编排、指标接线）作为后续独立增量，不在本设计内自动启用。
+
+### Epic #305 Phase 1 续：能力版本兼容性检查
+
+`GET /api/v1/capabilities/{id}` 新增 `require` 版本约束（精确 / `^` / `~` / `*`）；不满足返回 409 `CAPABILITY_INCOMPATIBLE`，非法约束 422 `INVALID_VERSION_CONSTRAINT`。与上一轮“已启用插件能力并入发现”共同构成 #313 的前两项交付。
