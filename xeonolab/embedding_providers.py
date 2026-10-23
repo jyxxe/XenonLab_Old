@@ -7,6 +7,7 @@ process timeout/termination. This module does not invent thread cancellation.
 
 import logging
 import math
+import os
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -158,7 +159,7 @@ class ProviderBinding:
 
 
 class EmbeddingProviders:
-    def __init__(self, bindings, *, registry_loader=load_registry, enforce=True):
+    def __init__(self, bindings, *, registry_loader=load_registry, enforce=True, lifecycle_required=None):
         self._bindings = {}
         self._aliases = {}
         self._disabled = set()
@@ -167,6 +168,10 @@ class EmbeddingProviders:
         self._owned = []
         self._loader = registry_loader
         self.enforce = enforce
+        mode = os.getenv("CAPABILITY_LIFECYCLE_ENABLED", "0")
+        if mode not in {"0", "1"}:
+            raise ValueError("CAPABILITY_LIFECYCLE_ENABLED must be 0 or 1")
+        self._lifecycle_required = mode == "1" if lifecycle_required is None else lifecycle_required
         for binding in bindings:
             self.replace(binding)
 
@@ -204,7 +209,19 @@ class EmbeddingProviders:
         else:
             self._disabled.add(slot)
 
+    def require_lifecycle(self, binding, actor):
+        check = getattr(actor, "require_capability", None)
+        revision = getattr(actor, "lifecycle_revision", None)
+        if self._lifecycle_required and (not callable(check) or type(revision) is not int or revision < 0):
+            raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "verified lifecycle snapshot required")
+        if callable(check):
+            # Availability gate only: it must not require the read scope when
+            # the caller is using the separately authorized encode capability.
+            check(binding.capability_id)
+
     def _resolve(self, binding, actor, operation):
+        if actor is not None:
+            self.require_lifecycle(binding, actor)
         if binding.slot in self._faulted and operation == "encode":
             raise APIError(503, "MODEL_UNAVAILABLE", "embedding provider failed to start")
         if not self.enforce:

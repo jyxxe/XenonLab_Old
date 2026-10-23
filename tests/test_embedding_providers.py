@@ -229,3 +229,42 @@ def test_registry_rejects_invalid_alias_bindings():
     for aliases in (("fast", "fast"), ("",), (None,), "fast"):
         with pytest.raises(ValueError):
             EmbeddingProviders([replace(binding(SyntheticProvider()), aliases=aliases)])
+
+
+class AuthorityActor(Identity):
+    def __init__(self, scopes, disabled=()):
+        super().__init__('synthetic', set(scopes))
+        self.lifecycle_revision = 2
+        self.disabled = set(disabled)
+
+    def require_capability(self, identifier):
+        if identifier in self.disabled:
+            raise APIError(404, 'CAPABILITY_NOT_FOUND', 'no such capability')
+
+
+@pytest.mark.parametrize('enforce', [True, False])
+def test_authority_group_stop_applies_before_adapter_rollback(enforce):
+    fast, quality = SyntheticProvider(), SyntheticProvider('quality')
+    providers = EmbeddingProviders([binding(fast), binding(quality)], enforce=enforce, lifecycle_required=True)
+    stopped = binding(fast).capability_id
+    writer = AuthorityActor({'embedding:write'}, [stopped])
+    providers.set_enabled('fast', True)
+    with pytest.raises(APIError) as error:
+        providers.prepare('D100M-Embedding', writer)
+    assert error.value.status == 404
+    # No read permission is needed by the surviving encoder.
+    providers.prepare('quality', writer)
+    reader = AuthorityActor({'embedding:read'}, [stopped])
+    assert [m['alias'] for m in providers.models(reader)] == ['quality']
+
+
+def test_strict_embedding_registry_requires_verified_snapshot_without_affecting_health():
+    provider = SyntheticProvider()
+    providers = EmbeddingProviders([binding(provider)], enforce=False, lifecycle_required=True)
+    for actor in (Identity('old', {'embedding:write'}), AuthorityActor({'embedding:write'})):
+        if hasattr(actor, 'lifecycle_revision'):
+            actor.lifecycle_revision = None
+        with pytest.raises(APIError) as error:
+            providers.prepare('fast', actor)
+        assert error.value.code == 'CAPABILITY_LIFECYCLE_UNAVAILABLE'
+    assert providers.ready()

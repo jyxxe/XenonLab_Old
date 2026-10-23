@@ -156,3 +156,80 @@ UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pyte
 
 No real model/production/visual acceptance, deployment, approval or merge was
 performed. Current protected CI and maintainer acceptance remain outstanding.
+
+## Authority availability interoperability (#331 / #332)
+
+EmbeddingProviders now checks the core Identity's `require_capability` for the
+binding's provider root before local/manifest gates and before preparing a call.
+This check also runs when `EMBEDDING_CAPABILITY_ADAPTERS=0`; local enable cannot
+override authority denial. Strict lifecycle mode requires a verified snapshot
+revision and callable core hook, otherwise 503. Default mode retains old-core
+compatibility until rollout. Actorless readiness remains physical/configuration
+health, not authorization. Model responses retain typed response validation and
+now set no-store without bypassing the response model.
+
+The #332 extension controls D100M/Qwen as availability groups: each root governs
+read descriptors and encode admission. Encode scopes are still checked against
+the distinct `-encode` write capability, so a write-only caller does NOT need
+`embedding:read`. No remote registration, credential or data grant is created.
+The core's parent mapping hides/refuses encode metadata while the root is stopped;
+no independent child mutation is exposed. Native endpoints have equivalent gates
+before workers and queue records; image files are closed on refusal, with no
+claim that FastAPI multipart parsing itself is avoided.
+
+100 focused Provider/quality/worker/queue/capability tests pass; core focused
+suite: 97 pass. Combined source passes 155 focused tests and four embedding
+lifecycle cases with the adapter flag off. These cover two instances with
+separate queue files and one live synthetic authority, aliases/text/image routes,
+write-without-read permission, descriptor/encode parent filtering, restart,
+re-enable, missing authority, rejection without jobs or encoding and upload
+cleanup. Combined source construction and local tree are recorded in
+`docs/issue331-capability-lifecycle.md`. Full results below refer to these
+updated sources; historical counts above retain their earlier scopes/snapshots.
+
+All consumers must upgrade the snapshot vocabulary before new group mutations;
+query-only or query/LLM parsers fail closed on new disabled ids. Actual deployment,
+flags and grants are unchanged. No real model/GPU, OIDC, production or visual
+acceptance was performed; existing D100M CPU and Qwen process-boundary limitations
+remain. This is admission control, not runtime termination or Phase 3 execution.
+
+
+Current embedding authority validation (Python 3.12.14, base `acc52f3`):
+
+- Provider: **750 passed / 13 failed in 419.47s**.
+- Core: **763 passed / 13 failed in 434.46s**.
+- Combined: **784 passed / 13 failed in 297.73s**.
+
+All three exact failed-name sets match the original unmodified baseline's 13
+Lean failures (`/proc/1/ns/net`, `mnt` stat PermissionError 13); no checks or
+sandbox protections were weakened/skipped. The first two ran concurrently with
+separate temporary directories; elapsed time is not a performance comparison.
+Ruff and diff checks pass. OpenAPI changes on the native core add only the
+embedding 404 admission responses; the combined Provider retains its existing
+404/409 error contract. Combined actual 11-service smoke and crash failure
+injection pass. Isolated staged Docker COPY layouts resolve both embedding roots;
+Docker CLI is unavailable (exit127), so no image was built.
+
+```sh
+# Provider worktree focused and full:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_providers.py tests/test_quality_provider.py tests/test_qwen_worker.py tests/test_embedding_queue.py tests/test_capabilities.py -q
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/embedding-authority-test-tmp
+# Core worktree focused and full:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_lifecycle.py tests/test_capability_lifecycle.py tests/test_llm_lifecycle.py tests/test_embedding_queue.py tests/test_quality_provider.py tests/test_capabilities.py -q
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/embedding-lifecycle-test-tmp
+# Combined worktree focused, fallback mode and full:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_lifecycle.py tests/test_embedding_providers.py tests/test_capability_lifecycle.py tests/test_llm_lifecycle.py tests/test_embedding_queue.py tests/test_quality_provider.py tests/test_qwen_worker.py tests/test_capabilities.py tests/test_accounts.py -q
+EMBEDDING_CAPABILITY_ADAPTERS=0 UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_embedding_lifecycle.py -q
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/embedding-combined-test-tmp
+```
+
+The successful core focused run is 97 cases, including a corrected worker-like
+image fixture with the existing default truncation argument and a closable
+read-tripwire. The old unsupported-control negative test now uses the still
+unintegrated index worker and independent encode child, because D100M is now
+intentionally supported. Earlier unsuccessful exploratory runs are not counted.
+No real weights, GPU, OIDC, model quality, multi-host, production or visual
+acceptance was performed; protected CI and maintainer acceptance remain pending.

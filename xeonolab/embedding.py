@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, File, Form, Request, UploadFile
+from fastapi import Depends, File, Form, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from .common import APIError, base_app, response, scope
@@ -260,7 +260,8 @@ def create_app(settings=None):
         response_model_exclude_unset=True,
         responses=ERROR_RESPONSES,
     )
-    def models(actor=Depends(scope("embedding:read"))):
+    def models(response: Response, actor=Depends(scope("embedding:read"))):
+        response.headers["Cache-Control"] = "no-store"
         return {"object": "list", "data": app.state.providers.models(actor, validate=ModelDescriptor.model_validate)}
 
     @app.post(
