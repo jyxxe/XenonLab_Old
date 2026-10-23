@@ -289,3 +289,8 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 ### Issue #91 管理员收尾端点（zcode 本地交付）
 
 分支 `zcode/issue-91-work-complete`（基于 `e3c1b30`）：`POST /api/v1/work/{id}/admin-complete`（scope `dev:write`）补齐队列卫生缺口——无人认领或认领已过期的项可由管理员标记完成（status=completed、holder 清空、epoch+1 fencing），**活跃认领一律 409 `WORK_CLAIMED`**、已完成项 409，写 `work.admin_completed` 审计事件；与 reconcile（Issue 关闭→completed）互补。新增 1 项测试覆盖 queued/过期认领/活跃认领/已完成/404/401/幂等（全库 384 项通过），Ruff 与 OpenAPI 导出通过。
+### Issue #83 Bulk rows API（已集成部署）
+
+`POST /api/v1/tables/{id}/rows:bulkInsert|rows:bulkUpdate|rows:bulkDelete` 与 `GET /api/v1/tables/{id}/rows:bulk/{job_id}`：逐条复用单行语义（schema/type 校验、表+行 ACL、逐条 revision 检查、`__xl_changes`、FTS/CJK、Qdrant 清理、删除审计），每条独立事务提交，部分成功按条返回 `index/status/error{code,message}`。批量 ≤ `XELIBRARY_BULK_SYNC_LIMIT`（默认 100）同步执行；超过则 202 + `data.job_id`，后台任务从 catalogue `bulk_jobs` 持久化载荷逐条应用，进度实时可查；`XELIBRARY_BULK_MAX_ROWS` 超限 413 `BULK_TOO_LARGE`；finished 作业保留最近 200 条。
+
+审查修复（PR #109 复审）：`batch_id` 由全局唯一改为 `(owner, table_id, kind)` 作用域——同一作用域相同载荷为幂等重复（返回原 job），不同载荷返回 409 `BATCH_CONFLICT`（旧表在启动时幂等迁移重建）；每条已应用结果在**同一个表事务**内写 `__xl_bulk_applied` 标记，进程重启后从标记对账补回丢失的持久结果再标 failed（提交窗口不再丢记录/误报余量）；删除表时若有 queued/running bulk 作业返回 409 `TABLE_BULK_ACTIVE`。未包含：取消/断点续跑、作业列表分页、前端批量 UI。
