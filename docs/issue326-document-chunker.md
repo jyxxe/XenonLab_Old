@@ -89,7 +89,7 @@ startup. No source `.xl` schema change, data migration, new caller scope or
 production deployment/configuration change is introduced.
 
 Local flags are process-local and do not synchronize desktop aggregate builtin
-metadata; persistent cross-service lifecycle remains #305 follow-up. Third-party
+metadata; persistent cross-service authority is supplied by PR #332 as described below. Third-party
 code/service deployment, package signing and hard quotas remain Phase 3. The
 Docker recipe includes the required public manifest, but an image build and
 production model/Qdrant/visual acceptance have not been performed.
@@ -140,3 +140,44 @@ UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pyte
 
 No real model/production/visual acceptance, deployment, approval or merge was
 performed. Current protected CI and maintainer acceptance remain outstanding.
+
+
+## Authority interlock with #331 / PR #332
+
+The index root and document-chunker child are checked independently of the local
+adapter flag. Strict lifecycle mode requires both a verified identity snapshot
+and the kernel's live job checkpoint; a missing authority/helper is 503 rather
+than a local fallback. With the updated authority, a job refreshes at worker
+start and at cooperative checkpoints at most once every five seconds. The
+returned identity is used for subsequent source ACL checks; declared processor
+permissions are rechecked too. The core retains only the original caller's
+minimal in-memory authorization context. A processor never sees this context,
+Request, identity, database or credentials; the context fields are excluded
+from resolved-binding repr. Queue storage contains no credential.
+
+The companion authority controls `builtin.platform.worker.index`; its denial
+also hides the document-chunker child. Disabling is cooperative, with no hard
+wall-time, cross-database atomic revocation, process kill or purge claim. Existing
+matching committed derivatives and source CRUD/job views remain readable.
+A five-second polling interval can be delayed by blocking code/I/O. Original
+caller expiry, scope loss, invalid snapshot, authority failure or rate-limit
+rejection safely fails the job. Remote authority rate limits remain enforced;
+internal continuation checks do not consume repeated inbound bulk admissions.
+
+This branch preserves pre-rollout compatibility with lifecycle mode 0 and an
+old authority, but once a verified snapshot is supplied it cannot be bypassed by
+`XELIBRARY_CHUNKER_CAPABILITIES=0`. The complete strict/live behavior requires
+PR #332; deploy all snapshot consumers before enabling mutations. No production
+rollout, real model/Qdrant acceptance or hard process isolation was performed.
+
+
+Authority integration validation: final focused chunker/index/search/Qdrant
+suite 50 passed. Full regression recorded 751 passed and 13 failures (420.35 s),
+with the failed identifiers exactly matching the baseline Lean namespace
+permission failures; the additional local-only publication regression was also
+included in the final focused run. Ruff, Python 3.12 OpenAPI export, 11 local
+service smokes, diff review and isolated Docker-COPY layout checks pass. No real
+Docker image or production/model/Qdrant/visual acceptance is claimed.
+The c1274bb combined tree (#325/#327/#332 with native LLM, merged #328 preserved)
+passes 175 focused tests and 15 startup chunker-flag-0 authority tests. Full
+combined regression is tracked separately in the companion lifecycle record.

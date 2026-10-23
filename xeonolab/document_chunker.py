@@ -8,10 +8,11 @@ Phase 3. No manifest can select an executable module or receive DB/credentials.
 import inspect
 import logging
 import math
+import os
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from .capabilities import CapabilityIncompatible, load_registry, satisfies
@@ -34,6 +35,9 @@ class ChunkerBinding:
 class ResolvedChunker:
     binding: ChunkerBinding
     processing_seconds: float
+    checkpoint: Callable | None = field(default=None, repr=False, compare=False)
+    actor: object = field(default=None, repr=False, compare=False)
+    permissions: tuple = ("xelibrary:admin",)
 
 
 class DocumentChunkers:
@@ -74,7 +78,11 @@ class DocumentChunkers:
     def set_enabled(self, enabled):
         self._enabled = bool(enabled)
 
-    def resolve(self, actor):
+    def resolve(self, actor, *, checkpoint=None):
+        self._authority(actor)
+        if os.getenv("CAPABILITY_LIFECYCLE_ENABLED", "0") == "1" and checkpoint is None:
+            raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "live job authorization is unavailable")
+        permissions = {"xelibrary:admin"}
         binding = self._binding
         if self.enforce and not self._enabled:
             raise APIError(404, "CAPABILITY_NOT_FOUND", "no such document chunker capability")
@@ -97,9 +105,29 @@ class DocumentChunkers:
                 raise APIError(503, "CAPABILITY_INVALID", "invalid chunker processing budget")
             budget = min(budget, declared)
         self._used = True
-        return ResolvedChunker(binding, budget)
+        return ResolvedChunker(binding, budget, checkpoint, actor, tuple(sorted(permissions)))
+
+    @staticmethod
+    def _authority(actor):
+        check = getattr(actor, "require_capability", None)
+        if os.getenv("CAPABILITY_LIFECYCLE_ENABLED", "0") == "1" and (
+            getattr(actor, "lifecycle_revision", None) is None or not callable(check)
+        ):
+            raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "verified lifecycle snapshot required")
+        if callable(check):
+            check("builtin.platform.worker.index")
+            check("builtin.platform.worker.document-chunker")
 
     def check_active(self, resolved):
+        actor = resolved.checkpoint() if resolved.checkpoint else resolved.actor
+        self._authority(actor)
+        for permission in resolved.permissions:
+            actor.require(permission)
+        self.check_binding(resolved)
+        return actor
+
+    def check_binding(self, resolved):
+        """Local-only check, safe inside the source publication transaction."""
         if resolved.binding is not self._binding or (self.enforce and not self._enabled):
             raise APIError(409, "CHUNKER_CHANGED", "document chunker changed or stopped")
 

@@ -251,3 +251,58 @@ def test_stopping_inflight_chunker_prevents_row_publication(settings, tmp_path, 
     assert reindex(current, tid)["status"] == "failed"
     assert index_rows(settings, tid) == old_rows
     assert current.get(f"/api/v1/tables/{tid}/rows", headers=auth()).status_code == 200
+
+
+@pytest.mark.parametrize('enforce', [True, False])
+def test_authority_denial_cannot_be_bypassed_by_local_flag(enforce, monkeypatch):
+    class Actor:
+        lifecycle_revision = 1
+        def require(self, permission):
+            assert permission == 'xelibrary:admin'
+        def require_capability(self, identifier):
+            if identifier == 'builtin.platform.worker.index':
+                raise APIError(404, 'CAPABILITY_NOT_FOUND', 'disabled')
+    registry = DocumentChunkers(ChunkerBinding('authority-v1', one_chunk), enforce=enforce)
+    with pytest.raises(APIError) as error:
+        registry.resolve(Actor())
+    assert error.value.status == 404
+
+
+def test_strict_mode_requires_live_checkpoint_and_verified_actor(monkeypatch):
+    monkeypatch.setenv('CAPABILITY_LIFECYCLE_ENABLED', '1')
+    registry = DocumentChunkers(ChunkerBinding('strict-v1', one_chunk), enforce=False)
+    with pytest.raises(APIError) as error:
+        registry.resolve(ADMIN)
+    assert error.value.status == 503
+
+
+def test_continuation_rechecks_declared_permissions_and_hides_context(tmp_path):
+    state = {'allowed': True}
+    class Actor:
+        lifecycle_revision = 0
+        def require_capability(self, identifier):
+            pass
+        def require(self, permission):
+            if not state['allowed']:
+                raise APIError(403, 'FORBIDDEN', 'revoked')
+    actor = Actor()
+    registry = DocumentChunkers(ChunkerBinding('live-v1', one_chunk))
+    resolved = registry.resolve(actor, checkpoint=lambda: actor)
+    assert 'checkpoint=' not in repr(resolved) and 'actor=' not in repr(resolved)
+    state['allowed'] = False
+    _, tokenizer = tiny_tokenizer(tmp_path)
+    with pytest.raises(APIError) as error:
+        list(registry.chunks(resolved, tokenizer, {'body':'alpha'}, '/', 'table'))
+    assert error.value.status == 403
+
+
+def test_publication_binding_check_never_calls_remote_checkpoint():
+    def unexpected():
+        raise AssertionError('authorization I/O inside publication transaction')
+    registry = DocumentChunkers(ChunkerBinding('publication-v1', one_chunk))
+    resolved = registry.resolve(ADMIN, checkpoint=unexpected)
+    registry.check_binding(resolved)
+    registry.set_enabled(False)
+    with pytest.raises(APIError) as error:
+        registry.check_binding(resolved)
+    assert error.value.code == 'CHUNKER_CHANGED'

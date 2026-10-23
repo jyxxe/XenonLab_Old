@@ -13,6 +13,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
+from .capability_checkpoint import index_checkpoint
 from .common import APIError, connect, response, scope
 from .document_chunker import ChunkerBinding, DocumentChunkers
 from .jobs import JobStore
@@ -166,6 +167,8 @@ def install(
 
             configured()
             chunkers = app.state.document_chunkers
+            if chunker.checkpoint:
+                actor = chunker.checkpoint.start()
             chunkers.check_active(chunker)
             table = authorize(actor, tid, "read")
             initialize(tid)
@@ -177,6 +180,7 @@ def install(
             with table_connect(tid) as db:
                 ids = [r[0] for r in db.execute("SELECT _row_id FROM data WHERE _deleted_at IS NULL")]
             for rid in ids:
+                actor = chunkers.check_active(chunker) or actor
                 table = authorize(actor, tid, "read")
                 if not allowed(actor, table, "read", rid):
                     continue
@@ -225,8 +229,9 @@ def install(
                 # Serialize the source revision check and remote upsert against
                 # row writes. Qdrant IDs are deterministic, so retries overwrite
                 # points from an interrupted run instead of duplicating them.
+                actor = chunkers.check_active(chunker) or actor
                 with table_transaction(tid) as db:
-                    chunkers.check_active(chunker)
+                    chunkers.check_binding(chunker)
                     current = load_row(db, rid)
                     current_table = authorize(actor, tid, "read")
                     if current["_revision"] != row["_revision"] or not allowed(
@@ -266,9 +271,10 @@ def install(
         background: BackgroundTasks,
         actor=Depends(scope("xelibrary:admin")),
     ):
+        checkpoint = index_checkpoint(request, actor)
         configured()
         authorize(actor, body.table_id, "read")
-        chunker = app.state.document_chunkers.resolve(actor)
+        chunker = app.state.document_chunkers.resolve(actor, checkpoint=checkpoint)
         if backend_configured():
             client = QdrantAdapter()
             try:
