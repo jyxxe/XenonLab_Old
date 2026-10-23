@@ -227,3 +227,9 @@ The maintainer then merged #321 at protected base `529e335`; this feature is
 synchronized onto it before publication. The composition already includes that
 strict registry, and rebase-specific validation is recorded separately. No
 runtime is enabled and no policy/root/grant is installed by the synchronization.
+
+Post-rebase checks on protected base `529e335`: the signature, declaration,
+strict execution registry, Tool adapters, auth, deployment and capability focus
+passes **188 tests**. Ruff and OpenAPI export pass without API drift. The full
+879/1121 results above predate this baseline synchronization; they are not
+represented as separate full reruns on the rebased branch.
