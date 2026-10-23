@@ -2204,6 +2204,53 @@
         }
       }
     },
+    "/api/v1/attachments/{aid}/preview": {
+      "get": {
+        "summary": "Preview",
+        "description": "Isolated, non-active preview for server-detected PNG attachments.\n\nThe object is fully decoded and re-encoded with Pillow, so source chunks\n(EXIF/ICC/text) never reach the browser and a corrupt image fails the\nrequest instead of rendering partially. PDF previews need a rendering\ndependency decision (issue #152) and stay unsupported here.",
+        "operationId": "preview_api_v1_attachments__aid__preview_get",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "table_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Table Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/export": {
       "get": {
         "summary": "Export",

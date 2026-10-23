@@ -134,7 +134,11 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
     ], meta: {}};
   }
   if (clean.startsWith('/tables/t1/rows/') && clean.endsWith('/attachments')) {
-    return {data: [{attachment_id: 'att-1', row_id: clean.split('/')[4], filename: 'proof.pdf', media_type: 'application/pdf', size: 2048, created_at: '2026-09-10T00:00:00Z', metadata: {}}], meta: {}};
+    const attachmentRow = clean.split('/')[4];
+    return {data: [
+      {attachment_id: 'att-1', row_id: attachmentRow, filename: 'proof.pdf', media_type: 'application/pdf', size: 2048, created_at: '2026-09-10T00:00:00Z', metadata: {}},
+      {attachment_id: 'att-2', row_id: attachmentRow, filename: 'image.png', media_type: 'image/png', size: 128, created_at: '2026-09-10T00:01:00Z', metadata: {}},
+    ], meta: {}};
   }
   if (clean.startsWith('/tables/t1/rows/') && method === 'PATCH') {
     const rowId = clean.split('/')[4];
@@ -256,8 +260,12 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
 
 const api = async (path: string, init?: RequestInit) => (await route(path, init)).data;
 const apiPage = (path: string, init?: RequestInit) => route(path, init);
+const PREVIEW_PNG = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), ch => ch.charCodeAt(0));
 const apiRaw = async (path: string, init?: RequestInit) => {
   calls.push({method: (init?.method || 'GET').toUpperCase(), path, body: undefined});
+  if (path.includes('/preview')) {
+    return new Response(PREVIEW_PNG, {status: 200, headers: {'Content-Type': 'image/png', 'X-Content-Type-Options': 'nosniff'}});
+  }
   return new Response('{}', {status: 200, headers: {'Content-Type': 'application/json'}});
 };
 
