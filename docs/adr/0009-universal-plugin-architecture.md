@@ -1,6 +1,6 @@
 # ADR 0009 — Universal plugin architecture (Phase 0 contracts)
 
-Status: proposed (Phase 0 of Epic #305). Supersedes nothing; extends ADR 0008
+Status: accepted (Phase 0 delivered; Phase 1 registry MVP started). Supersedes nothing; extends ADR 0008
 (plugin catalog) from desktop UI extensions to a platform-wide capability model.
 
 ## Context
@@ -127,6 +127,10 @@ allowed without an ADR update and a deprecation window.
 - contract tests (`tests/test_plugin_manifest.py`) covering schema validation,
   namespace/version/duplicate/dependency rules;
 - follow-up Phase 1 issue with registry endpoint and builtin migration example.
+
+Phase 1 progress: `xeonolab/capabilities.py` implements the read-only registry MVP
+(`GET /api/v1/capabilities`, builtin manifest validation); app/widget migration and
+plugin records aggregation remain next.
 
 ## Consequences
 

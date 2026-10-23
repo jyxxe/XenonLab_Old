@@ -1,0 +1,21 @@
+{
+  "id": "builtin.platform",
+  "version": "1.0.0",
+  "api_version": "1",
+  "source": "builtin",
+  "display": {"title": "XeonoLab builtin capabilities", "description": "Capabilities shipped inside the platform until they are migrated to plugins."},
+  "capabilities": [
+    {"id": "builtin.platform.app.knowledge", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["xelibrary:read"], "dependencies": []},
+    {"id": "builtin.platform.app.system", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "builtin.platform.app.settings", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "builtin.platform.app.embedding", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["embedding:read"], "dependencies": []},
+    {"id": "builtin.platform.app.agent-prompts", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "builtin.platform.widget.clock", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "builtin.platform.widget.status", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "builtin.platform.provider.d100m", "kind": "provider", "version": "1.0.0", "runtime": "api", "permissions": ["embedding:read"], "dependencies": [], "timeout_seconds": 120},
+    {"id": "builtin.platform.provider.qwen-worker", "kind": "provider", "version": "1.0.0", "runtime": "service", "permissions": ["embedding:read"], "dependencies": [], "timeout_seconds": 120},
+    {"id": "builtin.platform.worker.index", "kind": "worker", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:write"], "dependencies": []},
+    {"id": "builtin.platform.worker.lean-verifier", "kind": "worker", "version": "1.0.0", "runtime": "service", "permissions": ["lean:verify"], "dependencies": []},
+    {"id": "builtin.platform.tool.xelibrary-query", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:query"], "dependencies": []}
+  ]
+}
