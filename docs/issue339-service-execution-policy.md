@@ -197,3 +197,10 @@ The maintainer subsequently merged #323 (LLM Provider), advancing protected base
 to `2c57f6f`. Publication synchronizes onto that baseline. The full composition
 already includes the LLM adapter; rebase-specific focused results are recorded
 separately rather than calling the earlier standalone full a new-base full run.
+
+After the clean rebase onto `2c57f6f`, policy/declaration/Tool/deployment plus the
+newly merged Chat Provider and native LLM regression focus records **195 passed**.
+The five policy sources remain identical to the complete full-run composition.
+Ruff and OpenAPI export pass without drift. The 908/13 standalone full result
+above remains scoped to the preceding base; it is not a separate new-base full.
+Complete full-run staged source tree: `81065c430d2341887c13a82e9d86d70840272a7c`.
