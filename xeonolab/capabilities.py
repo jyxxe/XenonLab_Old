@@ -247,7 +247,18 @@ def install(app, plugin_database=None):
         actor=Depends(scope("desktop:read")),
     ):
         registry = load_registry()
-        capability = registry.lookup(capability_id)
+        capabilities = (
+            runtime_capabilities(registry, plugin_database, actor.sub, actor.scopes)
+            if plugin_database is not None
+            else [
+                item for item in registry.all()["capabilities"]
+                if set(item["permissions"]) <= set(actor.scopes)
+            ]
+        )
+        capability = next(
+            (item for item in capabilities if item["id"] == capability_id and item.get("enabled", True)),
+            None,
+        )
         if capability is None:
             raise APIError(404, "CAPABILITY_NOT_FOUND", "no such capability")
         compatible = None
