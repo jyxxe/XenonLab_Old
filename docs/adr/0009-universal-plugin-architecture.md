@@ -179,3 +179,15 @@ permissions, error semantics, lifecycle limits and rollback are recorded in
 `docs/issue320-trusted-tool-adapters.md`. Embedding/LLM Provider adaptation and
 XeLibrary parsing/index extensions remain subsequent Phase 2 work.
 
+
+### Phase 2: first XeLibrary indexing extension (#326)
+
+`ChunkerBinding` / `DocumentChunkers` wrap the existing tokenizer-aware text
+processor with a static worker/api capability, admin gate, derivative identity
+and cooperative output/time budgets. Default `chunker-v2` remains compatible;
+replacement identities propagate through point ids, local/remote metadata and
+all read revalidation gates. The kernel keeps ACL/source/transaction authority;
+processor output is not a public fact snippet. `XELIBRARY_CHUNKER_CAPABILITIES`
+controls gates (default 1); hard CPU/service isolation and persistent lifecycle
+coordination remain separate work. Contract, changed bounds, rollback and
+validation: `docs/issue326-document-chunker.md`.
