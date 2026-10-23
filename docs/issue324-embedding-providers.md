@@ -254,3 +254,12 @@ plus Tool adapters, strict execution registry and service declaration checks pas
 The earlier full regression remains scoped to its recorded source baseline; no
 new individual full run is claimed for this synchronization. Production/visual
 acceptance and merge remain outstanding.
+
+
+## Synchronization after Chat Provider merge
+
+Rebased onto protected base `2c57f6f` after #323 merged. The Chat Provider
+manifest and async JSON/SSE implementation are preserved. Focus including this
+feature, Tool/strict registry/declaration and Chat Provider/native LLM cases:
+**149 passed**. Ruff, OpenAPI without drift and diff checks pass. Earlier full
+runs keep their recorded scope; no separate new-base full run is claimed.
