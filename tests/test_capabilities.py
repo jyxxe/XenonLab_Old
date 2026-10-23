@@ -98,7 +98,8 @@ def test_capabilities_endpoint_requires_desktop_scope_and_fails_closed(tmp_path,
     assert client.get("/api/v1/capabilities", headers=auth("carol")).status_code == 403
     ok = client.get("/api/v1/capabilities", headers=auth("alice"))
     assert ok.status_code == 200 and ok.json()["data"] and ok.json()["meta"]["registry"]["manifest"]["id"]
-    assert client.get("/api/v1/capabilities/builtin.platform.app.knowledge", headers=auth("alice")).status_code == 200
+    assert client.get("/api/v1/capabilities/builtin.platform.app.knowledge", headers=auth("alice")).status_code == 404
+    assert client.get("/api/v1/capabilities/builtin.platform.app.system", headers=auth("alice")).status_code == 200
     assert client.get("/api/v1/capabilities/builtin.platform.missing", headers=auth("alice")).status_code == 404
 
     disk = tmp_path / "bad.json"
@@ -182,10 +183,46 @@ def test_version_requirement_is_enforced_by_the_endpoint(tmp_path, monkeypatch):
         dev_tokens={"alice": {"sub": "alice", "scope": "desktop:read", "agent_kind": "human"}},
     )
     client = TestClient(create_app("desktop-web", settings))
-    target = "builtin.platform.app.knowledge"
+    target = "builtin.platform.app.system"
     ok = client.get(f"/api/v1/capabilities/{target}", params={"require": "^1.0.0"}, headers=auth("alice"))
     assert ok.status_code == 200 and ok.json()["meta"]["compatible"] is True
     bad = client.get(f"/api/v1/capabilities/{target}", params={"require": "^2.0.0"}, headers=auth("alice"))
     assert bad.status_code == 409 and bad.json()["error"]["code"] == "CAPABILITY_INCOMPATIBLE"
     invalid = client.get(f"/api/v1/capabilities/{target}", params={"require": "nope"}, headers=auth("alice"))
     assert invalid.status_code == 422
+
+
+@pytest.mark.parametrize("kind", ["app", "widget"])
+def test_plugin_resolution_rechecks_account_enablement_and_permissions(settings, kind):
+    from .test_plugins import desktop_settings, publish
+
+    settings = desktop_settings(settings)
+    client = TestClient(create_app("desktop-web", settings))
+    assert publish(client).status_code == 201
+    install = "/api/v1/plugins/hello-plugin/install"
+    target = f"/api/v1/capabilities/plugin.hello-plugin.{kind}"
+    assert client.get(target, headers=auth()).status_code == 404
+    assert client.post(install, headers=auth()).status_code == 200
+    resolved = client.get(target, params={"require": "^1.0.0"}, headers=auth())
+    assert resolved.status_code == 200
+    assert resolved.json()["data"]["plugin_id"] == "hello-plugin"
+    assert resolved.json()["meta"]["compatible"] is True
+    assert client.get(target, params={"require": "^2.0.0"}, headers=auth()).status_code == 409
+    assert client.get(target, params={"require": "invalid"}, headers=auth()).status_code == 422
+    assert client.get(target, headers=auth("bob")).status_code == 404
+
+    assert client.patch(install, headers=auth(), json={"enabled": False}).status_code == 200
+    # No compatibility or version information leaks after disablement.
+    assert client.get(target, params={"require": "^2.0.0"}, headers=auth()).status_code == 404
+    assert not any(
+        item["id"] == target.rsplit("/", 1)[-1]
+        for item in client.get("/api/v1/capabilities", headers=auth()).json()["data"]
+    )
+    assert client.patch(install, headers=auth(), json={"enabled": True}).status_code == 200
+    assert client.get(target, headers=auth()).status_code == 200
+    original = settings.dev_tokens["alice"]["scope"]
+    settings.dev_tokens["alice"]["scope"] = "desktop:read"
+    assert client.get(target, headers=auth()).status_code == 404
+    settings.dev_tokens["alice"]["scope"] = original
+    assert client.delete(install, headers=auth()).status_code == 200
+    assert client.get(target, headers=auth()).status_code == 404
