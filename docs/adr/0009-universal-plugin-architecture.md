@@ -203,3 +203,15 @@ CPU deadline is claimed. Ownership, compatibility, fault handling, rollback and
 validation are described in `docs/issue324-embedding-providers.md`. #312's actual
 model replacement, lifecycle coordination and Phase 3 isolation remain separate.
 
+
+
+## Persistent lifecycle increment (#331)
+
+The [query-tool lifecycle increment](../issue331-capability-lifecycle.md) adds
+transactional controls to the account authority and passes a versioned snapshot
+through its existing live authorization channel. Query discovery and invocation
+honor it; mutation is an explicit, default-off rollout gated by a dedicated human
+grant. Other capabilities and Phase 3 service runtime remain unintegrated.
+This does not turn process-local adapter hooks into a global controller or imply
+that old consumer binaries can safely ignore a disable. See the rollout and
+rollback prerequisites before enabling controls.
