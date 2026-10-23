@@ -77,6 +77,7 @@ test('headless browser smoke: synthetic login, Knowledge and Work paging, recove
         }
         return route.fulfill({json: {data: state.layout, meta: {request_id: 'ci-smoke'}}});
       }
+      if (apiPath === '/capabilities') return route.fulfill({json: {data: JSON.parse(await fs.readFile(path.join(repoRoot,'infra/plugins/builtin-capabilities.json'),'utf8')).capabilities.map(item=>({...item,source:'builtin',enabled:true})), meta: {request_id:'ci-smoke'}}});
       if (apiPath === '/apps') return route.fulfill({json: {data: [], meta: {request_id: 'ci-smoke'}}});
       if (apiPath === '/tables') return route.fulfill({json: {data: [{id: 'smoke-table', path: '/CI', name: 'Smoke Knowledge'}], meta: {request_id: 'ci-smoke', next_cursor: null}}});
       if (apiPath === '/tables/smoke-table/schema' || apiPath === '/tables/smoke-table') return route.fulfill({json: {data: {id: 'smoke-table', path: '/CI', name: 'Smoke Knowledge', columns: [{name: 'title', type: 'text', nullable: false, default_value: null}], table_revision: 1, schema_revision: 1}, meta: {request_id: 'ci-smoke'}}});

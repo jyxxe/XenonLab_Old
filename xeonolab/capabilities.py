@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import Depends, Request
 
 from .common import APIError, connect, response, scope
+from .plugins import _installed_manifest
 
 KINDS = {"app", "widget", "tool", "agent", "provider", "worker"}
 TIERS = {"ui", "api", "service"}
@@ -151,19 +152,14 @@ def runtime_capabilities(registry, database, owner, scopes):
     except Exception:  # noqa: BLE001 - a missing plugin store must not break discovery
         rows = []
     for row in rows:
-        try:
-            manifest = json.loads(row["manifest"])
-        except (TypeError, ValueError):
+        manifest = _installed_manifest(row)
+        if manifest is None or not row["enabled"] or not set(manifest.permissions) <= scopes:
             continue
-        if not isinstance(manifest, dict):
-            continue
-        permissions = [permission for permission in manifest.get("permissions") or [] if isinstance(permission, str)]
-        if not row["enabled"] or not set(permissions) <= scopes:
-            continue
-        version = str(manifest.get("version") or "0.0.0")
-        for kind, key in (("app", "app"), ("widget", "widget")):
-            section = manifest.get(key)
-            if not isinstance(section, dict) or not isinstance(section.get("id"), str) or not section["id"]:
+        permissions = manifest.permissions
+        version = manifest.version
+        for kind in ("app", "widget"):
+            descriptor = getattr(manifest, kind)
+            if descriptor is None:
                 continue
             items.append({
                 "id": f"plugin.{row['plugin_id']}.{kind}",
@@ -174,9 +170,34 @@ def runtime_capabilities(registry, database, owner, scopes):
                 "dependencies": [],
                 "source": "plugin",
                 "plugin_id": row["plugin_id"],
+                "desktop_id": descriptor.id,
                 "installed": True,
                 "enabled": True,
             })
+    # Administrator-managed iframe entries remain a supported source. Their
+    # descriptors still come from /apps; discovery supplies availability only.
+    with connect(database) as db:
+        table_exists = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='apps'"
+        ).fetchone()
+        rows = db.execute("SELECT definition FROM apps ORDER BY id").fetchall() if table_exists else []
+    for row in rows:
+        try:
+            entry = json.loads(row["definition"])
+            permissions = entry["permissions"]
+            if not isinstance(permissions, list) or not set(permissions) <= scopes:
+                continue
+            identifier = entry["id"]
+            if not isinstance(identifier, str) or not identifier:
+                continue
+        except (TypeError, ValueError, KeyError):
+            continue
+        items.append({
+            "id": f"registered.platform.app.{identifier}", "kind": "app",
+            "version": "1.0.0", "runtime": "ui", "permissions": permissions,
+            "dependencies": [], "source": "registered", "desktop_id": identifier,
+            "installed": True, "enabled": True,
+        })
     return items
 
 
