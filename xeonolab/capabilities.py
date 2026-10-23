@@ -174,9 +174,34 @@ def runtime_capabilities(registry, database, owner, scopes):
                 "dependencies": [],
                 "source": "plugin",
                 "plugin_id": row["plugin_id"],
+                "desktop_id": section["id"],
                 "installed": True,
                 "enabled": True,
             })
+    # Administrator-managed iframe entries remain a supported source. Their
+    # descriptors still come from /apps; discovery supplies availability only.
+    with connect(database) as db:
+        table_exists = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='apps'"
+        ).fetchone()
+        rows = db.execute("SELECT definition FROM apps ORDER BY id").fetchall() if table_exists else []
+    for row in rows:
+        try:
+            entry = json.loads(row["definition"])
+            permissions = entry["permissions"]
+            if not isinstance(permissions, list) or not set(permissions) <= scopes:
+                continue
+            identifier = entry["id"]
+            if not isinstance(identifier, str) or not identifier:
+                continue
+        except (TypeError, ValueError, KeyError):
+            continue
+        items.append({
+            "id": f"registered.platform.app.{identifier}", "kind": "app",
+            "version": "1.0.0", "runtime": "ui", "permissions": permissions,
+            "dependencies": [], "source": "registered", "desktop_id": identifier,
+            "installed": True, "enabled": True,
+        })
     return items
 
 

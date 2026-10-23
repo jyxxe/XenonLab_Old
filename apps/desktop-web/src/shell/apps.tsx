@@ -197,10 +197,10 @@ export function toDesktopApp(entry: RegistryApp): DesktopApp {
   };
 }
 
-export function mergeApps(registry: RegistryApp[], scopes: string[]): DesktopApp[] {
+export function mergeApps(registry: RegistryApp[], scopes: string[], discoveredBuiltins?: Set<string>): DesktopApp[] {
   const configuredChat = registry.find(entry => ['chat', 'openwebui'].includes(entry.id) && (entry.permissions || []).every(scope => scopes.includes(scope)));
-  const builtins = builtinApps().map(app => app.id === 'chat' && configuredChat ? {...toDesktopApp(configuredChat), id: 'chat', title: app.title, dock: true, menu: app.menu} : app).filter(app => app.permissions.every(scope => scopes.includes(scope)));
-  const builtinIds = new Set(builtins.map(app => app.id));
+  const builtins = builtinApps().filter(app => !discoveredBuiltins || discoveredBuiltins.has(app.id)).map(app => app.id === 'chat' && configuredChat ? {...toDesktopApp(configuredChat), id: 'chat', title: app.title, dock: true, menu: app.menu} : app).filter(app => app.permissions.every(scope => scopes.includes(scope)));
+  const builtinIds = new Set((discoveredBuiltins ? builtinApps() : builtins).map(app => app.id));
   const external = registry
     .filter(entry => !isRetiredRegistryAppId(entry.id) && !builtinIds.has(entry.id) && entry !== configuredChat)
     .map(toDesktopApp)
