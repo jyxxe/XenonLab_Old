@@ -233,3 +233,14 @@ unintegrated index worker and independent encode child, because D100M is now
 intentionally supported. Earlier unsuccessful exploratory runs are not counted.
 No real weights, GPU, OIDC, model quality, multi-host, production or visual
 acceptance was performed; protected CI and maintainer acceptance remain pending.
+
+
+Rebased onto maintainer base `ef4996b` after #330 merged. The ADR conflict was
+resolved by retaining both the Phase 3 proposal link and this feature section;
+own implementation files were compared byte-for-byte to the prior PR head and
+are unchanged. Targeted feature/registry/discovery/snapshot/service-contract
+regression: **159 passed**. CI-scope Ruff, regenerated OpenAPI without
+working-tree drift and diff checks pass. This rebase did not repeat each old
+full suite; the complete 1035/13 composition including PR #334 is separate
+evidence and its same 13 Lean baseline failures remain disclosed. No production
+flag, permission, merge or deployment changed.
