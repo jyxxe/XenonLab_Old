@@ -1,0 +1,11 @@
+{
+  "id": "example.notes",
+  "version": "1.0.0",
+  "api_version": "1",
+  "display": {"title": "示例笔记", "description": "Capability manifest example", "icon": "✦"},
+  "source": "declared",
+  "capabilities": [
+    {"id": "example.notes.app", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "example.notes.widget", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []}
+  ]
+}
