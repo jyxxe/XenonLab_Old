@@ -211,6 +211,7 @@ test('Session resilience: cached tokens, recoverable rate limits, no wrongful lo
         return fulfil(requestId, 200, {token: `access-${state.tokenCalls}`, expires: state.forceNearExpiry?30:state.tokenCalls===1?30:300});
       }
       if (url.pathname === '/api/v1/auth/session/logout') {state.logoutCalls+=1;return fulfil(requestId,200,{});}
+      if (url.pathname === '/api/v1/capabilities') return fulfil(requestId, 200, {data: JSON.parse(await fs.readFile(path.join(appRoot,'../../infra/plugins/builtin-capabilities.json'),'utf8')).capabilities.map(item=>({...item,source:'builtin',enabled:true})), meta: {request_id:'fixture'}});
       if (url.pathname === '/api/v1/apps') return fulfil(requestId, 200, {data: [], meta: {request_id: 'fixture'}});
       if (url.pathname === '/api/v1/tables' && url.searchParams.get('limit') === '100') {
         return fulfil(requestId,200,{data:[{id:'raw-fixture',path:'/示例/平台',name:'附件测试',table_revision:1,schema_revision:1}],meta:{request_id:'fixture',next_cursor:null}});

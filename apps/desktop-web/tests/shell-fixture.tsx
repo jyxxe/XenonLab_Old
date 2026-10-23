@@ -7,6 +7,7 @@ import '../src/style.css';
 import {ToastProvider} from '../src/design-system/primitives';
 import {DesktopShell} from '../src/shell/DesktopShell';
 import {APIRequestError} from '../src/api-error.js';
+import builtinManifest from '../../../infra/plugins/builtin-capabilities.json';
 
 // The shell talks to the platform through injected functions; this fixture keeps the
 // same surface with deterministic, synthetic data so browser acceptance runs offline.
@@ -23,6 +24,10 @@ const tables=[
 const control={failLayout:false,failPreferences:false,failWork:false,delayTables:false,tablesInFlight:0,embeddingEnabled:false,failEmbeddingQueue:false,busyEmbedding:false,delayEmbedding:false,embeddingPending:0,qualityReady:false,embeddingReadOnly:false,malformedEmbedding:false,
   tasksEnabled:scenario !== 'no-task-app',libraryEnabled:true,embeddingTableId:'example-table',tableReadError:'',tableReadDelay:false,releaseTableRead:()=>{}};
 let finishEmbedding: (() => void) | null = null;
+const discoveryPlugin:any = {id:'discovery-tools',name:'Discovery tools',version:'1.0.0',description:'Synthetic discovery fixture',author:'Fixture',icon:'◇',permissions:[],installed:true,installed_app:true,installed_widget:true,enabled:true,missing_scopes:[],
+  app:{id:'discovery-app',title:'Discovery app',origin:'https://discovery.example',entry:'/',permissions:[],default_size:[800,600],singleton:true,sandbox:{allow_scripts:true,allow_forms:true,allow_downloads:false}},
+  widget:{id:'discovery-widget',title:'Discovery widget',origin:'https://discovery.example',entry:'/widget',height:160}};
+if(scenario==='capability-discovery')registry.push({...discoveryPlugin.app,plugin_id:discoveryPlugin.id});
 const stored = (key: string, fallback: any) => {
   try {
     const value = sessionStorage.getItem(`shell-fixture:${key}`);
@@ -45,7 +50,7 @@ const preferenceDefaults = {
   animations: true,
   reduced_motion: false,
 };
-const preferences = scenario ? {...preferenceDefaults} : stored('preferences', preferenceDefaults);
+const preferences = scenario ? {...preferenceDefaults,...(scenario==='capability-discovery'?{plugin_widgets:['discovery-tools']}: {})} : stored('preferences', preferenceDefaults);
 const scenarioLayout = scenario === 'legacy-xelibrary' || scenario === 'legacy-xelibrary-duplicate'
   ? {
       dock: ['settings', 'xelibrary', 'knowledge', 'chat'],
@@ -78,6 +83,19 @@ async function api(path: string, init: RequestInit = {}): Promise<any> {
     if (scenario === 'desktop-error') throw Error('Synthetic desktop load failure');
     return {subject: 'fixture-user-0001', kind: 'human', scopes: [...(control.libraryEnabled ? ['xelibrary:read'] : []), ...(control.tasksEnabled ? ['dev:read'] : []), 'desktop:read','desktop:admin', ...(control.embeddingEnabled ? ['embedding:read',...(control.embeddingReadOnly ? [] : ['embedding:write'])] : [])]};
   }
+  if (path === '/capabilities') {
+    const me = await api('/users/me');
+    if(scenario==='capability-error')throw Error('Synthetic capability discovery unavailable');
+    return [
+      ...builtinManifest.capabilities.map(item => ({...item, source:'builtin', enabled:item.permissions.every(scope=>me.scopes.includes(scope))})),
+      ...registry.filter(entry=>!entry.plugin_id).map(entry=>({id:`registered.platform.app.${entry.id}`,kind:'app',runtime:'ui',source:'registered',enabled:true,desktop_id:entry.id,permissions:entry.permissions||[]})),
+      ...(scenario==='capability-discovery'&&discoveryPlugin.enabled ? ['app','widget'].map(kind=>({id:`plugin.${discoveryPlugin.id}.${kind}`,kind,runtime:'ui',source:'plugin',plugin_id:discoveryPlugin.id,enabled:true,desktop_id:discoveryPlugin[kind].id,permissions:[]})) : []),
+    ];
+  }
+  if(scenario==='capability-discovery'&&path==='/plugins')return [{...discoveryPlugin}];
+  if(scenario==='capability-discovery'&&path==='/plugins/discovery-tools/install'&&method==='PATCH'){discoveryPlugin.enabled=body.enabled;return {...discoveryPlugin}}
+  // Deliberately stale descriptor: capabilities must remain authoritative.
+  if(path==='/users/me/plugin-widgets')return scenario==='capability-discovery'?[{...discoveryPlugin.widget,plugin_id:discoveryPlugin.id}]:[];
   if(path==='/apps?include_unavailable=true')return [...registry];
   if (path === '/apps') {if(method==='POST'){const saved={...body,revision:1};registry.push(saved);return saved}return [...registry]}
   if (path === '/users/me/preferences') {
