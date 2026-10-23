@@ -427,6 +427,7 @@
       },
       "get": {
         "summary": "List Rows",
+        "description": "List visible rows; sorted cursors are bound to the table, ordering, and deleted-row filter.",
         "operationId": "list_rows_api_v1_tables__tid__rows_get",
         "parameters": [
           {
@@ -467,6 +468,42 @@
               "default": false,
               "title": "Include Deleted"
             }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional schema or system field for table-wide ordering.",
+              "title": "Sort By"
+            },
+            "description": "Optional schema or system field for table-wide ordering."
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Sort direction: asc or desc; defaults to asc when sort_by is set.",
+              "title": "Direction"
+            },
+            "description": "Sort direction: asc or desc; defaults to asc when sort_by is set."
           }
         ],
         "responses": {
@@ -512,6 +549,16 @@
             "schema": {
               "type": "string",
               "title": "Rid"
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Deleted"
             }
           }
         ],
@@ -1429,6 +1476,80 @@
         }
       }
     },
+    "/api/v1/tables/{tid}/attachments": {
+      "get": {
+        "summary": "List Table Attachments",
+        "description": "List same-table attachment metadata for currently readable, live source rows. Requires xelibrary:read and table/row ACL. UUID keyset cursor is bound to table and normalized search, not authority; every page checks current identity/ACL. At most 500 references are examined per page; empty pages may have next_cursor. Search is a casefolded substring of filename or displayed source_label. No content, object hash, row values, preview or total count is returned.",
+        "operationId": "list_table_attachments_api_v1_tables__tid__attachments_get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048,
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentCandidatePage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/rows/{rid}/attachments": {
       "get": {
         "summary": "List Attachments",
@@ -1944,6 +2065,44 @@
         }
       }
     },
+    "/api/v1/tables/{tid}/index-status": {
+      "get": {
+        "summary": "Index Status",
+        "description": "Per-table index visibility for every reader of the table (issue #72).\n\nDerives live coverage from the table itself instead of the admin-only\njob log: rows at their current revision are counted through\n__xl_vectors, rows still waiting through __xl_changes.indexed_revision.\nModel/chunker staleness is deliberately not folded into these numbers;\nsearch responses already surface it explicitly.",
+        "operationId": "index_status_api_v1_tables__tid__index_status_get",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/search/semantic": {
       "post": {
         "summary": "Semantic",
@@ -1963,16 +2122,48 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scope or resource permission denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Invalid search request or quality encoding input.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or quality concurrency limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Search dependency unavailable or incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
                 }
               }
             }
@@ -2647,42 +2838,6 @@
         }
       }
     },
-    "/api/v1/search/hybrid": {
-      "post": {
-        "summary": "Hybrid",
-        "operationId": "hybrid_api_v1_search_hybrid_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Search"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/search/text": {
       "post": {
         "summary": "Text Search",
@@ -2702,16 +2857,116 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scope or resource permission denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
               }
             }
           },
           "422": {
-            "description": "Validation Error",
+            "description": "Invalid search request or quality encoding input.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or quality concurrency limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Search dependency unavailable or incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/hybrid": {
+      "post": {
+        "summary": "Hybrid",
+        "operationId": "hybrid_api_v1_search_hybrid_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Search"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scope or resource permission denied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid search request or quality encoding input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or quality concurrency limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Search dependency unavailable or incompatible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchErrorResponse"
                 }
               }
             }
@@ -2755,6 +3010,77 @@
           "attachment_id"
         ],
         "title": "AttachmentBind"
+      },
+      "AttachmentCandidate": {
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "title": "Attachment Id"
+          },
+          "row_id": {
+            "type": "string",
+            "title": "Row Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "source_label": {
+            "type": "string",
+            "title": "Source Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "attachment_id",
+          "row_id",
+          "filename",
+          "media_type",
+          "size",
+          "created_at",
+          "metadata",
+          "source_label"
+        ],
+        "title": "AttachmentCandidate"
+      },
+      "AttachmentCandidatePage": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentCandidate"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Meta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "AttachmentCandidatePage"
       },
       "Body_upload_api_v1_attachments_post": {
         "properties": {
@@ -2870,6 +3196,24 @@
         ],
         "title": "IndexRequest"
       },
+      "MatchedChunk": {
+        "properties": {
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id"
+          },
+          "column": {
+            "type": "string",
+            "title": "Column"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "column"
+        ],
+        "title": "MatchedChunk"
+      },
       "Move": {
         "properties": {
           "path": {
@@ -2979,6 +3323,316 @@
           "query"
         ],
         "title": "Search"
+      },
+      "SearchErrorDetail": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "title": "SearchErrorDetail"
+      },
+      "SearchErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/SearchErrorDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "SearchErrorResponse"
+      },
+      "SearchHit": {
+        "properties": {
+          "table_id": {
+            "type": "string",
+            "title": "Table Id"
+          },
+          "row_id": {
+            "type": "string",
+            "title": "Row Id"
+          },
+          "row_revision": {
+            "type": "integer",
+            "title": "Row Revision"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "score_type": {
+            "type": "string",
+            "title": "Score Type"
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet"
+          },
+          "approximate": {
+            "type": "boolean",
+            "title": "Approximate"
+          },
+          "indexed_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Indexed Revision"
+          },
+          "matched_chunks": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MatchedChunk"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matched Chunks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "table_id",
+          "row_id",
+          "row_revision",
+          "path",
+          "score",
+          "score_type",
+          "snippet",
+          "approximate"
+        ],
+        "title": "SearchHit"
+      },
+      "SearchMeta": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "partial": {
+            "type": "boolean",
+            "title": "Partial",
+            "default": false
+          },
+          "approximate": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approximate"
+          },
+          "actual_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "fast",
+                  "quality"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Mode"
+          },
+          "index_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Backend"
+          },
+          "model_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Revision"
+          },
+          "missing_embeddings": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Embeddings"
+          },
+          "candidate_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Limit"
+          },
+          "candidate_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Count"
+          },
+          "quality_model_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Model Id"
+          },
+          "quality_model_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Model Revision"
+          },
+          "quality_dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Dimensions"
+          },
+          "quality_preprocessing_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Preprocessing Revision"
+          },
+          "cache_hits": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hits"
+          },
+          "encoded_chunks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Encoded Chunks"
+          },
+          "quality_fusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Fusion"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "title": "SearchMeta"
+      },
+      "SearchResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/SearchMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "SearchResponse"
       },
       "TableCreate": {
         "properties": {

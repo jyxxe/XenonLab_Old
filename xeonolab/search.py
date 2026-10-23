@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import threading
+import time
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -16,7 +17,9 @@ from .common import APIError, connect, response, scope
 from .jobs import JobStore
 from .qdrant import FAST_TEXT_COLLECTION, FAST_TEXT_DIMENSIONS, QdrantAdapter
 from .qdrant import configured as qdrant_configured
+from .quality_pipeline import QualityPipeline
 from .query import path_matches
+from .search_models import SEARCH_ERRORS, SearchResponse
 from .services import Search
 
 
@@ -74,6 +77,8 @@ def install(
     credential = os.getenv("EMBEDDING_SERVICE_TOKEN") or os.getenv("EMBEDDING_CLIENT_SECRET_FILE")
     tokenizer_path = os.getenv("D100M_TOKENIZER_PATH")
     logger = logging.getLogger(__name__)
+    quality = QualityPipeline(app.state.metrics, str(catalogue))
+    app.state.quality_pipeline = quality
 
     def configured():
         if not endpoint or not credential or not tokenizer_path:
@@ -110,6 +115,7 @@ def install(
                 db.execute("ALTER TABLE __xl_vectors ADD COLUMN chunker_version TEXT")
 
     def remove_points(table_id, row_id=None):
+        quality.cache.invalidate(table_id, row_id)
         if not backend_configured():
             return
         client = QdrantAdapter()
@@ -306,7 +312,76 @@ def install(
             raise APIError(403, "FORBIDDEN", "job belongs to another caller")
         return response(request, data)
 
-    def exact_bootstrap(body, request, actor, query, model_revision):
+    @app.get("/api/v1/tables/{tid}/index-status")
+    def index_status(tid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        """Per-table index visibility for every reader of the table (issue #72).
+
+        Derives live coverage from the table itself instead of the admin-only
+        job log: rows at their current revision are counted through
+        __xl_vectors, rows still waiting through __xl_changes.indexed_revision.
+        Model/chunker staleness is deliberately not folded into these numbers;
+        search responses already surface it explicitly.
+        """
+        authorize(actor, tid, "read")
+        with table_connect(tid) as db:
+            names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            row_count = db.execute("SELECT COUNT(*) FROM data WHERE _deleted_at IS NULL").fetchone()[0]
+            embedded_rows = chunk_count = pending_rows = 0
+            if "__xl_vectors" in names:
+                embedded_rows = db.execute(
+                    "SELECT COUNT(DISTINCT v.row_id) FROM __xl_vectors v "
+                    "JOIN data d ON d._row_id=v.row_id AND d._deleted_at IS NULL "
+                    "WHERE v.revision=d._revision"
+                ).fetchone()[0]
+                chunk_count = db.execute("SELECT COUNT(*) FROM __xl_vectors").fetchone()[0]
+            if "__xl_changes" in names:
+                pending_rows = db.execute(
+                    "SELECT COUNT(DISTINCT row_id) FROM __xl_changes WHERE revision > indexed_revision"
+                ).fetchone()[0]
+        latest = jobs.list(table_id=tid, limit=1)
+        raw_last = latest[0] if latest else None
+        job_status = (raw_last or {}).get("status")
+        if raw_last is None:
+            last_job = None
+        elif raw_last.get("owner") == actor.sub:
+            # The caller's own job carries full metadata, including errors.
+            last_job = raw_last
+        else:
+            # Shared-table readers only get a minimal summary: no job id, owner
+            # subject, error payload or other caller-identifying metadata.
+            last_job = {key: raw_last[key] for key in ("status", "created_at") if key in raw_last}
+        if job_status == "queued":
+            state = "queued"
+        elif job_status == "running":
+            state = "indexing"
+        elif job_status == "failed":
+            state = "failed"
+        elif row_count == 0:
+            state = "empty"
+        elif embedded_rows == row_count:
+            state = "ready"
+        elif pending_rows > 0 and embedded_rows == 0:
+            # Changes exist but no row has ever been embedded.
+            state = "not_indexed"
+        elif pending_rows > 0 or 0 < embedded_rows < row_count:
+            state = "stale"
+        else:
+            state = "not_indexed"
+        return response(
+            request,
+            {
+                "table_id": tid,
+                "state": state,
+                "row_count": row_count,
+                "embedded_rows": embedded_rows,
+                "missing_rows": max(row_count - embedded_rows, 0),
+                "pending_rows": pending_rows,
+                "chunk_count": chunk_count,
+                "last_job": last_job,
+            },
+        )
+
+    def exact_bootstrap(body, actor, query, model_revision, candidate_limit):
         """Use the explicitly development-only SQLite bootstrap backend."""
         with connect(catalogue) as db:
             tables = [dict(t) for t in db.execute("SELECT * FROM tables")]
@@ -354,34 +429,100 @@ def install(
                             "matched_chunks": [{"chunk_id": best["chunk_id"], "column": best["column_name"]}],
                             "approximate": False,
                             "indexed_revision": best["revision"],
+                            "_context": (
+                                table["name"],
+                                db.execute("SELECT schema_revision FROM __xl_meta").fetchone()[0],
+                            ),
+                            "_chunks": [dict(best)],
                         }
                     )
         results.sort(key=lambda result: result["score"], reverse=True)
-        return response(
-            request,
-            results[: body.limit],
-            partial=bool(missing),
-            missing_embeddings=missing,
-            index_backend="sqlite_exact_bootstrap",
-            model_revision=model_revision,
-        )
+        return results[:candidate_limit], {
+            "partial": bool(missing or len(results) > candidate_limit),
+            "missing_embeddings": missing,
+            "index_backend": "sqlite_exact_bootstrap",
+            "model_revision": model_revision,
+            "candidate_limit": candidate_limit,
+            "candidate_count": min(len(results), candidate_limit),
+        }
 
-    @app.post("/api/v1/search/semantic")
-    def semantic(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+    def fresh_candidate(hit, body, actor):
+        """Fresh ACL/source checks after slow dependencies, including cache hits."""
+        try:
+            table = authorize(actor, hit["table_id"], "read")
+            if not allowed(actor, table, "read", hit["row_id"]):
+                return False
+            if table["path"] != hit["path"] or not path_matches(table["path"], body.path):
+                return False
+            with table_connect(hit["table_id"]) as db:
+                row = load_row(db, hit["row_id"])
+                if row["_revision"] != hit["row_revision"]:
+                    return False
+                if any(row["values"].get(key) != value for key, value in body.filters.items()):
+                    return False
+                context = (table["name"], db.execute("SELECT schema_revision FROM __xl_meta").fetchone()[0])
+                if "_context" in hit and context != hit["_context"]:
+                    return False
+                chunks = hit.get("_chunks", [])
+                if chunks:
+                    indexed_rows = db.execute(
+                        "SELECT chunk_id,column_name,model_revision,chunker_version,body FROM __xl_vectors "
+                        "WHERE row_id=? AND revision=?",
+                        (hit["row_id"], hit["row_revision"]),
+                    ).fetchall()
+                    indexed = {
+                        (
+                            entry["chunk_id"],
+                            entry["column_name"],
+                            entry["model_revision"],
+                            entry["chunker_version"],
+                        ): entry["body"]
+                        for entry in indexed_rows
+                    }
+                    for chunk in chunks:
+                        key = (
+                            chunk["chunk_id"],
+                            chunk["column_name"],
+                            chunk["model_revision"],
+                            CHUNKER_VERSION,
+                        )
+                        if indexed.get(key) != chunk["body"]:
+                            return False
+                    column = hit["matched_chunks"][0]["column"]
+                    hit["snippet"] = str(row["values"][column])[:240]
+                else:
+                    hit["snippet"] = " ".join(str(value) for value in row["values"].values())[:240]
+            # Re-read table/row policy rather than reusing a pre-worker request_acl closure.
+            final_table = authorize(actor, hit["table_id"], "read")
+            return (
+                final_table["path"] == table["path"]
+                and final_table["name"] == table["name"]
+                and allowed(actor, final_table, "read", hit["row_id"])
+            )
+        except APIError as error:
+            if error.status in (403, 404):
+                return False
+            raise
+
+    app.state.search_revalidate = fresh_candidate
+
+    def collect_fast(body, actor):
         configured()
-        if body.mode == "quality":
-            raise APIError(503, "QWEN_UNAVAILABLE", "quality worker not configured")
         use_qdrant = backend_configured()
         vectors, model_revision = embedding([body.query])
         query = vectors[0]
+        candidate_limit = (
+            min(max(body.limit * 5, 100), 500)
+            if body.mode == "quality"
+            else min(max(body.limit * 10, 100), 1000)
+        )
         if not use_qdrant:
-            return exact_bootstrap(body, request, actor, query, model_revision)
+            return exact_bootstrap(body, actor, query, model_revision, candidate_limit)
         if len(query) != FAST_TEXT_DIMENSIONS:
             raise APIError(503, "EMBEDDING_DIMENSION_MISMATCH", "fast_text requires 256D vectors")
         client = QdrantAdapter()
         try:
             client.ensure_collection()
-            candidate_limit = min(max(body.limit * 10, 100), 1000)
             candidates = client.query(query, candidate_limit, model_revision)
         finally:
             client.close()
@@ -436,7 +577,7 @@ def install(
                         stale_rows.add((tid, rid))
                         continue
                     indexed = db.execute(
-                        "SELECT 1 FROM __xl_vectors WHERE row_id=? AND revision=? AND chunk_id=? "
+                        "SELECT * FROM __xl_vectors WHERE row_id=? AND revision=? AND chunk_id=? "
                         "AND column_name=? AND model_revision=? AND chunker_version=?",
                         (rid, row_revision, chunk_id, column, model_revision, CHUNKER_VERSION),
                     ).fetchone()
@@ -445,6 +586,10 @@ def install(
                         continue
                     if any(row["values"].get(key) != value for key, value in body.filters.items()):
                         continue
+                    context = (
+                        table["name"],
+                        db.execute("SELECT schema_revision FROM __xl_meta").fetchone()[0],
+                    )
                     current = load_row(db, rid)
                     if current["_revision"] != row_revision or not permits("read", rid):
                         continue
@@ -469,16 +614,103 @@ def install(
                 "matched_chunks": [{"chunk_id": chunk_id, "column": column}],
                 "approximate": True,
                 "indexed_revision": row_revision,
+                "_context": context,
+                "_chunks": [dict(indexed)],
             }
-            if key not in by_row or result["score"] > by_row[key]["score"]:
+            if key not in by_row:
                 by_row[key] = result
-        results = sorted(by_row.values(), key=lambda result: result["score"], reverse=True)[: body.limit]
-        missing = len(stale_rows)
-        return response(
-            request,
-            results,
-            partial=bool(missing or (len(candidates) >= candidate_limit and len(results) < body.limit)),
-            missing_embeddings=missing,
-            index_backend="qdrant_fast_text",
-            model_revision=model_revision,
+            else:
+                prior = by_row[key]
+                if chunk_id not in {chunk["chunk_id"] for chunk in prior["_chunks"]}:
+                    prior["_chunks"].append(dict(indexed))
+                if result["score"] > prior["score"]:
+                    prior.update({name: value for name, value in result.items() if name != "_chunks"})
+        results = sorted(
+            by_row.values(), key=lambda result: (-result["score"], result["table_id"], result["row_id"])
         )
+        missing = len(stale_rows)
+        return results, {
+            "partial": bool(missing or (len(candidates) >= candidate_limit and len(results) < body.limit)),
+            "missing_embeddings": missing,
+            "index_backend": "qdrant_fast_text",
+            "model_revision": model_revision,
+            "candidate_limit": candidate_limit,
+            "candidate_count": len(candidates),
+        }
+
+    def collect_semantic(body, actor, request_id="", deadline=None):
+        started = time.monotonic()
+        if body.mode == "quality" and deadline is None:
+            deadline = quality.clock() + quality.time_budget
+        try:
+            try:
+                hits, meta = collect_fast(body, actor)
+            finally:
+                if body.mode == "quality":
+                    app.state.metrics.observe(
+                        "xelibrary_quality_stage_seconds",
+                        time.monotonic() - started,
+                        help="Quality pipeline stage duration.",
+                        stage="shortlist",
+                    )
+            meta["actual_mode"] = "quality" if body.mode == "quality" else "fast"
+            if body.mode == "quality":
+                app.state.metrics.counter(
+                    "xelibrary_quality_candidates_total",
+                    len(hits),
+                    help="Candidate chunks handled by quality pipeline.",
+                    outcome="authorized_rows",
+                )
+                before = len(hits)
+                hits, quality_meta = quality.rerank(
+                    body.query, hits, actor, lambda hit: fresh_candidate(hit, body, actor), deadline=deadline
+                )
+                # A final independent gate also protects the interval after reranking.
+                hits = [hit for hit in hits if fresh_candidate(hit, body, actor)]
+                quality.check_deadline(deadline)
+                discarded = before - len(hits)
+                app.state.metrics.counter(
+                    "xelibrary_quality_candidates_total",
+                    discarded,
+                    help="Candidate chunks handled by quality pipeline.",
+                    outcome="discarded_rows",
+                )
+                meta.update(quality_meta)
+                meta["partial"] = bool(
+                    meta["partial"] or discarded or meta["candidate_count"] >= meta["candidate_limit"]
+                )
+                app.state.metrics.counter(
+                    "xelibrary_quality_requests_total", help="Quality request outcomes.", result="ok"
+                )
+            return hits, meta
+        except APIError as error:
+            if body.mode == "quality":
+                app.state.metrics.counter(
+                    "xelibrary_quality_requests_total", help="Quality request outcomes.", result="error"
+                )
+                app.state.metrics.counter(
+                    "xelibrary_quality_errors_total", help="Quality request errors.", code=error.code
+                )
+                logger.warning("Quality search failed", extra={"request_id": request_id, "code": error.code})
+            raise
+        except Exception:
+            if body.mode == "quality":
+                app.state.metrics.counter("xelibrary_quality_requests_total",
+                                          help="Quality request outcomes.", result="error")
+                app.state.metrics.counter("xelibrary_quality_errors_total",
+                                          help="Quality request errors.", code="INTERNAL_ERROR")
+                logger.warning("Quality search failed", extra={"request_id": request_id,
+                                                              "code": "INTERNAL_ERROR"})
+            raise
+
+    app.state.semantic_collect = collect_semantic
+
+    @app.post(
+        "/api/v1/search/semantic",
+        response_model=SearchResponse,
+        response_model_exclude_none=True,
+        responses=SEARCH_ERRORS,
+    )
+    def semantic(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        hits, meta = collect_semantic(body, actor, request.state.request_id)
+        return response(request, hits[: body.limit], **meta)

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
@@ -10,9 +11,13 @@ from typing import Any
 from fastapi import Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from .common import APIError, base_app, scope
+from .common import APIError, base_app, response, scope
+from .embedding_requests import COMPLETED, FAILED, EmbeddingRequestStore
 from .qwen_encoder import IMAGE_MAX_BYTES, MODEL_ID, validate_image
 from .qwen_worker import QwenWorker
+
+logger = logging.getLogger("xeonolab.embedding")
+
 
 
 class EmbedRequest(BaseModel):
@@ -161,7 +166,61 @@ def create_app(settings=None):
     root = os.getenv("D100M_MODEL_PATH")
     app.state.model = D100M(root) if root else None
     app.state.ready_check = lambda: app.state.model is not None
+    store = EmbeddingRequestStore(app.state.settings.data_dir / "embedding-requests.sqlite3")
+    app.state.store = store
+
+    def record(request_id, status, tokens=None, error_code=None):
+        """Queue bookkeeping must never fail the embedding request itself."""
+        if request_id is None:
+            return
+        try:
+            store.finish(request_id, status, tokens=tokens, error_code=error_code)
+        except Exception:
+            logger.exception("embedding queue bookkeeping failed for request %s", request_id)
+
+    @app.get("/api/v1/embedding/queue")
+    def embedding_queue(request: Request, actor=Depends(scope("dev:read"))):
+        """Caller-scoped unfinished requests plus totals for the desktop queue view
+        (issue #74). History and counts only ever include the requesting principal;
+        the worker block carries service-level state (configured/busy/revision)."""
+        model = app.state.model
+        lock = getattr(model, "lock", None)
+        return response(
+            request,
+            {
+                "active": store.active(caller=actor.sub),
+                "counts": store.counts(caller=actor.sub),
+                "worker": {
+                    "configured": model is not None,
+                    "busy": bool(lock is not None and lock.locked()),
+                    "revision": model.revision if model else None,
+                },
+            },
+        )
+
+    @app.get("/api/v1/embedding/requests")
+    def embedding_requests(
+        request: Request,
+        limit: int = 100,
+        cursor: str = "",
+        status: str = "",
+        actor=Depends(scope("dev:read")),
+    ):
+        """Newest-first request history for the calling principal; finished rows
+        are retained up to 1000. Requests are never queued for later: a busy
+        worker answers 429 directly and there is no waiting/priority scheduling."""
+        if not 1 <= limit <= 1000:
+            raise APIError(422, "INVALID_LIMIT", "limit outside range")
+        if status not in ("", "completed", "failed"):
+            raise APIError(422, "INVALID_STATUS", "status must be completed or failed")
+        try:
+            rows, next_cursor = store.history(limit=limit, cursor=cursor, status=status or None, caller=actor.sub)
+        except ValueError:
+            raise APIError(422, "INVALID_CURSOR", "cursor must be a queue id") from None
+        return response(request, rows, next_cursor=next_cursor)
+
     app.state.quality = QwenWorker.environment()
+
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -222,6 +281,7 @@ def create_app(settings=None):
             "qwen3vl2b" if quality else ("d100m" if body.model in ("fast", "D100M-Embedding") else "unknown")
         )
         started = time.monotonic()
+        queue_id = None
 
         def record_error(code):
             metrics.counter(
@@ -241,6 +301,15 @@ def create_app(settings=None):
             if body.model not in ("fast", "D100M-Embedding", "quality", "Qwen/Qwen3-VL-Embedding-2B"):
                 raise APIError(422, "UNKNOWN_MODEL", "unsupported embedding model")
             texts = [body.input] if isinstance(body.input, str) else body.input
+            if not quality and app.state.model is None:
+                raise APIError(503, "MODEL_NOT_CONFIGURED", "D100M weights not configured")
+            try:
+                queue_id = store.start(
+                    "quality" if quality else "d100m", len(texts), sum(map(len, texts)), body.truncation, actor.sub
+                )
+            except Exception:
+                logger.exception("embedding queue bookkeeping failed")
+                queue_id = None
             if quality:
                 vectors, tokens = app.state.quality.encode(
                     texts,
@@ -256,10 +325,13 @@ def create_app(settings=None):
                 if app.state.model is None:
                     raise APIError(503, "MODEL_NOT_CONFIGURED", "D100M weights not configured")
                 vectors, tokens = app.state.model.encode(texts, body.truncation)
+            record(queue_id, COMPLETED, tokens=tokens)
         except APIError as error:
+            record(queue_id, FAILED, error_code=error.code)
             record_error(error.code)
             raise
         except Exception:
+            record(queue_id, FAILED, error_code="INTERNAL_ERROR")
             record_error("INTERNAL_ERROR")
             raise
         finally:

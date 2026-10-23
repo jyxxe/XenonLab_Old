@@ -1,6 +1,7 @@
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Textarea} from './design-system/primitives';
 import type {AppViewProps} from './shell/types';
+import {alignEmbeddingResults, validEmbeddingInputs, MAX_EMBEDDING_INPUTS, MAX_EMBEDDING_CHARACTERS, type EmbeddingResult} from './embedding-batch.js';
 
 type Model = {id: string; alias?: string; status: string; dimensions?: number | string; max_tokens?: number};
 type QueueJob = {job_id: string; table_id: string; status: string; created_at?: string; updated_at?: string; error?: string};
@@ -22,9 +23,9 @@ export function Embedding({api, apiPage, apiRaw, openApp}: AppViewProps) {
   const [models, setModels] = useState<Model[]>([]);
   const [jobs, setJobs] = useState<QueueJob[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
-  const [text, setText] = useState('');
+  const [texts, setTexts] = useState(['']);
   const [model, setModel] = useState('fast');
-  const [vector, setVector] = useState<number[] | null>(null);
+  const [results, setResults] = useState<EmbeddingResult[] | null>(null);
   const [resultModel, setResultModel] = useState('');
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -33,6 +34,16 @@ export function Embedding({api, apiPage, apiRaw, openApp}: AppViewProps) {
   const [encodeError, setEncodeError] = useState('');
   const [queueError, setQueueError] = useState('');
   const [tick, setTick] = useState(0);
+  // Draft edits invalidate responses even if the user later restores the same text.
+  const draftVersion = useRef(0);
+  const requestVersion = useRef(0);
+
+  useEffect(() => () => { requestVersion.current += 1; }, []);
+
+  function invalidateResult() {
+    draftVersion.current += 1;
+    setResults(null); setResultModel(''); setEncodeError('');
+  }
 
   useEffect(() => {
     let active = true;
@@ -42,7 +53,7 @@ export function Embedding({api, apiPage, apiRaw, openApp}: AppViewProps) {
       if (!active) return;
       const verifiedScopes = Array.isArray(me.scopes) ? me.scopes.filter((scope: unknown): scope is string => typeof scope === 'string') : [];
       setScopes(verifiedScopes);
-      if (!verifiedScopes.includes('embedding:write')) { setVector(null); setResultModel(''); }
+      if (!verifiedScopes.includes('embedding:write')) { setResults(null); setResultModel(''); }
       if (verifiedScopes.includes('embedding:read')) {
         void apiRaw('/embed/models').then(jsonResponse).then(body => {
           if (active) setModels(Array.isArray(body?.data) ? body.data : []);
@@ -61,22 +72,22 @@ export function Embedding({api, apiPage, apiRaw, openApp}: AppViewProps) {
   }, [api, apiPage, apiRaw, tick]);
 
   const run = useCallback(async () => {
-    const input = text;
-    if (!input.trim() || !scopes.includes('embedding:write')) return;
-    setBusy(true); setVector(null); setResultModel(''); setEncodeError('');
+    const inputs = [...texts];
+    if (!validEmbeddingInputs(inputs) || !scopes.includes('embedding:write')) return;
+    const draft = draftVersion.current;
+    const request = ++requestVersion.current;
+    const isCurrent = () => request === requestVersion.current && draft === draftVersion.current;
+    setBusy(true); setResults(null); setResultModel(''); setEncodeError('');
     try {
       const body = await jsonResponse(await apiRaw('/embed/text', {
-        method: 'POST', body: JSON.stringify({model, input}),
+        method: 'POST', body: JSON.stringify({model, input: inputs.length === 1 ? inputs[0] : inputs}),
       }));
-      const first = Array.isArray(body?.data) ? body.data[0] : null;
-      if (!Array.isArray(first?.embedding) || !first.embedding.every((value: unknown) => typeof value === 'number' && Number.isFinite(value))) {
-        throw new Error('Embedding 服务返回了无法识别的向量数据。');
-      }
-      setVector(first.embedding);
+      if (!isCurrent()) return;
+      setResults(alignEmbeddingResults(body?.data, inputs));
       setResultModel(String(body.model || model));
-    } catch (error) { setEncodeError(errorText(error)); }
-    finally { setBusy(false); }
-  }, [apiRaw, model, scopes, text]);
+    } catch (error) { if (isCurrent()) setEncodeError(errorText(error)); }
+    finally { if (request === requestVersion.current) setBusy(false); }
+  }, [apiRaw, model, scopes, texts]);
 
   const availableModel = models.find(item => item.alias === model || item.id === model);
   const modelReady = availableModel?.status === 'ready';
@@ -95,17 +106,22 @@ export function Embedding({api, apiPage, apiRaw, openApp}: AppViewProps) {
         {!canReadModels ? <Badge>状态不可读</Badge> : modelReady ? <Badge tone="success">{availableModel?.id} · 可用</Badge> : availableModel ? <Badge tone="warning">模型不可用</Badge> : <Badge>正在读取</Badge>}
       </div>
       {canReadModels && modelsError ? <ErrorState title="模型状态读取失败" message={modelsError} onRetry={() => setTick(value => value + 1)}/> : null}
-      {canReadModels && !modelsError && <div className="embedding-model-row"><label htmlFor="embedding-model">模型</label><select id="embedding-model" value={model} onChange={event => {setModel(event.target.value);setVector(null)}}>
+      {canReadModels && !modelsError && <div className="embedding-model-row"><label htmlFor="embedding-model">模型</label><select id="embedding-model" value={model} onChange={event => {invalidateResult();setModel(event.target.value)}}>
           {models.map(item => <option key={item.id} value={item.alias || item.id} disabled={item.status !== 'ready'}>{item.id} · {item.status === 'ready' ? `${item.dimensions ?? '维度未知'} 维` : '未配置'}</option>)}
         </select></div>}
       {!canReadModels && <p className="embedding-hint" role="status">当前账户没有 embedding:read 权限；服务端仍会验证模型并返回真实执行结果。</p>}
       {canWrite ? <>
-        <label className="embedding-input-label" htmlFor="embedding-text">输入文本</label>
-        <Textarea id="embedding-text" maxLength={32768} rows={6} value={text} onChange={event => setText(event.target.value)} placeholder="输入要编码的文本…" disabled={!canWrite}/>
-        <div className="embedding-actions"><span>{text.length.toLocaleString()} / 32,768</span><Button variant="primary" loading={busy} disabled={(canReadModels && !modelReady) || !text.trim()} onClick={run}>生成编码</Button></div>
+        <p className="embedding-hint">一次编码 1–32 段独立文本；每段最多 32,768 字符，服务端另行验证模型 token 限制。</p>
+        {texts.map((text, index) => <div className="embedding-input-item" key={index}>
+          <label className="embedding-input-label" htmlFor={index === 0 ? 'embedding-text' : `embedding-text-${index}`}>输入文本 {index + 1}</label>
+          <Textarea id={index === 0 ? 'embedding-text' : `embedding-text-${index}`} maxLength={MAX_EMBEDDING_CHARACTERS} rows={texts.length === 1 ? 6 : 3} value={text} onChange={event => {invalidateResult();setTexts(current => current.map((value, item) => item === index ? event.target.value : value))}} placeholder="输入要编码的文本…"/>
+          <div className="embedding-actions"><span>{text.length.toLocaleString()} / 32,768</span><Button size="sm" disabled={texts.length === 1} aria-label={`移除输入项 ${index + 1}`} onClick={() => {invalidateResult();setTexts(current => current.filter((_, item) => item !== index))}}>移除</Button></div>
+        </div>)}
+        <div className="embedding-actions"><Button disabled={texts.length >= MAX_EMBEDDING_INPUTS} onClick={() => {invalidateResult();setTexts(current => current.length < MAX_EMBEDDING_INPUTS ? [...current, ''] : current)}}>新增输入项（{texts.length} / 32）</Button><Button variant="primary" loading={busy} disabled={(canReadModels && !modelReady) || !validEmbeddingInputs(texts)} onClick={run}>生成编码</Button></div>
+        {!validEmbeddingInputs(texts) && <p className="embedding-hint" role="status">每个输入项都需要非空文本。</p>}
         {canReadModels && !modelReady ? <p className="embedding-hint" role="status">服务端尚未报告可用模型；不会伪造编码结果。</p> : null}
         {encodeError && <p className="embedding-error" role="alert">{encodeError}</p>}
-        {vector && <section className="embedding-result" aria-label="Embedding 结果"><h4>真实服务响应 · {resultModel}</h4><p>{vector.length} 维</p><details><summary>查看向量</summary><pre>{JSON.stringify(vector)}</pre></details></section>}
+        {results && <section className="embedding-result" aria-label="Embedding 结果"><h4>真实服务响应 · {resultModel}</h4>{results.map(result => <article className="embedding-result-item" key={result.index} data-input-index={result.index}><h5>输入 {result.index + 1} · {result.embedding.length} 维</h5><pre className="embedding-result-input">{result.input}</pre><details><summary>查看向量</summary><pre>{JSON.stringify(result.embedding)}</pre></details></article>)}</section>}
       </> : <EmptyState title="需要生成权限" description="当前账户没有 embedding:write 权限。"/>}
     </section>
     <section className="embedding-panel" aria-labelledby="embedding-queue-title">
