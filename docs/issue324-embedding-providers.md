@@ -244,3 +244,13 @@ working-tree drift and diff checks pass. This rebase did not repeat each old
 full suite; the complete 1035/13 composition including PR #334 is separate
 evidence and its same 13 Lean baseline failures remain disclosed. No production
 flag, permission, merge or deployment changed.
+
+
+## Synchronization after Tool adapter merge
+
+Rebased onto protected base `529e335` after #321 merged. Independent ADR
+sections and Tool manifest entries are retained. Feature-specific focused tests
+plus Tool adapters, strict execution registry and service declaration checks pass: **110 tests**. Ruff, OpenAPI export without drift and diff checks pass.
+The earlier full regression remains scoped to its recorded source baseline; no
+new individual full run is claimed for this synchronization. Production/visual
+acceptance and merge remain outstanding.
