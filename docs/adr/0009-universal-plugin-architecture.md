@@ -128,9 +128,15 @@ allowed without an ADR update and a deprecation window.
   namespace/version/duplicate/dependency rules;
 - follow-up Phase 1 issue with registry endpoint and builtin migration example.
 
-Phase 1 progress: `xeonolab/capabilities.py` implements the read-only registry MVP
-(`GET /api/v1/capabilities`, builtin manifest validation); app/widget migration and
-plugin records aggregation remain next.
+Phase 1 progress: the registry aggregates builtins and account-scoped enabled
+plugin UI capabilities (#315) and negotiates versions (#316). Desktop discovery
+now gates native adapters, configured iframe apps and widgets through that
+projection (`docs/issue305-desktop-discovery.md`); legacy descriptor APIs retain
+URLs and sandbox contracts. Administrator-managed apps use source `registered`
+and UI capabilities carry a `desktop_id` descriptor join. PR #318 separately
+aligns detail resolution with account enablement/permissions. The declarative
+builtin migration example is tracked by PR #317. Phase 2 adapter contracts and
+Phase 3 service-runtime security design remain separate milestones.
 
 ## Consequences
 

@@ -1018,6 +1018,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
         if(!path.startsWith('/api/v1/'))return realFetch(input,init);
         let data=[],meta={};
         if(path==='/api/v1/users/me'){state.userReads++;data={subject:'synthetic-session-user',kind:'human',scopes:['desktop:read','xelibrary:read','dev:read']};}
+        else if(path==='/api/v1/capabilities')data=${JSON.stringify(JSON.parse(await fs.readFile(path.join(appRoot,'../../infra/plugins/builtin-capabilities.json'),'utf8')).capabilities.map(item=>({...item,source:'builtin',enabled:true})))};
         else if(path==='/api/v1/users/me/preferences'){if(init.method==='PATCH')Object.assign(preferences,JSON.parse(init.body));data={...preferences};}
         else if(path==='/api/v1/users/me/layout')data={windows:[],dock:[],dock_initialized:false};
         else if(path==='/api/v1/jobs')meta={counts:{queued:0,running:0,completed:0,failed:0}};

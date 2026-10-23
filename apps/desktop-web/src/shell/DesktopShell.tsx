@@ -5,6 +5,7 @@ import {AppShortcutsWidget, CalendarWidget, ClockWidget, MenuClock, NotesWidget,
 import {customWallpaperStyle} from '../wallpaper.js';
 import {selectedPluginWidgets} from '../plugin-widgets.js';
 import {mergeApps} from './apps';
+import {discoverDesktop} from '../capability-discovery.js';
 import {CommandPalette, type Command, type CommandProvider} from './CommandPalette';
 import {Dock, type DockSize} from './Dock';
 import {LaunchPad} from './LaunchPad';
@@ -160,6 +161,8 @@ export function DesktopShell({
   const customWallpaper = useMemo(() => customWallpaperStyle(preferences, wallpaperImageUrl), [preferences, wallpaperImageUrl]);
   const knowledgeSearchAvailable = useMemo(() => apps.some(app => app.id === 'knowledge') && accountScopes.includes('xelibrary:query'), [apps, accountScopes]);
   const workAvailable = useMemo(() => apps.some(app => app.id === 'issues'), [apps]);
+  const [builtinWidgets, setBuiltinWidgets] = useState<Set<string>>(new Set());
+  const shownBuiltinWidgets = (preferences.widgets || []).filter(id => builtinWidgets.has(id));
   const shownPluginWidgets = useMemo(
     () => selectedPluginWidgets(preferences.plugin_widgets || [], pluginWidgets),
     [preferences.plugin_widgets, pluginWidgets],
@@ -168,14 +171,17 @@ export function DesktopShell({
   const connect = useCallback(async () => {
     setLoadError('');
     try {
-      const [me, registry, widgets] = await Promise.all([
+      const [me, registry, capabilities, widgets] = await Promise.all([
         api('/users/me'),
         api('/apps'),
+        api('/capabilities'),
         api('/users/me/plugin-widgets', undefined, {soft: true}).catch(() => [] as PluginWidgetInfo[]),
       ]);
       const [layout, stored] = await Promise.all([api('/users/me/layout'), api('/users/me/preferences')]);
       if (currentAPI.current !== api || !preferenceLifetime.current) return;
-      const available = mergeApps(registry as RegistryApp[], me.scopes || []);
+      const discovered = discoverDesktop(capabilities, registry, widgets, me.scopes || []);
+      const available = mergeApps(discovered.apps as RegistryApp[], me.scopes || [], discovered.builtinApps);
+      setBuiltinWidgets(discovered.builtinWidgets);
       const migratedLayout = migrateLegacyAppReferences(layout);
       const migratedRecent = [...new Set(loadRecent().map(id => id === LEGACY_XELIBRARY_APP_ID ? 'knowledge' : id))].slice(0, 6);
       setRecent(migratedRecent);
@@ -189,7 +195,7 @@ export function DesktopShell({
       const storedDock = Array.isArray(migratedLayout.dock) ? migratedLayout.dock.filter((id: string) => known(id)) : [];
       const nextDock = migratedLayout.dock_initialized || storedDock.length ? storedDock : available.filter(app => app.dock).map(app => app.id);
       setApps(available);
-      setPluginWidgets(Array.isArray(widgets) ? widgets as PluginWidgetInfo[] : []);
+      setPluginWidgets(discovered.widgets as PluginWidgetInfo[]);
       setAccountScopes(Array.isArray(me.scopes) ? me.scopes : []);
       setDockIds(nextDock);
       setPreferences(prefs);
@@ -335,15 +341,19 @@ export function DesktopShell({
   );
 
   const refreshApps = useCallback(async () => {
-    const [me, registry, widgets] = await Promise.all([
+    const [me, registry, capabilities, widgets] = await Promise.all([
       api('/users/me'),
       api('/apps'),
+      api('/capabilities'),
       api('/users/me/plugin-widgets', undefined, {soft: true}).catch(() => [] as PluginWidgetInfo[]),
     ]);
-    const available = mergeApps(registry, me.scopes || []);
+    if (currentAPI.current !== api || !preferenceLifetime.current) return;
+    const discovered = discoverDesktop(capabilities, registry, widgets, me.scopes || []);
+    const available = mergeApps(discovered.apps, me.scopes || [], discovered.builtinApps);
+    setBuiltinWidgets(discovered.builtinWidgets);
     const known = new Set(available.map(app => app.id));
     setApps(available);
-    setPluginWidgets(Array.isArray(widgets) ? widgets as PluginWidgetInfo[] : []);
+    setPluginWidgets(discovered.widgets as PluginWidgetInfo[]);
     editWindows(current => current.filter(win => known.has(win.app_id)));
     setDockIds(current => current.filter(id => known.has(id)));
   }, [api, editWindows]);
@@ -666,7 +676,7 @@ export function DesktopShell({
   }
 
   return (
-    <div className="desktop ds-compact" data-maximized-active={maximizedActive ? 'true' : undefined} data-has-widgets={((preferences.widgets || []).length > 0 || shownPluginWidgets.length > 0) ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
+    <div className="desktop ds-compact" data-maximized-active={maximizedActive ? 'true' : undefined} data-has-widgets={(shownBuiltinWidgets.length > 0 || shownPluginWidgets.length > 0) ? 'true' : undefined} data-wallpaper-custom={customWallpaper ? (preferences.wallpaper_mode || 'solid') : undefined} style={customWallpaper ? {
       backgroundColor: customWallpaper.backgroundColor,
       backgroundImage: customWallpaper.backgroundImage,
       backgroundSize: customWallpaper.backgroundSize,
@@ -763,9 +773,9 @@ export function DesktopShell({
         })}
       </div>
 
-      {((preferences.widgets || []).length > 0 || shownPluginWidgets.length > 0) && (
+      {(shownBuiltinWidgets.length > 0 || shownPluginWidgets.length > 0) && (
         <div className="widgets">
-          {(preferences.widgets || []).map(id => {
+          {shownBuiltinWidgets.map(id => {
             switch (id) {
               case 'clock': return <ClockWidget key={id} timezone={preferences.timezone} />;
               case 'status': return <StatusWidget key={id} apiPage={apiPage} onOpen={() => openApp('system')} />;
