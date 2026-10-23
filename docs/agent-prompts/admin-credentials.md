@@ -34,3 +34,13 @@ curl -sk -o /dev/null -w '%{http_code}\n' https://192.168.0.101:9443/api/v1/agen
 - 面板只对 `desktop:admin` 返回内容；普通账号只会看到说明，不返回文件正文。
 - 文件内容不经过构建、不写入仓库、不进入静态资源目录。
 - 管理员复制/外传即视为泄露；轮换凭据后请同步更新服务端文件。
+
+## 凭据范围（必须遵守）
+
+管理员凭据版提示词：
+
+- **必须**包含 Forgejo 登录凭据（站点管理员/维护者/验证者的账号与密码或 token），用于 Agent 登录、推送分支、开 PR、审核与发布；
+- **绝对不得**包含模型服务 API key（包括 `api.jyxxe.com` 的 OpenAI 兼容 key 与 OpenCode 的 API key）。模型调用由各自运行环境配置，不属于提示词内容；
+- 也不得包含 PVE/VM 私钥、数据库密码、Cloudflare tunnel token、webhook/claim/CI runner secret 等与角色工作无关的基础设施凭据。
+
+轮换任何凭据后同步更新服务端文件；若发现文件中出现被禁止的类别，立即删除并视为已泄露。
