@@ -277,3 +277,59 @@ def test_csv_import_rejects_unknown_header(settings):
     assert state["status"] == "failed"
     assert "UNKNOWN_COLUMN" in (state["error"] or "")
     assert client.get(f"/api/v1/tables/{table_id}/rows", headers=auth()).json()["data"] == []
+
+
+def test_export_batch_id_is_scoped_and_conflicts_are_explicit(settings):
+    client = make_client(settings)
+    first = create_table(client, "导出作用域一")
+    second = create_table(client, "导出作用域二")
+    body = {"table_id": first, "format": "jsonl", "batch_id": "export-scope-0001"}
+    accepted = client.post("/api/v1/exports", headers=auth(), json=body)
+    assert accepted.status_code == 202, accepted.text
+    job_id = accepted.json()["data"]["job_id"]
+
+    replay = client.post("/api/v1/exports", headers=auth(), json=body)
+    assert replay.status_code == 200
+    assert replay.json()["data"]["duplicate"] is True
+    assert replay.json()["data"]["job_id"] == job_id
+
+    conflict = client.post(
+        "/api/v1/exports", headers=auth(),
+        json={**body, "format": "csv"},
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["error"]["code"] == "BATCH_CONFLICT"
+
+    other_table = client.post(
+        "/api/v1/exports", headers=auth(),
+        json={**body, "table_id": second},
+    )
+    assert other_table.status_code == 202, other_table.text
+    assert other_table.json()["data"]["job_id"] != job_id
+
+
+def test_import_batch_id_is_scoped_to_caller_and_payload(settings):
+    client = make_client(settings)
+    table_id = create_table(client, "导入作用域")
+    content = json.dumps({"values": {"body": "imported"}}) + "\n"
+    body = {"table_id": table_id, "format": "jsonl", "content": content, "batch_id": "import-scope-0001"}
+    accepted = client.post("/api/v1/imports", headers=auth(), json=body)
+    assert accepted.status_code == 202, accepted.text
+    job_id = accepted.json()["data"]["job_id"]
+
+    replay = client.post("/api/v1/imports", headers=auth(), json=body)
+    assert replay.status_code == 200
+    assert replay.json()["data"]["duplicate"] is True
+    assert replay.json()["data"]["job_id"] == job_id
+
+    conflict = client.post(
+        "/api/v1/imports", headers=auth(),
+        json={**body, "content": json.dumps({"values": {"body": "different"}}) + "\n"},
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["error"]["code"] == "BATCH_CONFLICT"
+
+    assert put_acl(client, "table", table_id, {"bob": ["read", "write"]}).status_code == 200
+    bob = client.post("/api/v1/imports", headers=auth("bob"), json=body)
+    assert bob.status_code == 202, bob.text
+    assert bob.json()["data"]["job_id"] != job_id

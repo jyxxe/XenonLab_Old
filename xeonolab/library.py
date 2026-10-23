@@ -1202,6 +1202,34 @@ def create_app(settings=None):
             "done": job["done"], "failed": job["failed"],
         }))
 
+    def _scoped_existing(kind, tid, payload, actor, batch_id):
+        """Scoped idempotency lookup shared by bulk rows and import/export jobs."""
+        if not batch_id:
+            return None
+        digest = payload_digest(kind, tid, payload)
+        existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+        if existing is not None and existing["payload_digest"] != digest:
+            raise APIError(
+                409, "BATCH_CONFLICT",
+                "batch_id was already used for a different payload for this table and caller",
+            )
+        return existing
+
+    def _create_scoped(kind, tid, payload, actor, batch_id, total=None):
+        """Create a job, returning (job_id, winner) where winner is set on a race."""
+        try:
+            return bulk_jobs.create(tid, kind, payload, actor.sub, batch_id, total=total), None
+        except sqlite3.IntegrityError:
+            existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+            if existing is None:
+                raise
+            if existing["payload_digest"] != payload_digest(kind, tid, payload):
+                raise APIError(
+                    409, "BATCH_CONFLICT",
+                    "batch_id was already used for a different payload for this table and caller",
+                ) from None
+            return existing["id"], existing
+
     def _bulk_submit(kind, items, request, background, actor, tid, batch_id):
         sync_limit, max_rows = _bulk_thresholds()
         _bulk_guard(items, actor, tid, max_rows)
@@ -1382,12 +1410,13 @@ def create_app(settings=None):
     def create_export(body: ExportRequest, request: Request, background: BackgroundTasks,
                       actor=Depends(scope("xelibrary:read"))):
         authorize(actor, body.table_id, "read")
-        existing = bulk_jobs.find_batch(body.batch_id) if body.batch_id else None
+        payload = {"format": body.format, "include_deleted": body.include_deleted}
+        existing = _scoped_existing("export", body.table_id, payload, actor, body.batch_id)
         if existing is not None:
-            return JSONResponse(response(request, {"job_id": existing["id"], "status": existing["status"], "duplicate": True}))
-        job_id = bulk_jobs.create(body.table_id, "export",
-                                  {"format": body.format, "include_deleted": body.include_deleted},
-                                  actor.sub, body.batch_id)
+            return _duplicate_job_response(request, existing)
+        job_id, winner = _create_scoped("export", body.table_id, payload, actor, body.batch_id)
+        if winner is not None:
+            return _duplicate_job_response(request, winner)
         background.add_task(_export_run, job_id, body.table_id, body.format, actor, body.include_deleted)
         return JSONResponse(response(request, {"job_id": job_id, "status": "queued"}), status_code=202)
 
@@ -1415,9 +1444,6 @@ def create_app(settings=None):
     def create_import(body: ImportRequest, request: Request, background: BackgroundTasks,
                       actor=Depends(scope("xelibrary:write"))):
         authorize(actor, body.table_id, "write")
-        existing = bulk_jobs.find_batch(body.batch_id) if body.batch_id else None
-        if existing is not None:
-            return JSONResponse(response(request, {"job_id": existing["id"], "status": existing["status"], "duplicate": True}))
         max_bytes = int(os.getenv("XELIBRARY_IMPORT_MAX_BYTES", "2000000"))
         if len(body.content.encode()) > max_bytes:
             raise APIError(413, "IMPORT_TOO_LARGE", f"content exceeds {max_bytes} bytes")
@@ -1428,8 +1454,13 @@ def create_app(settings=None):
         total = len(lines) - 1 if body.format == "csv" else len(lines)
         if total <= 0:
             raise APIError(422, "IMPORT_EMPTY", "no rows to import")
-        job_id = bulk_jobs.create(body.table_id, "import", {"format": body.format, "lines": lines},
-                                  actor.sub, body.batch_id, total=total)
+        payload = {"format": body.format, "lines": lines}
+        existing = _scoped_existing("import", body.table_id, payload, actor, body.batch_id)
+        if existing is not None:
+            return _duplicate_job_response(request, existing)
+        job_id, winner = _create_scoped("import", body.table_id, payload, actor, body.batch_id, total=total)
+        if winner is not None:
+            return _duplicate_job_response(request, winner)
         background.add_task(_import_run, job_id, body.table_id, body.format, actor, lines)
         return JSONResponse(response(request, {"job_id": job_id, "status": "queued", "total": len(lines)}), status_code=202)
 
