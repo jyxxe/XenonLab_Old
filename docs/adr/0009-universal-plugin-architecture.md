@@ -144,3 +144,11 @@ Phase 1 can implement the registry without touching runtime behaviour. Adapter
 interfaces for Tool Gateway/providers must be designed per contract before any
 business module moves, and service plugins remain blocked on the Phase 3
 security design and Deploy Gateway integration.
+
+## Phase 3 design proposal
+
+[ADR 0010](0010-service-plugin-runtime-security.md) proposes the independent
+service admission, identity, execution-policy and fenced lifecycle boundaries.
+Its offline declaration contract is not a runtime registry, deployment grant or
+security acceptance. Existing `runtime=service` metadata and Phase 2 trusted
+adapters must not enable third-party server code execution implicitly.

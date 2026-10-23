@@ -1,0 +1,13 @@
+{
+  "schema_version": "1",
+  "plugin_id": "example.service",
+  "version": "1.0.0",
+  "artifact_format": "oci",
+  "artifact_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "capability_manifest_digest": "sha256:680039c743f2eb1059f214e0a839d31ffe5fb61e803b91665f4035146b08b06d",
+  "release_commit": "0000000000000000000000000000000000000000",
+  "execution_policy": {
+    "id": "example-readonly",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

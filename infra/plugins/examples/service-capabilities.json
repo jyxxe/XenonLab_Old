@@ -1,0 +1,19 @@
+{
+  "id": "example.service",
+  "version": "1.0.0",
+  "api_version": "1",
+  "source": "declared",
+  "capabilities": [
+    {
+      "id": "example.service.lookup",
+      "kind": "tool",
+      "version": "1.0.0",
+      "runtime": "service",
+      "permissions": [
+        "xelibrary:read"
+      ],
+      "dependencies": [],
+      "timeout_seconds": 5
+    }
+  ]
+}
