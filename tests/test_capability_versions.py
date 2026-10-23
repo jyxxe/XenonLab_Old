@@ -129,3 +129,40 @@ def test_nonstring_comparison_values_are_rejected(value):
         satisfies(value, '*')
     with pytest.raises(ValueError):
         satisfies('1.0.0', value)
+
+
+def test_docker_copy_layout_can_load_public_registry_and_version_gate(tmp_path):
+    import shlex
+    import shutil
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[1]
+    app = tmp_path / 'app'
+    app.mkdir()
+    for line in (root / 'infra/docker/Dockerfile').read_text().splitlines():
+        fields = shlex.split(line)
+        if not fields or fields[0] != 'COPY':
+            continue
+        assert len(fields) == 3
+        source = root / fields[1]
+        target = app / fields[2].removeprefix('./')
+        if source.is_dir():
+            shutil.copytree(source, target, ignore=shutil.ignore_patterns('__pycache__'))
+        else:
+            if fields[2].endswith('/'):
+                target.mkdir(parents=True, exist_ok=True)
+                target /= source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+    code = '''import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import xeonolab.capabilities as capabilities
+from xeonolab.capability_versions import satisfies
+assert Path(capabilities.__file__).is_relative_to(Path(sys.argv[1]))
+assert capabilities.load_registry().lookup("builtin.platform.worker.index")
+assert not satisfies("1.0.0-rc.1", "1.0.0")
+'''
+    result = subprocess.run([sys.executable, '-I', '-c', code, str(app)],
+                            cwd=tmp_path, env={}, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr

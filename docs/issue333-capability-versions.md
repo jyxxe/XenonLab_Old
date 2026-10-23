@@ -125,8 +125,7 @@ uv run pytest -q tests/test_service_plugin_contract.py
 
 The schema/adapter/execution-contract focus recorded 157 passes. The broader
 complete composition focus recorded 309 passes. Full composition and rollback
-flags are recorded below when terminal; no earlier partial tree is substituted
-for them.
+flags are recorded below; no earlier partial tree is substituted for them.
 
 Tooling notes: an initial offline dependency resolution could not find cached
 FastAPI metadata; ordinary TLS-verified online resolution succeeded. System
@@ -144,7 +143,43 @@ This supersedes the earlier partial-tree claim; the stricter #321 validation and
 its 17 execution-contract cases are now included, alongside #330's contract.
 
 While this validation ran, the maintainer merged #330 into protected base
-`ef4996b`. This PR is being rebased onto that base, and the generated service
+`ef4996b`. This PR is rebased onto that base, and the generated service
 schema is included directly rather than leaving a future rebase task. The
 rebase does not approve/activate a service runtime. The new-base standalone
-regression result is recorded when terminal below.
+regression result is recorded below.
+
+
+The service declaration field now shares the 256-character version bound and
+explicit schema whitespace exclusion. Eleven constructor/JSON-Schema cases
+cover canonical prereleases, the 256/257 boundary, malformed numeric identifiers,
+newlines and unsupported build metadata. No trust, admission or execution
+permission is added by these shape checks. The final new-base full runs include
+this consumer change and its regenerated schema.
+
+
+## Final new-base results
+
+On `ef4996b`, using CI-pinned uv 0.12.1 with `--locked` and the fresh 3.12.14
+environment, full standalone regression recorded **861 passed / the same 13
+baseline failures**, 441.10 s. The complete composition with all pending trusted
+adapters, strict registry dependency/budget validation and service declaration
+consumer bounds recorded **1035 passed / the same 13 baseline failures**,
+482.66 s. Both failure-name set comparisons pass. Its full-run staged source
+index is `3910ad2ed0340baea2968939fcf5501528fa3be2`.
+
+The Docker-COPY probe initially found an existing base recipe omission: no
+public capability manifest was copied, causing registry load to fail with 503
+inside the staged layout. This PR reuses the identical manifest COPY line
+already present in the pending adapter PRs. A permanent isolated layout test
+imports the copied package, loads its copied public registry, and rejects the
+prerelease/stable mismatch; it cannot fall back to a checkout manifest. This
+additional packaging case was added after those full runs and is included in
+the final standalone focus: **147 passed**. It is a COPY-layout regression, not
+an image build/container isolation or production acceptance claim.
+
+CI-scope Ruff, unchanged OpenAPI export, lock consistency, 11 local service
+smokes and process/transaction/crash injection pass on the final new base. The
+complete-composition rollback configuration (all four local adapter flags 0
+before startup) records 49 lifecycle passes. No protected CI success is inferred
+from these local runs, and no merge, approval, release or production flag/grant
+change was performed.
