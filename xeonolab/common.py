@@ -334,6 +334,19 @@ def token_identity(token, settings):
 
 
 def identity(request: Request):
+    return _identity(request)
+
+
+def refresh_identity(request: Request):
+    """Internal continuation check, not another inbound rate-limit admission.
+
+    Remote authority requests still use their normal authenticated rate policy.
+    No HTTP parameter or header can select this internal path.
+    """
+    return _identity(request, check_rate=False)
+
+
+def _identity(request: Request, *, check_rate=True):
     settings = request.app.state.settings
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
@@ -349,7 +362,8 @@ def identity(request: Request):
             actor.lifecycle_revision, actor.disabled_capabilities = parse_snapshot(lifecycle.snapshot())
         elif request.app.state.capability_lifecycle_required:
             raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "capability lifecycle authority required")
-        enforce_rate_limit(request, actor)
+        if check_rate:
+            enforce_rate_limit(request, actor)
         return actor
     endpoint = os.getenv("AUTHORIZATION_URL")
     if endpoint:
@@ -380,7 +394,8 @@ def identity(request: Request):
                 actor.lifecycle_revision, actor.disabled_capabilities = parse_snapshot(snapshot)
             elif request.app.state.capability_lifecycle_required:
                 raise ValueError("lifecycle snapshot required")
-            enforce_rate_limit(request, actor)
+            if check_rate:
+                enforce_rate_limit(request, actor)
             return actor
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, OSError):
             raise APIError(503, "AUTHORIZATION_UNAVAILABLE", "account authority unavailable") from None
@@ -389,7 +404,8 @@ def identity(request: Request):
     if request.app.state.capability_lifecycle_required:
         raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "capability lifecycle authority required")
     actor = token_identity(token, settings)
-    enforce_rate_limit(request, actor)
+    if check_rate:
+        enforce_rate_limit(request, actor)
     return actor
 
 

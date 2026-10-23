@@ -1,12 +1,12 @@
-# #331 / #305: durable authority controls for query, LLM and embedding
+# #331 / #305: durable authority controls for query, LLM, embedding and index
 
-This increment controls four existing builtin groups: the query tool, LLM
-Gateway, D100M provider and Qwen provider. Query/LLM retain their specific
+This increment controls five existing builtin groups: the query tool, LLM
+Gateway, D100M provider, Qwen provider and the index worker. Query/LLM retain their specific
 admission paths. Each embedding provider root is an availability gate shared by
 its model discovery and text/image encoding paths, including the existing native
 implementation. Its encode capability keeps the separate write authorization;
 provider availability never grants or requires the read scope for encoding.
-Other providers, workers, UI installs and independent services remain outside
+Other providers/workers, UI installs and independent services remain outside
 this control set. No dynamic code, deployment or runtime termination is added.
 
 ## Authority and admission
@@ -58,7 +58,8 @@ an adapter or a plugin manifest. The snapshot carries no credentials, publisher
 URLs or executable data. The existing TLS-validated, proxy-independent
 `AUTHORIZATION_URL` channel forwards the existing caller identity to the trusted
 account authority. There is no new remote URL, shared-filesystem requirement,
-service token or secret. Each request reads live state without an allow cache.
+service token or secret. Each new HTTP request reads live state without an allow cache; an admitted index
+job uses the bounded continuation checks described below.
 Known version, bounded integer revision and unique supported disabled ids are
 validated; malformed state is rejected. Updated clients honor a supplied valid
 snapshot even when the rollout flag is off. The authority always reads persisted
@@ -98,8 +99,8 @@ This flag is a deployment gate, not proof that all old clients have upgraded.
 **Do not enable production mutations until every authorization consumer is
 updated to this snapshot vocabulary and every controlled invocation instance uses
 the same authority with strict-mode acceptance.** Older query-only or query/LLM snapshot
-parsers reject newly disabled embedding ids with 503 rather than ignoring them. Update
-all authority consumers, not just the embedding gateways, before allowing new group mutations;
+parsers reject newly disabled embedding/index ids with 503 rather than ignoring them. Update
+all authority consumers, not just the embedding gateways/index worker, before allowing new group mutations;
 otherwise even unrelated authenticated requests on old strict consumers can
 become unavailable. The protocol shape stays version 1; the supported controlled
 id vocabulary is deployment-coupled and fails closed on unknown ids. An old binary
@@ -355,3 +356,65 @@ unintegrated index worker and independent encode child, because D100M is now
 intentionally supported. Earlier unsuccessful exploratory runs are not counted.
 No real weights, GPU, OIDC, model quality, multi-host, production or visual
 acceptance was performed; protected CI and maintainer acceptance remain pending.
+
+
+## Index worker continuation (#326 / #331)
+
+`builtin.platform.worker.index` is the fifth controlled root. When the #327
+trusted chunker is present, its `builtin.platform.worker.document-chunker`
+discovery is also hidden by that root. The child cannot be mutated separately.
+Reindex retains `xelibrary:admin` and row/table authorization; availability never
+adds a write/read grant or requires an extra write scope from an admin caller.
+A stopped worker rejects new reindex requests before dependency setup, queue
+creation or processor invocation, including the local chunker flag-0 path.
+Source CRUD, jobs, index status and reading committed matching derivatives remain
+available under their existing permissions. No source or vector purge occurs.
+
+Each admitted job holds a core-only minimal in-memory authorization context with
+its original Authorization header and app. It is not stored in jobs/SQLite,
+logged, returned in APIs, or supplied to the chunker. There is no persisted token
+or automatic token renewal. At actual worker start the caller is reauthorized
+unconditionally, so a queued job cannot rely on its old admission snapshot.
+At subsequent cooperative checkpoints (row/chunk processing and before row
+publication) it reauthorizes at most once every five seconds, rechecking the same
+subject/kind, verified lifecycle snapshot and admin permission. Chunker-declared
+permissions are also rechecked when that adapter is present. Failure, missing
+snapshot, changed identity, scope revocation, expired/revoked credentials,
+authority failure or 429 fails the job with its existing generic safe error.
+The internal refresh reuses verification but does not charge another *inbound
+reindex* admission; remote authority requests retain their normal rate policy.
+There is no HTTP flag/header to bypass rate limiting.
+
+This per-job continuation snapshot is not reused for any new HTTP admission.
+An already running job can continue under its most recent successful check until
+the next due checkpoint; stopping does not instantly interrupt the current
+chunk, embedding I/O or row publication. Polling runs only when trusted code
+returns, so five seconds is a polling interval, not a hard cancellation bound.
+Checks before the publication transaction avoid waiting for authority network I/O
+while holding the source SQLite write lock. Publication admitted by that check
+is not atomic with the separate authority database; previously committed rows
+remain. A hung processor/network call is not forcibly terminated. Hard process
+isolation, durable resumable jobs and credential renewal remain follow-up work.
+
+All consumers must support the five-root snapshot vocabulary before mutations
+are enabled. Local flags do not prove rollout or production verification.
+
+
+Index validation: `uv run --no-sync pytest` full regression recorded 774 passed
+and 13 failed (470.74 s); the failed test identifiers exactly match the 13
+baseline Lean namespace-permission failures. No skip or sandbox weakening was
+introduced. After adding continuation/compatibility cases, the final index-only
+suite is 15 passed; the lifecycle/rate-limit focused suite is 61 passed. Ruff
+(`xeonolab tests scripts`), Python 3.12 OpenAPI export, 11 localhost service smokes,
+SIGKILL/transaction failure injection and an isolated Docker-COPY resource-layout
+probe pass. The probe is not a Docker image build or runtime sandbox acceptance.
+
+The #327 companion has separate regression evidence. A staged combined tree
+includes #325/#327/#332 with the native LLM path, all 26 declaration ids, the five controlled roots
+and their encode/chunker children. It was reapplied cleanly over maintainer base
+`c1274bb` (including merged #328): 175 focused tests and 15 chunker-flag-0 index
+tests pass, including real synthetic-authority calls, queued-job races,
+mid-embedding stop/revocation/missing-state/outage, admin-only admission,
+permission refresh, no repeated inbound charge, and committed semantic reads.
+No production rollout, real model/GPU/Qdrant, multihost/OIDC or visual acceptance
+is claimed. LAN readiness only returned ready for the existing desktop service.

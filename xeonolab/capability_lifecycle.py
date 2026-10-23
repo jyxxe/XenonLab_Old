@@ -18,15 +18,17 @@ QUERY_CAPABILITY = "builtin.platform.tool.xelibrary-query"
 LLM_CAPABILITY = "builtin.platform.provider.llm-chat"
 D100M_CAPABILITY = "builtin.platform.provider.d100m"
 QWEN_CAPABILITY = "builtin.platform.provider.qwen-worker"
-CONTROLLABLE = frozenset({QUERY_CAPABILITY, LLM_CAPABILITY, D100M_CAPABILITY, QWEN_CAPABILITY})
-PROVIDER_PARENTS = {
+INDEX_CAPABILITY = "builtin.platform.worker.index"
+CONTROLLABLE = frozenset({QUERY_CAPABILITY, LLM_CAPABILITY, D100M_CAPABILITY, QWEN_CAPABILITY, INDEX_CAPABILITY})
+CAPABILITY_PARENTS = {
+    "builtin.platform.worker.document-chunker": INDEX_CAPABILITY,
     D100M_CAPABILITY + "-encode": D100M_CAPABILITY,
     QWEN_CAPABILITY + "-encode": QWEN_CAPABILITY,
 }
 
 
 def capability_disabled(capability_id, disabled):
-    return capability_id in disabled or PROVIDER_PARENTS.get(capability_id) in disabled
+    return capability_id in disabled or CAPABILITY_PARENTS.get(capability_id) in disabled
 
 MAX_GENERATION = 2**63 - 1
 

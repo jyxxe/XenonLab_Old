@@ -139,7 +139,7 @@ def test_management_requires_dedicated_interactive_human_permission(authority):
         assert client.patch(PATH, headers=auth(token), json=patch()).status_code == 403
     assert client.patch(PATH, json=patch()).status_code == 401
     # The UI app/core/unknown capability cannot be made globally unavailable here.
-    for identifier in ('builtin.platform.app.settings', 'builtin.platform.worker.index',
+    for identifier in ('builtin.platform.app.settings', 'builtin.platform.worker.lean-verifier',
                        'builtin.platform.provider.d100m-encode', 'unknown.capability'):
         assert client.patch(f'/api/v1/capabilities/{identifier}/lifecycle',
                             headers=auth('admin'), json=patch()).status_code == 404
