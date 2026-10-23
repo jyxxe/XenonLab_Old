@@ -422,15 +422,15 @@ is claimed. LAN readiness only returned ready for the existing desktop service.
 
 Final combined full regression on `c1274bb`: #325/#327/#332 with native LLM
 recorded 830 passed / the same 13 baseline failures (437.93 s), staged source
-index tree `4c0a34a8bf5411f5b8cebf6da8aa95675b5f425b`. Adding the trusted Tool
-and Chat Provider interfaces from #321/#323 recorded 867 passed / the same 13
+index tree `4c0a34a8bf5411f5b8cebf6da8aa95675b5f425b`. An entrypoint-only Tool
+and Chat Provider composition from #321/#323 recorded 867 passed / the same 13
 baseline failures (405.01 s), staged source index tree
 `4050e4142b7b009cf690ee450199aebd21edf023`. All failure identifiers were compared
 as sets against the reproduced baseline. The verifier and its tests remain
 byte-identical to baseline c44076a; direct stat probes of `/proc/1/ns/net` and
 `/proc/1/ns/mnt` both returned PermissionError errno 13 on this desktop.
 
-The all-adapter tree has 229 passing focused cases and 49 passing lifecycle
+That entrypoint-only tree has 229 passing focused cases and 49 passing lifecycle
 cases with all four adapter flags set to 0 **before startup**. Its 28 unique
 capability declarations retain all five controlled roots and encode/chunker
 children; trusted Tool/Chat/Embedding/Chunker modules and the public registry
@@ -438,3 +438,18 @@ resolve in an isolated staged Docker-COPY layout. Ruff, regenerated OpenAPI,
 11 service smokes, and transaction/process/crash failure injection also pass.
 These staged integration sources are review/test compositions, not a protected
 branch merge or deployment. Protected CI remains independently required.
+
+
+Correction (#333 / PR #334): the older `4050e414` composition omitted #321's
+registry dependency/budget validation and `test_capability_execution_contract.py`.
+Its 867/13 result is not proof of the full PR stack. This limitation is recorded
+on #305 comment 3574. The corrected composition inventories all 31 non-document
+files of the six PRs, retains that strict validation and adds PR #334's canonical
+version gate and service-schema update. Its final full run records 1035 passes
+and exactly the same 13 baseline Lean failures, source index
+`3910ad2ed0340baea2968939fcf5501528fa3be2`; final focused suite including the added
+COPY regression is 321 passed. All four local adapter flags 0 before startup:
+49 lifecycle cases passed. See PR #334 / docs/issue333-capability-versions.md for
+scope, the 861/13 standalone run on ef4996b and the generated schema/probe details.
+This composition includes the pending version fix; it is not a protected merge
+or production acceptance claim for any individual PR.
