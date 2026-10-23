@@ -27,7 +27,10 @@
     {"id": "builtin.platform.widget.work", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.widget.search", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.widget.notes", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "builtin.platform.provider.llm-chat", "kind": "provider", "version": "1.0.0", "runtime": "api", "permissions": ["llm:use"], "dependencies": []},
     {"id": "builtin.platform.tool.xelibrary-search", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:query"], "dependencies": [], "timeout_seconds": 30},
-    {"id": "builtin.platform.tool.xelibrary-get", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:read"], "dependencies": [], "timeout_seconds": 30}
+    {"id": "builtin.platform.tool.xelibrary-get", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:read"], "dependencies": [], "timeout_seconds": 30},
+    {"id": "builtin.platform.provider.d100m-encode", "kind": "provider", "version": "1.0.0", "runtime": "api", "permissions": ["embedding:write"], "dependencies": []},
+    {"id": "builtin.platform.provider.qwen-worker-encode", "kind": "provider", "version": "1.0.0", "runtime": "service", "permissions": ["embedding:write"], "dependencies": []}
   ]
 }
