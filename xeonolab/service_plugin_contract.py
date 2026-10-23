@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .capabilities import PLUGIN_ID, SEMVER, CapabilityRegistry
+from .capabilities import PLUGIN_ID, SEMVER, CapabilityRegistry, satisfies
 
 DIGEST = r"^sha256:[a-f0-9]{64}$"
 MAX_DECLARATION_BYTES = 16 * 1024
@@ -97,7 +97,10 @@ def validate_service_plugin(declaration_bytes, manifest_bytes):
                 or (field == "title" and not display[field])
             ):
                 raise ValueError
-        for capability in manifest.get("capabilities", []):
+        capabilities = manifest.get("capabilities")
+        if not isinstance(capabilities, list) or not 1 <= len(capabilities) <= 64:
+            raise ValueError
+        for capability in capabilities:
             if not isinstance(capability, dict) or set(capability) - {
                 "id", "kind", "version", "runtime", "permissions", "dependencies", "timeout_seconds",
             }:
@@ -119,10 +122,26 @@ def validate_service_plugin(declaration_bytes, manifest_bytes):
                 raise ValueError
             if any(not isinstance(d, str) or not re.fullmatch(
                 r"[a-z0-9][a-z0-9._-]{2,127}@[~^]?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\."
-                r"(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?", d,
+                r"(0|[1-9][0-9]*)", d,
             ) for d in dependencies) or len(dependencies) != len(set(dependencies)):
                 raise ValueError
-        CapabilityRegistry(manifest)
+        # Offline validation is not the complete runtime registry. Preserve
+        # original bytes/digests; only this private view defers foreign namespaces
+        # to eventual global admission. Execution registry rules are unchanged.
+        namespace = manifest["id"]
+        versions = {item.get("id"): item.get("version") for item in capabilities}
+        local_capabilities = []
+        for capability in capabilities:
+            local_dependencies = []
+            for dependency in capability.get("dependencies", []):
+                target, constraint = dependency.split("@", 1)
+                if target == namespace or target.startswith(namespace + "."):
+                    if (target not in versions or not isinstance(versions[target], str)
+                            or "-" in versions[target] or not satisfies(versions[target], constraint)):
+                        raise ValueError
+                    local_dependencies.append(dependency)
+            local_capabilities.append({**capability, "dependencies": local_dependencies})
+        CapabilityRegistry({**manifest, "capabilities": local_capabilities})
     except (ValueError, TypeError, AttributeError, RecursionError):
         raise ServicePluginContractError("invalid service capability manifest") from None
     return declaration

@@ -1,0 +1,128 @@
+{
+  "$defs": {
+    "_KeyInput": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "const": "ed25519",
+          "title": "Algorithm",
+          "type": "string"
+        },
+        "public_key": {
+          "maxLength": 44,
+          "minLength": 43,
+          "not": {
+            "pattern": "\\s"
+          },
+          "pattern": "^[A-Za-z0-9+/_-]+={0,2}$",
+          "title": "Public Key",
+          "type": "string"
+        },
+        "plugin_ids": {
+          "items": {
+            "maxLength": 63,
+            "minLength": 2,
+            "pattern": "^[a-z0-9][a-z0-9.-]{1,62}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Plugin Ids",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "not_before": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "title": "Not Before",
+          "type": "integer"
+        },
+        "expires_at": {
+          "exclusiveMinimum": 0,
+          "maximum": 9223372036854775807,
+          "title": "Expires At",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "algorithm",
+        "public_key",
+        "plugin_ids",
+        "not_before",
+        "expires_at"
+      ],
+      "title": "_KeyInput",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "issued_at": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "title": "Issued At",
+      "type": "integer"
+    },
+    "expires_at": {
+      "exclusiveMinimum": 0,
+      "maximum": 9223372036854775807,
+      "title": "Expires At",
+      "type": "integer"
+    },
+    "threshold": {
+      "maximum": 16,
+      "minimum": 1,
+      "title": "Threshold",
+      "type": "integer"
+    },
+    "keys": {
+      "items": {
+        "$ref": "#/$defs/_KeyInput"
+      },
+      "maxItems": 32,
+      "title": "Keys",
+      "type": "array"
+    },
+    "revoked_keys": {
+      "items": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "title": "Revoked Keys",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "revoked_artifacts": {
+      "items": {
+        "maxLength": 71,
+        "minLength": 71,
+        "pattern": "^sha256:[a-f0-9]{64}$",
+        "type": "string"
+      },
+      "maxItems": 256,
+      "title": "Revoked Artifacts",
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schema_version",
+    "issued_at",
+    "expires_at",
+    "threshold",
+    "keys"
+  ],
+  "title": "_PolicyInput",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xenon.jyxxe.com/schemas/service-signature-trust-v1.json",
+  "description": "Core public signing policy input; syntactic validation grants no trust or execution."
+}
