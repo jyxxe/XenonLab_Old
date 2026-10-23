@@ -1,0 +1,11 @@
+{
+  "id": "example.knowledge",
+  "version": "1.0.0",
+  "api_version": "1",
+  "display": {"title": "知识库应用（迁移示例）", "description": "将内置知识库 app 迁移为声明式能力清单的示例，当前仅作文档/契约示例，不改变运行方式。", "icon": "▤"},
+  "source": "declared",
+  "capabilities": [
+    {"id": "example.knowledge.app", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["xelibrary:read"], "dependencies": []},
+    {"id": "example.knowledge.widget", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["xelibrary:read"], "dependencies": ["example.knowledge.app@^1.0.0"]}
+  ]
+}
