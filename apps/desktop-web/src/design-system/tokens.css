@@ -171,6 +171,11 @@
 :root[data-wallpaper="silver"] {
   --wallpaper: radial-gradient(ellipse at 50% 60%, rgba(89, 100, 121, 0.8), transparent 70%), #202b3b;
 }
+
+:root[data-wallpaper="custom"] {
+  --wallpaper: linear-gradient(135deg, rgba(15, 20, 32, 0.22), rgba(15, 20, 32, 0.06)),
+    var(--custom-wallpaper-image, radial-gradient(ellipse at 70% 75%, rgba(72, 90, 121, 0.55), transparent 65%), #10131b);
+}
 :root[data-theme="light"][data-wallpaper="ocean"] {
   --wallpaper: radial-gradient(ellipse at 80% 90%, rgba(120, 190, 215, 0.75), transparent 70%), #cfe3ef;
 }

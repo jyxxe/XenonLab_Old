@@ -1,6 +1,9 @@
-import React, {useState} from 'react';
+import {stringifyExactJSON} from './json.js';
+import React, {useEffect, useRef, useState} from 'react';
 import {Badge, Button, EmptyState, ErrorState, Skeleton, Textarea} from '../design-system/primitives';
 import {describeError, formatNumber, withQueryPagination} from './logic.js';
+import {QUERY_EXPRESSION_LIMIT, queryExpressionLength} from './query-drafts.js';
+import {serializeQueryResultsTSV} from './query-results-tsv.js';
 import type {QueryExplain} from './types';
 
 const KNOWN_UNSUPPORTED = [
@@ -21,10 +24,19 @@ export function QueryConsole({
   running,
   validating,
   duration,
+  recent,
+  draftStatus,
+  draftMessage,
+  queryEnabled,
   onRun,
   onValidate,
   onOpenRow,
+  onLoadRecent,
+  onDeleteRecent,
+  onClearRecent,
+  onRetryStorage,
   tableName,
+  tableNameForCopy,
 }: {
   expression: string;
   onExpression: (value: string) => void;
@@ -35,15 +47,53 @@ export function QueryConsole({
   running: boolean;
   validating: boolean;
   duration: number | null;
-  onRun: (expression: string) => void;
+  recent: Array<{expression: string; updated_at: string}>;
+  draftStatus: string;
+  draftMessage: string;
+  queryEnabled: boolean;
+  onRun: (expression: string, remember?: boolean) => void;
   onValidate: (expression: string) => Promise<boolean> | void;
   onOpenRow: (tableId: string, rowId: string) => void;
+  onLoadRecent: (item: {expression: string}) => void;
+  onDeleteRecent: (expression: string) => void;
+  onClearRecent: () => void;
+  onRetryStorage: () => void;
   tableName: (tableId: string) => string;
+  tableNameForCopy: (tableId: string) => string;
 }) {
   const [showUnsupported, setShowUnsupported] = useState(false);
   const [copyState, setCopyState] = useState('');
-  const [offset, setOffset] = useState(0);
+  const offset = plan?.offset ?? 0;
   const errorInfo = error ? describeError(error, '执行查询') : null;
+  const canCopyResults = queryEnabled && !running && !validating && !error && rows.length > 0;
+  const copyContext = useRef({rows, enabled: canCopyResults, generation: 0, busy: false});
+  if (copyContext.current.rows !== rows || copyContext.current.enabled !== canCopyResults) {
+    copyContext.current = {rows, enabled: canCopyResults, generation: copyContext.current.generation + 1, busy: false};
+  }
+  const [resultCopy, setResultCopy] = useState<{generation: number; busy: boolean; error: boolean; message: string} | null>(null);
+  const currentResultCopy = resultCopy?.generation === copyContext.current.generation ? resultCopy : null;
+  useEffect(() => () => { copyContext.current.generation += 1; }, []);
+
+  async function copyResults() {
+    const context = copyContext.current;
+    if (!context.enabled || context.busy) return;
+    const request = ++context.generation;
+    const isCurrent = () => copyContext.current === context && context.generation === request;
+    context.busy = true;
+    setResultCopy({generation: request, busy: true, error: false, message: ''});
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('剪贴板不可用');
+      const text = serializeQueryResultsTSV(context.rows, tableNameForCopy);
+      // Clipboard writes cannot be cancelled; a page/session change discards
+      // only this operation's feedback, without blocking a new page's copy.
+      await navigator.clipboard.writeText(text);
+      if (isCurrent()) setResultCopy({generation: request, busy: false, error: false, message: `已复制当前结果页 ${context.rows.length} 行为 TSV。`});
+    } catch {
+      if (isCurrent()) setResultCopy({generation: request, busy: false, error: true, message: '复制失败，请检查浏览器剪贴板权限后重试；当前结果已保留。'});
+    } finally {
+      if (isCurrent()) context.busy = false;
+    }
+  }
 
   const pageQuery = (nextOffset: number) => withQueryPagination(expression, plan?.limit ?? 100, nextOffset);
 
@@ -62,19 +112,40 @@ export function QueryConsole({
         aria-label="查询表达式"
         spellCheck={false}
         value={expression}
-        onChange={event => { setOffset(0); onExpression(event.target.value); }}
+        onChange={event => onExpression(event.target.value)}
         onKeyDown={event => {
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') onRun(expression);
         }}
       />
 
+      <div className="library-query-history" aria-label="查询草稿与历史">
+        <p>当前表达式 {queryExpressionLength(expression)} / {QUERY_EXPRESSION_LIMIT} 个字符。草稿按已验证账号保存在本机；校验通过后加入最近查询，最多保留 20 条并按表达式去重。载入只恢复表达式，不会执行查询。</p>
+        {draftStatus === 'unverified' && <p role="status">正在确认当前账号；确认前不会读取或保存查询记录。</p>}
+        {draftStatus === 'loading' && <p role="status">正在读取当前账号的查询草稿…</p>}
+        {!queryEnabled && <p role="status">身份正在验证；验证完成前查询操作已暂停。</p>}
+        {draftStatus === 'read-error' || draftStatus === 'write-error' ? <div role="alert"><span>{draftMessage}</span> <Button size="sm" onClick={onRetryStorage}>重试本地存储</Button></div> : draftMessage && <p role="status">{draftMessage}</p>}
+        <details>
+          <summary>最近查询（{recent.length} / 20）</summary>
+          {recent.length ? <>
+            <ol>{recent.map(item => <li key={item.expression}>
+              <code title={item.expression}>{item.expression.length > 180 ? `${item.expression.slice(0, 180)}…` : item.expression}</code>
+              <time>{item.updated_at ? new Date(item.updated_at).toLocaleString() : ''}</time>
+              <Button size="sm" onClick={() => onLoadRecent(item)}>载入草稿</Button>
+              <Button size="sm" variant="ghost" aria-label="删除这条最近查询" onClick={() => onDeleteRecent(item.expression)}>删除</Button>
+            </li>)}</ol>
+            <Button size="sm" variant="ghost" onClick={onClearRecent}>清空最近查询</Button>
+          </> : <p>没有最近查询。</p>}
+        </details>
+      </div>
+
       <div className="library-query-toolbar">
-        <Button variant="primary" onClick={() => onRun(expression)} disabled={running}>{running ? '执行中…' : '运行'}</Button>
-        <Button onClick={() => void onValidate(expression)} disabled={running || validating}>{validating ? '校验中…' : '校验语法'}</Button>
+        <Button variant="primary" onClick={() => onRun(expression)} disabled={!queryEnabled || running}>{running ? '执行中…' : '运行'}</Button>
+        <Button onClick={() => void onValidate(expression)} disabled={!queryEnabled || running || validating}>{validating ? '校验中…' : '校验语法'}</Button>
         <Button
           onClick={async () => {
             try {
-              await navigator.clipboard?.writeText(expression);
+              if (!navigator.clipboard?.writeText) throw new Error('剪贴板不可用');
+              await navigator.clipboard.writeText(expression);
               setCopyState('已复制');
             } catch {
               setCopyState('复制失败');
@@ -84,11 +155,14 @@ export function QueryConsole({
         >
           复制查询
         </Button>
+        {rows.length > 0 && <Button loading={currentResultCopy?.busy} disabled={!canCopyResults} onClick={() => void copyResults()}>复制当前结果页为 TSV（{rows.length} 行）</Button>}
         <Button variant="ghost" onClick={() => setShowUnsupported(value => !value)}>已知未实现语法</Button>
         {copyState && <span className="muted" role="status">{copyState}</span>}
         {duration != null && <span className="muted">耗时 {duration} ms</span>}
         <span className="muted">结果 {formatNumber(rows.length)} 行</span>
       </div>
+
+      {currentResultCopy?.message && <p className="muted" role={currentResultCopy.error ? 'alert' : 'status'}>{currentResultCopy.message}</p>}
 
       {showUnsupported && (
         <div className="library-notice">
@@ -103,7 +177,7 @@ export function QueryConsole({
           <div><dt>路径</dt><dd className="mono">{plan.path}</dd></div>
           <div><dt>LIMIT</dt><dd>{plan.limit}</dd></div>
           <div><dt>OFFSET</dt><dd>{plan.offset}</dd></div>
-          <div><dt>ORDER BY</dt><dd>{plan.order_by ? JSON.stringify(plan.order_by) : '无'}{plan.descending ? ' DESC' : ''}</dd></div>
+          <div><dt>ORDER BY</dt><dd>{plan.order_by ? stringifyExactJSON(plan.order_by) : '无'}{plan.descending ? ' DESC' : ''}</dd></div>
           <div><dt>执行器</dt><dd>{plan.execution}</dd></div>
         </dl>
       )}
@@ -128,7 +202,7 @@ export function QueryConsole({
                     <td>{item.path}</td>
                     <td className="mono">{String(item._row_id).slice(0, 10)}…</td>
                     <td>r{item._revision}</td>
-                    <td title={JSON.stringify(item.values)}>{JSON.stringify(item.values).slice(0, 160)}</td>
+                    <td title={stringifyExactJSON(item.values)}>{stringifyExactJSON(item.values).slice(0, 160)}</td>
                     <td><Button size="sm" variant="ghost" onClick={() => onOpenRow(item.table_id, item._row_id)}>定位</Button></td>
                   </tr>
                 ))}
@@ -136,14 +210,14 @@ export function QueryConsole({
             </table>
           </div>
           <div className="library-query-pagination">
-            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); setOffset(next); onRun(pageQuery(next)); }}>
+            <Button size="sm" disabled={offset === 0 || running} onClick={() => { const next = Math.max(0, offset - (plan?.limit ?? 100)); onRun(pageQuery(next), false); }}>
               上一页
             </Button>
             <span className="muted">OFFSET {offset}</span>
             <Button
               size="sm"
               disabled={rows.length < (plan?.limit ?? 100) || running}
-              onClick={() => { const next = offset + (plan?.limit ?? 100); setOffset(next); onRun(pageQuery(next)); }}
+              onClick={() => { const next = offset + (plan?.limit ?? 100); onRun(pageQuery(next), false); }}
             >
               下一页
             </Button>

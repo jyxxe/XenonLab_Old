@@ -95,21 +95,6 @@ with httpx.Client(verify=context, trust_env=False, timeout=180) as client:
         json={"expression": 'FROM "/示例/**" LIMIT 20'},
     )
     assert tool.status_code == 200 and len(tool.json()["data"]) >= 2, tool.text
-    catalogue = api("GET", "/apps").json()["data"]
-    if not any(a["id"] == "xelibrary" for a in catalogue):
-        api(
-            "POST",
-            "/apps",
-            {
-                "id": "xelibrary",
-                "title": "XeLibrary",
-                "origin": "https://library.xenon.lan",
-                "icon": "◇",
-                "permissions": ["xelibrary:read"],
-                "default_size": [1100, 740],
-                "singleton": True,
-            },
-        )
     assert "XeonoLab" in client.get("https://xenon.lan/").text
     report = {
         "https": "verified local CA",

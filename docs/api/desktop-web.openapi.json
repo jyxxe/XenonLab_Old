@@ -205,6 +205,22 @@
         }
       }
     },
+    "/api/v1/auth/accounts/root-scope-candidates": {
+      "get": {
+        "summary": "Root Scope Candidates",
+        "operationId": "root_scope_candidates_api_v1_auth_accounts_root_scope_candidates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/accounts/{uid}": {
       "patch": {
         "summary": "Update",
@@ -411,12 +427,44 @@
       "get": {
         "summary": "Events",
         "operationId": "events_api_v1_auth_accounts_audit_events_get",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 200,
+              "title": "Limit"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -479,6 +527,306 @@
       "post": {
         "summary": "Logout",
         "operationId": "logout_api_v1_auth_session_logout_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins": {
+      "get": {
+        "summary": "List Plugins",
+        "operationId": "list_plugins_api_v1_plugins_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Publish",
+        "operationId": "publish_api_v1_plugins_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginManifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{plugin_id}": {
+      "get": {
+        "summary": "Get Plugin",
+        "operationId": "get_plugin_api_v1_plugins__plugin_id__get",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Plugin",
+        "operationId": "update_plugin_api_v1_plugins__plugin_id__put",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginManifest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Plugin",
+        "operationId": "delete_plugin_api_v1_plugins__plugin_id__delete",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/plugins/{plugin_id}/install": {
+      "post": {
+        "summary": "Install",
+        "operationId": "install_api_v1_plugins__plugin_id__install_post",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Update Install",
+        "operationId": "update_install_api_v1_plugins__plugin_id__install_patch",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Uninstall",
+        "operationId": "uninstall_api_v1_plugins__plugin_id__install_delete",
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/plugin-widgets": {
+      "get": {
+        "summary": "My Widgets",
+        "operationId": "my_widgets_api_v1_users_me_plugin_widgets_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -779,6 +1127,81 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/wallpaper": {
+      "get": {
+        "summary": "Get Wallpaper",
+        "operationId": "get_wallpaper_api_v1_users_me_wallpaper_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Upload Wallpaper",
+        "operationId": "upload_wallpaper_api_v1_users_me_wallpaper_put",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Wallpaper",
+        "operationId": "delete_wallpaper_api_v1_users_me_wallpaper_delete",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-prompts": {
+      "get": {
+        "summary": "Admin Agent Prompts",
+        "description": "Admin-only credential-bearing prompt catalogue (files live outside Git).",
+        "operationId": "admin_agent_prompts_api_v1_agent_prompts_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -1136,6 +1559,20 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "InstallPatch": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "InstallPatch"
+      },
       "KeyCreate": {
         "properties": {
           "owner": {
@@ -1208,6 +1645,221 @@
         ],
         "title": "Password"
       },
+      "PluginApp": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "origin": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Origin"
+          },
+          "entry": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Entry",
+            "default": "/"
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Icon",
+            "default": "\u25c7"
+          },
+          "default_size": {
+            "prefixItems": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Default Size",
+            "default": [
+              1000,
+              700
+            ]
+          },
+          "singleton": {
+            "type": "boolean",
+            "title": "Singleton",
+            "default": true
+          },
+          "sandbox": {
+            "$ref": "#/components/schemas/PluginSandbox"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "origin"
+        ],
+        "title": "PluginApp"
+      },
+      "PluginManifest": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{1,63}$",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]{1,64})?$",
+            "title": "Version"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 600,
+            "title": "Description",
+            "default": ""
+          },
+          "author": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Author",
+            "default": ""
+          },
+          "homepage": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Homepage",
+            "default": ""
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Icon",
+            "default": "\u25c8"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Permissions"
+          },
+          "app": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PluginApp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "widget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PluginWidget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "version"
+        ],
+        "title": "PluginManifest"
+      },
+      "PluginSandbox": {
+        "properties": {
+          "allow_scripts": {
+            "type": "boolean",
+            "title": "Allow Scripts",
+            "default": true
+          },
+          "allow_forms": {
+            "type": "boolean",
+            "title": "Allow Forms",
+            "default": true
+          },
+          "allow_downloads": {
+            "type": "boolean",
+            "title": "Allow Downloads",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PluginSandbox"
+      },
+      "PluginWidget": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "origin": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Origin"
+          },
+          "entry": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Entry",
+            "default": "/"
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Icon",
+            "default": "\u25c7"
+          },
+          "height": {
+            "type": "integer",
+            "maximum": 480.0,
+            "minimum": 80.0,
+            "title": "Height",
+            "default": 180
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "origin"
+        ],
+        "title": "PluginWidget"
+      },
       "PreferencePatch": {
         "properties": {
           "theme": {
@@ -1243,6 +1895,72 @@
             ],
             "title": "Wallpaper"
           },
+          "wallpaper_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Mode"
+          },
+          "wallpaper_color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Color"
+          },
+          "wallpaper_gradient_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient From"
+          },
+          "wallpaper_gradient_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient To"
+          },
+          "wallpaper_gradient_angle": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Gradient Angle"
+          },
+          "wallpaper_dim": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaper Dim"
+          },
           "timezone": {
             "anyOf": [
               {
@@ -1267,6 +1985,48 @@
               }
             ],
             "title": "Widgets"
+          },
+          "plugin_widgets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Widgets"
+          },
+          "shortcut_apps": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 12
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortcut Apps"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "dock_size": {
             "anyOf": [
@@ -1322,6 +2082,51 @@
               }
             ],
             "title": "Reduced Motion"
+          },
+          "library_recents": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Recents"
+          },
+          "library_favorites": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Favorites"
+          },
+          "library_favorite_tombstones": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Favorite Tombstones"
           }
         },
         "additionalProperties": false,

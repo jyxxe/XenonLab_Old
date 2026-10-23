@@ -1,3 +1,5 @@
+import base64
+import binascii
 import csv
 import fcntl
 import hashlib
@@ -17,13 +19,15 @@ from pathlib import PurePosixPath
 from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import BackgroundTasks, Depends, Header, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, Header, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from .bulk_jobs import BulkJobStore
+from .bulk_jobs import BulkJobStore, payload_digest
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
+from .quality_pipeline import ranked_fusion
 from .query import evaluate, json_ast, parse, path_matches, sort_key
+from .search_models import SEARCH_ERRORS, SearchResponse
 from .uploads import register_upload_routes
 
 TYPES = {
@@ -104,6 +108,28 @@ def now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+SORT_CURSOR_PREFIX = "sort1."
+
+
+def encode_rows_sort_cursor(payload):
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return SORT_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_rows_sort_cursor(cursor):
+    if not cursor.startswith(SORT_CURSOR_PREFIX):
+        raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+    encoded = cursor[len(SORT_CURSOR_PREFIX) :]
+    try:
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        payload = json.loads(raw)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed") from None
+    if not isinstance(payload, dict):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+    return payload
+
+
 class Column(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]{0,63}$")
     type: str
@@ -179,6 +205,22 @@ class Restore(BaseModel):
 
 class AttachmentBind(BaseModel):
     attachment_id: str = Field(min_length=1, max_length=64)
+
+
+class AttachmentCandidate(BaseModel):
+    attachment_id: str
+    row_id: str
+    filename: str
+    media_type: str
+    size: int
+    created_at: str
+    metadata: dict
+    source_label: str
+
+
+class AttachmentCandidatePage(BaseModel):
+    data: list[AttachmentCandidate]
+    meta: dict
 
 
 class ACLWrite(BaseModel):
@@ -654,6 +696,8 @@ def create_app(settings=None):
                 jobs = [json.loads(row[0]) for row in db.execute("SELECT payload FROM index_jobs")] if jobs_exists else []
             if any(job.get("table_id") == tid and job.get("status") in ("queued", "running") for job in jobs):
                 raise APIError(409, "TABLE_INDEX_ACTIVE", "wait for the table's index job to finish")
+            if bulk_jobs.active_for_table(tid):
+                raise APIError(409, "TABLE_BULK_ACTIVE", "wait for the table's bulk row job to finish")
 
             upload_database = root / "uploads.sqlite"
             if upload_database.exists():
@@ -825,29 +869,135 @@ def create_app(settings=None):
         limit: int = 100,
         cursor: str = "",
         include_deleted: bool = False,
+        sort_by: str | None = Query(default=None, description="Optional schema or system field for table-wide ordering."),
+        direction: str | None = Query(default=None, description="Sort direction: asc or desc; defaults to asc when sort_by is set."),
         actor=Depends(scope("xelibrary:read")),
     ):
+        """List visible rows; sorted cursors are bound to the table, ordering, and deleted-row filter."""
         table, permits = authorize_request(actor, tid, "read")
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
         with table_connect(tid) as db:
-            rows = [
-                decode(r)
-                for r in db.execute(
-                    "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id",
-                    (include_deleted, cursor),
-                )
-                if permits("read", r["_row_id"])
-            ][: limit + 1]
+            if sort_by is None:
+                if direction is not None:
+                    raise APIError(422, "INVALID_SORT", "direction requires sort_by")
+                if cursor.startswith(SORT_CURSOR_PREFIX):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+                query = "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id"
+                raw_rows = db.execute(query, (include_deleted, cursor))
+                rows = []
+                for raw in raw_rows:
+                    if permits("read", raw["_row_id"]):
+                        rows.append(decode(raw))
+                        if len(rows) > limit:
+                            break
+                page = rows[:limit]
+                next_cursor = page[-1]["_row_id"] if len(rows) > limit else None
+                return response(request, page, next_cursor=next_cursor)
+
+            direction = "asc" if direction is None else direction
+            if direction not in {"asc", "desc"}:
+                raise APIError(422, "INVALID_SORT", "direction must be asc or desc")
+            if not sort_by:
+                raise APIError(422, "INVALID_SORT", "sort_by must be a non-empty field name")
+
+            system_sort_expressions = {
+                "_row_id": "_row_id",
+                "_revision": "_revision",
+                "_created_at": "_created_at",
+                "_updated_at": "_updated_at",
+                "_deleted_at": "_deleted_at",
+            }
+            if sort_by in system_sort_expressions:
+                sort_expression = system_sort_expressions[sort_by]
+                sort_parameters = []
+            else:
+                if not any(column["name"] == sort_by for column in columns(db)):
+                    raise APIError(422, "INVALID_SORT", "sort_by must name a schema or supported system field")
+                # Schema field names are constrained by Column.name. Bind the JSON path
+                # as data as well, so it can never become SQL syntax.
+                sort_expression = "json_extract(values_json, ?)"
+                sort_parameters = ['$.' + json.dumps(sort_by, ensure_ascii=False)]
+
+            sort_cursor = None
+            if cursor:
+                sort_cursor = decode_rows_sort_cursor(cursor)
+                expected = {
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                }
+                if any(sort_cursor.get(key) != value for key, value in expected.items()):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested table, sort, or filters")
+                after_row_id = sort_cursor.get("after_row_id")
+                after_value = sort_cursor.get("after_value")
+                if not isinstance(after_row_id, str) or not after_row_id or not (
+                    after_value is None or type(after_value) in {int, float, str}
+                ):
+                    raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+
+            query = f"SELECT * FROM (SELECT data.*, {sort_expression} AS __sort_value FROM data) "
+            query += "WHERE (? OR _deleted_at IS NULL)"
+            parameters = [*sort_parameters, include_deleted]
+            if sort_cursor:
+                after_value = sort_cursor["after_value"]
+                after_row_id = sort_cursor["after_row_id"]
+                if after_value is None:
+                    # SQLite sorts NULL first for ASC and last for DESC. An ASC
+                    # cursor inside the NULL group must still admit every
+                    # non-NULL row that follows it; only DESC NULLs are terminal.
+                    if direction == "asc":
+                        query += " AND ((__sort_value IS NULL AND _row_id>?) OR __sort_value IS NOT NULL)"
+                    else:
+                        query += " AND __sort_value IS NULL AND _row_id>?"
+                    parameters.append(after_row_id)
+                else:
+                    operator = ">" if direction == "asc" else "<"
+                    query += f" AND (__sort_value {operator} ? OR (__sort_value = ? AND _row_id>?)"
+                    parameters.extend((after_value, after_value, after_row_id))
+                    # SQLite puts NULL first for ASC and last for DESC. Only the
+                    # latter can still appear after a non-null cursor value.
+                    if direction == "desc":
+                        query += " OR __sort_value IS NULL"
+                    query += ")"
+            query += f" ORDER BY __sort_value {direction.upper()}, _row_id ASC"
+            rows = []
+            for raw in db.execute(query, parameters):
+                if permits("read", raw["_row_id"]):
+                    rows.append((decode(raw), raw["__sort_value"]))
+                    if len(rows) > limit:
+                        break
+
+            page = [row for row, _ in rows[:limit]]
+            next_cursor = None
+            if len(rows) > limit:
+                last_row, last_value = rows[limit - 1]
+                next_cursor = encode_rows_sort_cursor({
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                    "after_value": last_value,
+                    "after_row_id": last_row["_row_id"],
+                })
         return response(
-            request, rows[:limit], next_cursor=rows[limit - 1]["_row_id"] if len(rows) > limit else None
+            request, page, next_cursor=next_cursor
         )
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}")
-    def get_row(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+    def get_row(
+        tid: str,
+        rid: str,
+        request: Request,
+        include_deleted: bool = False,
+        actor=Depends(scope("xelibrary:read")),
+    ):
         authorize(actor, tid, "read", rid)
         with table_connect(tid) as db:
-            row = load_row(db, rid)
+            row = load_row(db, rid, include_deleted=include_deleted)
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
     @app.patch("/api/v1/tables/{tid}/rows/{rid}")
@@ -933,10 +1083,25 @@ def create_app(settings=None):
         Every item reuses the single-row semantics - schema validation, table and
         row ACL, per-item revision checks, change log, FTS maintenance and Qdrant
         cleanup - and commits in its own transaction, so partial success never
-        rolls back rows that were already applied.
+        rolls back rows that were already applied. The per-item result is written
+        in the same table transaction as the mutation, so a crash between the
+        table commit and the durable job record can be reconciled on restart
+        instead of silently losing applied rows.
         """
         bulk_jobs.start(job_id)
-        done = 0
+        with table_transaction(tid) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS __xl_bulk_applied("
+                "job_id TEXT,item_index INTEGER,result TEXT NOT NULL,failed INTEGER NOT NULL,"
+                "PRIMARY KEY(job_id,item_index))"
+            )
+
+        def mark(db, index, result, failed=False):
+            db.execute(
+                "INSERT OR REPLACE INTO __xl_bulk_applied VALUES(?,?,?,?)",
+                (job_id, index, json.dumps(result, sort_keys=True), 1 if failed else 0),
+            )
+
         try:
             for index, item in enumerate(rows):
                 failed = False
@@ -954,7 +1119,8 @@ def create_app(settings=None):
                             change(db, row, "create")
                             db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
                             index_cjk_row(db, rid, values.values())
-                        result = {"index": index, "status": "created", "row_id": rid, "revision": 1}
+                            result = {"index": index, "status": "created", "row_id": rid, "revision": 1}
+                            mark(db, index, result)
                     elif kind == "update":
                         authorize(actor, tid, "write", item.row_id)
                         with table_transaction(tid) as db:
@@ -972,7 +1138,8 @@ def create_app(settings=None):
                             db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
                             db.execute("INSERT INTO __xl_fts VALUES(?,?)", (item.row_id, " ".join(str(x) for x in values.values())))
                             index_cjk_row(db, item.row_id, values.values())
-                        result = {"index": index, "status": "updated", "row_id": item.row_id, "revision": row["_revision"]}
+                            result = {"index": index, "status": "updated", "row_id": item.row_id, "revision": row["_revision"]}
+                            mark(db, index, result)
                     else:
                         authorize(actor, tid, "write", item.row_id)
                         with table_transaction(tid) as db:
@@ -988,8 +1155,9 @@ def create_app(settings=None):
                             db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
                             if cjk_fts_exists(db):
                                 db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (item.row_id,))
+                            result = {"index": index, "status": "deleted", "row_id": item.row_id}
+                            mark(db, index, result)
                         audit(actor, "row.deleted", f"{tid}:{item.row_id}")
-                        result = {"index": index, "status": "deleted", "row_id": item.row_id}
                 except APIError as error:
                     failed = True
                     result = {
@@ -1003,24 +1171,64 @@ def create_app(settings=None):
                         "index": index, "status": "failed",
                         "error": {"code": "INTERNAL_ERROR", "message": "item failed; see service logs"},
                     }
-                done += 1
                 bulk_jobs.record(job_id, result, failed)
         except Exception:
             bulk_jobs.fail(job_id, "bulk worker crashed; partial results retained")
             raise
 
+    def _bulk_marker_reader(tid, job_id):
+        target = file(tid)
+        if not target.is_file():
+            return []
+        with connect(target) as db:
+            if not db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='__xl_bulk_applied'"
+            ).fetchone():
+                return []
+            return [
+                (row["item_index"], row["result"], row["failed"])
+                for row in db.execute(
+                    "SELECT item_index,result,failed FROM __xl_bulk_applied WHERE job_id=? ORDER BY item_index",
+                    (job_id,),
+                )
+            ]
+
+    bulk_jobs.recover(_bulk_marker_reader)
+
+    def _duplicate_job_response(request, job):
+        return JSONResponse(response(request, {
+            "mode": job["status"], "job_id": job["id"], "duplicate": True,
+            "status": job["status"], "total": job["total"],
+            "done": job["done"], "failed": job["failed"],
+        }))
+
     def _bulk_submit(kind, items, request, background, actor, tid, batch_id):
         sync_limit, max_rows = _bulk_thresholds()
         _bulk_guard(items, actor, tid, max_rows)
-        existing = bulk_jobs.find_batch(batch_id) if batch_id else None
-        if existing is not None:
-            return JSONResponse(response(request, {
-                "mode": existing["status"], "job_id": existing["id"], "duplicate": True,
-                "status": existing["status"], "total": existing["total"],
-                "done": existing["done"], "failed": existing["failed"],
-            }))
         payload = [item.model_dump() for item in items]
-        job_id = bulk_jobs.create(tid, kind, payload, actor.sub, batch_id)
+        digest = payload_digest(kind, tid, payload)
+        existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind) if batch_id else None
+        if existing is not None:
+            if existing["payload_digest"] != digest:
+                raise APIError(
+                    409, "BATCH_CONFLICT",
+                    "batch_id was already used for a different payload for this table and caller",
+                )
+            return _duplicate_job_response(request, existing)
+        try:
+            job_id = bulk_jobs.create(tid, kind, payload, actor.sub, batch_id)
+        except sqlite3.IntegrityError:
+            # Concurrent identical requests race on the scoped unique index; the
+            # loser re-reads the winning job instead of applying the batch twice.
+            existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+            if existing is None:
+                raise
+            if existing["payload_digest"] != digest:
+                raise APIError(
+                    409, "BATCH_CONFLICT",
+                    "batch_id was already used for a different payload for this table and caller",
+                ) from None
+            return _duplicate_job_response(request, existing)
         if len(items) <= sync_limit:
             _bulk_apply(job_id, tid, kind, items, actor)
             job = bulk_jobs.get(job_id)
@@ -1564,6 +1772,84 @@ def create_app(settings=None):
     )
     recover_table_deletions()
 
+    @app.get("/api/v1/tables/{tid}/attachments", response_model=AttachmentCandidatePage, description=(
+        "List same-table attachment metadata for currently readable, live source rows. "
+        "Requires xelibrary:read and table/row ACL. UUID keyset cursor is bound to table "
+        "and normalized search, not authority; every page checks current identity/ACL. "
+        "At most 500 references are examined per page; empty pages may have next_cursor. "
+        "Search is a casefolded substring of filename or displayed source_label. "
+        "No content, object hash, row values, preview or total count is returned."
+    ))
+    def list_table_attachments(
+        tid: str,
+        request: Request,
+        limit: int = Query(default=25, ge=1, le=100),
+        q: str = Query(default="", max_length=200),
+        cursor: str = Query(default="", max_length=2048),
+        actor=Depends(scope("xelibrary:read")),
+    ):
+        _, permits = authorize_request(actor, tid, "read")
+        query = q.strip().casefold()
+        after = ""
+        if cursor:
+            try:
+                decoded = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+                if not isinstance(decoded, dict) or set(decoded) != {"v", "table", "q", "after"}:
+                    raise ValueError
+                after = decoded["after"]
+                if (type(decoded["v"]) is not int or decoded["v"] != 1 or decoded["table"] != tid or decoded["q"] != query
+                        or not isinstance(after, str) or str(UUID(after)) != after):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError, binascii.Error):
+                raise APIError(422, "INVALID_CURSOR", "invalid attachment list cursor") from None
+        visible = []
+        last = after
+        more = False
+        with table_connect(tid) as db:
+            schema = columns(db)
+            names = [c["name"] for c in schema if c["type"] in ("string", "text")]
+            names = [name for name in ("title", "name") if name in names] + [
+                name for name in names if name not in ("title", "name")
+            ]
+            rows = db.execute(
+                "SELECT a.*,d._row_id AS source_row_id,d._deleted_at FROM __xl_attachments a LEFT JOIN data d ON d._row_id=a.row_id "
+                "WHERE a.attachment_id>? "
+                "ORDER BY a.attachment_id LIMIT 501", (after,)
+            ).fetchall()
+            # References can share a large source row; retain only its bounded label,
+            # and never load its values before checking the current read permission.
+            labels = {}
+            for attachment in rows[:500]:
+                if (attachment["source_row_id"] is not None and not attachment["_deleted_at"]
+                        and permits("read", attachment["row_id"])):
+                    source = attachment["row_id"]
+                    if source not in labels:
+                        row = db.execute(
+                            "SELECT values_json FROM data WHERE _row_id=? "
+                            "AND (_deleted_at IS NULL OR _deleted_at='')", (source,)
+                        ).fetchone()
+                        labels[source] = None
+                        if row is not None and row["values_json"] is not None:
+                            values = json.loads(row["values_json"])
+                            labels[source] = next((values[name].strip()[:256] for name in names
+                                                   if isinstance(values.get(name), str) and values[name].strip()), source)
+                    label = labels[source]
+                    if label is not None and (not query or query in attachment["filename"].casefold()
+                                              or query in label.casefold()):
+                        if len(visible) == limit:
+                            more = True
+                            break
+                        # Only the readable row's label is exposed, never its other values.
+                        visible.append({**attachment_metadata(attachment), "source_label": label})
+                last = attachment["attachment_id"]
+            more = more or len(rows) > 500
+        next_cursor = None
+        if more:
+            next_cursor = base64.urlsafe_b64encode(json.dumps({
+                "v": 1, "table": tid, "q": query, "after": last
+            }, separators=(",", ":"), ensure_ascii=False).encode()).decode()
+        return response(request, visible, next_cursor=next_cursor)
+
     @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
     def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         authorize(actor, tid, "read", rid)
@@ -1701,12 +1987,7 @@ def create_app(settings=None):
     )
     install_theorems(app, catalogue, allowed, audit)
 
-    @app.post("/api/v1/search/hybrid")
-    def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
-        raise APIError(503, "HYBRID_NOT_CONFIGURED", "hybrid fusion not yet implemented")
-
-    @app.post("/api/v1/search/text")
-    def text_search(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+    def collect_text(body, actor):
         # Literal term query: user input cannot inject FTS operators.
         terms = body.query.split()
         fts_query = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
@@ -1841,12 +2122,41 @@ def create_app(settings=None):
                         break
         results = list(results_by_row.values())
         results.sort(key=lambda x: x["score"], reverse=True)
-        return response(
-            request,
-            results[: body.limit],
-            partial=partial,
-            approximate=partial or any(hit["approximate"] for hit in results[: body.limit]),
-        )
+        return results[: body.limit], {
+            "partial": partial,
+            "approximate": partial or any(hit["approximate"] for hit in results[: body.limit]),
+        }
+
+    @app.post(
+        "/api/v1/search/text",
+        response_model=SearchResponse,
+        response_model_exclude_none=True,
+        responses=SEARCH_ERRORS,
+    )
+    def text_search(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        hits, meta = collect_text(body, actor)
+        return response(request, hits, **meta)
+
+    @app.post(
+        "/api/v1/search/hybrid",
+        response_model=SearchResponse,
+        response_model_exclude_none=True,
+        responses=SEARCH_ERRORS,
+    )
+    def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        # FTS and vector scores occupy different spaces; merge ranks only.
+        quality = app.state.quality_pipeline
+        deadline = quality.clock() + quality.time_budget if body.mode == "quality" else None
+        semantic_hits, meta = app.state.semantic_collect(body, actor, request.state.request_id, deadline=deadline)
+        text_body = body.model_copy(update={"limit": min(max(body.limit * 5, 100), 500)})
+        text_hits, text_meta = collect_text(text_body, actor)
+        hits = ranked_fusion([semantic_hits, text_hits], "hybrid_rrf")
+        current = [hit for hit in hits if app.state.search_revalidate(hit, body, actor)]
+        if deadline is not None:
+            quality.check_deadline(deadline)
+        meta["partial"] = bool(meta["partial"] or text_meta["partial"] or len(current) != len(hits))
+        meta["approximate"] = bool(text_meta["approximate"] or any(hit["approximate"] for hit in current))
+        return response(request, current[: body.limit], **meta)
 
     snapshot_ttl = 60
     snapshot_lock = threading.Lock()

@@ -137,6 +137,29 @@ async function rectOf(cdp, selector) {
   })()`);
 }
 
+// CI runners occasionally swallow a single dispatched key event while the
+// renderer is still settling; retry the keystroke until the expected UI shows
+// up (or the attempts run out) instead of failing the whole acceptance run.
+async function keyUntil(cdp, conditionExpression, key, code, modifiers = 0, attempts = 6) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await cdp.key(key, code, modifiers);
+    try {
+      const until = Date.now() + 1200;
+      while (Date.now() < until) {
+        try {
+          if (await cdp.evaluate(conditionExpression)) return;
+        } catch {
+          /* keep polling */
+        }
+        await sleep(80);
+      }
+    } catch {
+      /* retry the keystroke */
+    }
+  }
+  throw new Error(`keyboard condition not met after ${attempts} attempts: ${conditionExpression.slice(0, 80)}`);
+}
+
 async function centerOf(cdp, selector) {
   return cdp.evaluate(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
@@ -217,7 +240,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     }))()`);
     assert.ok(chromeState.menubar.includes('文件'), 'file menu is present');
     assert.ok(chromeState.menubar.includes('窗口'), 'window menu is present');
-    for (const title of ['LaunchPad', '知识库', '系统设置']) assert.ok(chromeState.dock.includes(title), `dock contains ${title}`);
+    for (const title of ['LaunchPad', '知识库', 'Embedding', '系统设置']) assert.ok(chromeState.dock.includes(title), `dock contains ${title}`);
 
     // Real pointer events exercise outside-click capture, separators and focus restoration.
     const click = async selector => {
@@ -238,14 +261,12 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
 
     const pinnedTitles = () => cdp.evaluate("[...document.querySelectorAll('nav.dock .ds-pinned')].map(button=>button.title)");
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
-    await cdp.key('F10', 'F10', 8 /* Shift */);
-    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'keyboard Dock menu');
+    await keyUntil(cdp, "Boolean(document.querySelector('.ds-context-menu'))", 'F10', 'F10', 8 /* Shift */);
     await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向右移动')).setAttribute('data-test','right')");
     await click('.ds-context-menu [data-test=right]');
     await waitFor(async () => (await pinnedTitles())[1] === '知识库', 'Dock moves right with real pointer click');
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"知识库\"]').focus()");
-    await cdp.key('F10', 'F10', 8);
-    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-context-menu'))"), 'Dock menu again');
+    await keyUntil(cdp, "Boolean(document.querySelector('.ds-context-menu'))", 'F10', 'F10', 8);
     await cdp.evaluate("[...document.querySelectorAll('.ds-context-menu button')].find(button=>button.innerText.includes('向左移动')).setAttribute('data-test','left')");
     await click('.ds-context-menu [data-test=left]');
     await waitFor(async () => (await pinnedTitles())[0] === '知识库', 'Dock moves left');
@@ -270,6 +291,112 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-menu-popover'))"), 'registry app menu');
     await cdp.evaluate("[...document.querySelectorAll('.ds-menu-popover button')].find(button=>button.innerText.includes('Query Console')).click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.library-query'))"), 'menu intent opens Query Console');
+
+    // Embedding is a separate native app; both encoding and owner-scoped queue data
+    // use the same authenticated API boundary and only render fixture responses.
+    await cdp.evaluate('window.shellFixture.control.embeddingEnabled=true');
+    await cdp.evaluate("document.querySelector('nav.dock button[title=\"Embedding\"]').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=embedding] .embedding-app'))"), 'Embedding app');
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-app').innerText.includes('D100M-Embedding')"), 'model readiness from API');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-text');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'fixture text');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-result')?.innerText.includes('3 维')"), 'real-shaped embedding response displayed');
+    assert.match(await cdp.evaluate("document.querySelector('.embedding-queue-scroll').innerText"), /fixture-job-1/);
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embed/text'&&call.method==='POST'&&call.body.input==='fixture text')"), true, 'text is submitted through API boundary');
+    const editEmbeddingText = value => cdp.evaluate(`(() => {const input=document.querySelector('#embedding-text');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,${JSON.stringify(value)});input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    const generateEmbedding = () => cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
+    const embeddingSettled = () => waitFor(() => cdp.evaluate("![...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).hasAttribute('aria-busy')"), 'encoding request settled');
+    await editEmbeddingText('edited text');
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result'))"), false, 'editing completed input clears the old result');
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR, {recursive:true});
+      const screenshot = await cdp.call('Page.captureScreenshot', {format:'png'});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue142-edited-input.png'),Buffer.from(screenshot.data,'base64'));
+    }
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.embedding-result'))"), 'encoding the edited input produces a new result');
+
+    // Barrier-controlled responses exercise real React state without timing races.
+    for (const failure of [false,true]) {
+      await editEmbeddingText('pending original');
+      await cdp.evaluate(`window.shellFixture.control.delayEmbedding=true;window.shellFixture.control.busyEmbedding=${failure}`);
+      await generateEmbedding();
+      await waitFor(() => cdp.evaluate('window.shellFixture.control.embeddingPending===1'), 'encoding blocked on fixture barrier');
+      await editEmbeddingText('pending edited');
+      assert.equal(await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).disabled"), true, 'editing keeps synchronous request busy until it settles');
+      await editEmbeddingText('pending original');
+      await cdp.evaluate('window.shellFixture.resolveEmbedding()');
+      await embeddingSettled();
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result,.embedding-error'))"), false, 'edited drafts discard old success and failure even after changing back');
+      await cdp.evaluate('window.shellFixture.control.delayEmbedding=false;window.shellFixture.control.busyEmbedding=false');
+    }
+    await cdp.evaluate('window.shellFixture.control.qualityReady=true');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("!document.querySelector('#embedding-model option[value=quality]').disabled"), 'second synthetic model ready');
+    await cdp.evaluate('window.shellFixture.control.delayEmbedding=true');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate('window.shellFixture.control.embeddingPending===1'), 'model-change request barrier');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-model');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(input,'quality');input.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await cdp.evaluate('window.shellFixture.resolveEmbedding()');
+    await embeddingSettled();
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result,.embedding-error'))"), false, 'changing model discards the previous model response');
+    await cdp.evaluate('window.shellFixture.control.delayEmbedding=false');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-model');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(input,'fast');input.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=true');
+    await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('D100M worker busy')"), '429 worker busy response remains visible and is not queued');
+    await editEmbeddingText('fresh after failure');
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-error'))"), false, 'editing clears a completed error for the old input');
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=false');
+    // Batch encoding stays one synchronous request and maps out-of-order indexes.
+    const addInput = () => cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('新增输入项')).click()");
+    await addInput();
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).disabled"), true, 'blank added item blocks submitting');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-text-1');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'second text');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await cdp.evaluate('window.shellFixture.resetCalls()');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-result-item').length===2"), 'two indexed embedding results');
+    const batchCalls = await cdp.evaluate("window.shellFixture.calls.filter(call=>call.path==='/embed/text')");
+    assert.equal(batchCalls.length,1,'multiple items generate a single request');
+    assert.deepEqual(batchCalls[0].body.input,['fresh after failure','second text']);
+    await cdp.evaluate("document.querySelectorAll('.embedding-result-item details').forEach(details=>details.open=true)");
+    assert.deepEqual(await cdp.evaluate("[...document.querySelectorAll('.embedding-result-item')].map(item=>({index:item.dataset.inputIndex,input:item.querySelector('.embedding-result-input').innerText,vector:JSON.parse(item.querySelector('details pre').innerText)}))"),
+      [{index:'0',input:'fresh after failure',vector:[0.125,-0.5,0.25]},{index:'1',input:'second text',vector:[1.125,-0.5,0.25]}]);
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR,{recursive:true});
+      await cdp.evaluate("document.querySelector('.embedding-result').scrollIntoView({block:'center'})");
+      const screenshot=await cdp.call('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue145-batch-results.png'),Buffer.from(screenshot.data,'base64'));
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue145-batch-report.json'),JSON.stringify({browser:chromePath,dataSource:'synthetic shell fixture',request:batchCalls[0],requestCount:batchCalls.length,rendered:await cdp.evaluate("[...document.querySelectorAll('.embedding-result-item')].map(item=>({index:item.dataset.inputIndex,input:item.querySelector('.embedding-result-input').innerText,vector:JSON.parse(item.querySelector('details pre').innerText)}))"),realModelInference:false},null,2)+'\n');
+    }
+    await cdp.evaluate('window.shellFixture.control.malformedEmbedding=true');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('输入索引')"), 'malformed batch response shown as error');
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result'))"),false,'malformed response never publishes partial vectors');
+    await cdp.evaluate('window.shellFixture.control.malformedEmbedding=false;window.shellFixture.control.busyEmbedding=true');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('D100M worker busy')"), 'batch worker429 stays an error and is not queued');
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=false');
+    for (let i=2;i<32;i++) await addInput();
+    assert.equal(await cdp.evaluate("document.querySelectorAll('.embedding-input-item').length"),32,'input count reaches maximum32');
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('新增输入项')).disabled"),true,'cannot add item33');
+    assert.equal(await cdp.evaluate("document.querySelector('#embedding-text').maxLength"),32768,'existing per-text character limit remains');
+    for (let i=32;i>1;i--) await cdp.evaluate(`document.querySelector('button[aria-label="移除输入项 ${i}"]').click()`);
+    assert.equal(await cdp.evaluate("document.querySelectorAll('.embedding-input-item').length"),1,'items can be removed back to single mode');
+    assert.equal(await cdp.evaluate("document.querySelector('button[aria-label=\"移除输入项 1\"]').disabled"),true,'last input cannot be removed');
+    await cdp.evaluate('window.shellFixture.control.embeddingReadOnly=true;window.shellFixture.resetCalls()');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-app').innerText.includes('需要生成权限')"), 'read-only account cannot generate');
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embed/text')"),false,'no request without write scope');
+    await cdp.evaluate('window.shellFixture.control.embeddingReadOnly=false');
+    await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=true');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-panel')[1]?.innerText.includes('403 embedding:read required')"), 'queue API denial surfaced');
+    await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=false;window.shellFixture.control.embeddingEnabled=false;window.shellFixture.resetCalls()');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-panel')[1]?.innerText.includes('需要 embedding:read 权限')"), 'queue hidden without verified embedding scope');
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embedding/jobs?limit=50')"), false, 'no queue request is sent without scope');
+    await cdp.evaluate('window.shellFixture.control.embeddingEnabled=false');
 
     const keyboardBefore = await rectOf(cdp, '.window[data-app-id=knowledge]');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar').focus()");
@@ -304,15 +431,49 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("document.querySelector('.dock-minimized button').click()");
     await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('.window[data-app-id=knowledge]')).visibility==='visible'"), 'restored window');
 
-    // Window: maximize respects the menu bar and dock, and restores its previous rect.
+    // Window: maximize fills the viewport and temporarily hides the Dock.
     const beforeMax = await rectOf(cdp, '.window[data-app-id=knowledge]');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').click()");
     await sleep(150);
     const maximized = await rectOf(cdp, '.window[data-app-id=knowledge]');
-    assert.equal(maximized.y, 42, 'maximized window starts below the menu bar and keeps a margin');
-    assert.ok(maximized.h <= 900 - 30 - 90, 'maximized window leaves room for the dock');
+    assert.equal(maximized.x, 0);
+    assert.equal(maximized.y, 30, 'maximized window starts immediately below the menu bar');
+    assert.equal(maximized.w, 1440);
+    assert.equal(maximized.y + maximized.h, await cdp.evaluate('innerHeight'));
+    await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('nav.dock')).opacity==='0'"), 'Dock hides while maximized');
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR, {recursive:true});
+      const screenshot = await cdp.call('Page.captureScreenshot', {format:'png'});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue133-maximized.png'),Buffer.from(screenshot.data,'base64'));
+    }
+
+    // Compact widgets and each Dock size must leave maximized content reachable.
+    for (const [width, height] of [[1366,768],[820,1180],[390,844]]) {
+      await cdp.call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor: 1, mobile: width < 768});
+      await sleep(250);
+      const rect = await rectOf(cdp, '.window[data-app-id=knowledge]');
+      assert.deepEqual(rect, {x:0,y:30,w:width,h:height-30}, 'maximized frame follows viewport edges');
+      if (width < 1024) assert.equal(await cdp.evaluate("getComputedStyle(document.querySelector('.widgets')).visibility"), 'hidden');
+      for (const size of ['small','medium','large']) {
+        await cdp.evaluate(`document.querySelector('nav.dock').classList.remove('dock-size-small','dock-size-medium','dock-size-large');document.querySelector('nav.dock').classList.add('dock-size-${size}')`);
+        assert.equal(await cdp.evaluate("document.elementFromPoint(innerWidth/2,innerHeight-20)?.closest('.window')?.dataset.appId"), 'knowledge', `${size} Dock does not cover bottom content`);
+      }
+    }
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width:1440,height:900,deviceScaleFactor:1,mobile:false});
+    await sleep(250);
+    await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .min').click()");
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'minimizing removes temporary Dock hiding');
+    await cdp.evaluate("document.querySelector('.dock-minimized button').click()");
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), true, 'restoring maximized window hides Dock again');
+    await cdp.call('Input.dispatchMouseEvent', {type:'mouseMoved',x:720,y:899});
+    await waitFor(() => cdp.evaluate("getComputedStyle(document.querySelector('nav.dock')).opacity==='1'"), 'bottom edge reveals Dock over maximized app');
+    await click('nav.dock button[title="系统设置"]');
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'normal foreground window shows Dock while maximized window remains behind');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').focus()");
+    await waitFor(() => cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), 'keyboard focus on maximized window hides Dock');
     await cdp.evaluate("document.querySelector('.window[data-app-id=knowledge] .bar .max').click()");
     await sleep(150);
+    assert.equal(await cdp.evaluate("document.querySelector('nav.dock').classList.contains('ds-autohide')"), false, 'restore retains the non-autohide preference');
     const restored = await rectOf(cdp, '.window[data-app-id=knowledge]');
     assert.ok(Math.abs(restored.x - beforeMax.x) <= 4 && Math.abs(restored.w - beforeMax.w) <= 4, 'restore returns the previous rectangle');
 
@@ -327,11 +488,13 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.key('k', 'KeyK', 2 /* Ctrl */);
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.command-palette'))"), 'command palette');
     await cdp.evaluate(`(() => {const input=document.querySelector('.command-input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'Harness');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.command-item').length>=2"), 'palette items');
+    for (let step = 0; step < 6; step += 1) {
+      if (await cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))")) break;
+      await cdp.key('ArrowDown', 'ArrowDown');
+    }
     await waitFor(
-      () =>
-        cdp.evaluate(
-          "(()=>{const items=[...document.querySelectorAll('.command-item')];const selected=document.querySelector('.command-item[aria-selected=\"true\"]');return Boolean(selected&&selected.innerText.includes('任务')&&items.length===2)})()",
-        ),
+      () => cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))"),
       'palette keyboard selection',
     );
     await cdp.key('Enter', 'Enter');
@@ -358,6 +521,40 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     // Settings persist through the platform API and drive the document theme.
     await cdp.evaluate("document.querySelector('nav.dock button[title=\"系统设置\"]').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=settings] .settings-panel'))"), 'settings window');
+    await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('日历')).querySelector('input').click()");
+    await cdp.evaluate("[...document.querySelectorAll('.widget-options label')].find(label=>label.innerText.includes('应用快捷入口')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.widget-calendar')&&document.querySelector('.widget-shortcuts'))"), 'calendar and app shortcut widgets');
+    // The 12-item shortcut cap is visible and counted instead of replacing silently.
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=shortcut-limit-hint]')?.innerText.includes('已选 0/12')"), 'shortcut limit hint shows the empty count');
+    await cdp.evaluate("[...document.querySelectorAll('.widget-shortcut-options label')].find(label=>label.innerText.includes('知识库')).querySelector('input').click()");
+    await waitFor(() => cdp.evaluate("window.shellFixture.preferences.shortcut_apps.includes('knowledge')"), 'authorized app shortcut saved');
+    await waitFor(() => cdp.evaluate("document.querySelector('[data-testid=shortcut-limit-hint]')?.innerText.includes('已选 1/12')"), 'shortcut limit hint updates with the selection');
+    assert.match(await cdp.evaluate("document.querySelector('.widget-calendar').getAttribute('aria-label')"), /日历/);
+    await cdp.evaluate("document.querySelector('.widget-shortcuts button[aria-label=\"打开知识库\"]').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), 'authorized app opened from shortcut widget');
+    const wallpaperPath = path.join(os.tmpdir(), `xeonolab-wallpaper-${process.pid}.png`);
+    await fs.writeFile(wallpaperPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/4ZsAAAAASUVORK5CYII=', 'base64'));
+    const documentNode = await cdp.call('DOM.getDocument', {depth: -1});
+    const wallpaperInput = await cdp.call('DOM.querySelector', {nodeId: documentNode.root.nodeId, selector: 'input[aria-label="选择自定义壁纸"]'});
+    await cdp.call('DOM.setFileInputFiles', {files: [wallpaperPath], nodeId: wallpaperInput.nodeId});
+    await waitFor(() => cdp.evaluate("window.shellFixture.preferences.wallpaper==='custom'"), 'custom wallpaper choice persisted through API');
+    await waitFor(() => cdp.evaluate("document.querySelector('.desktop[data-wallpaper-custom=\"image\"]')?.style.backgroundImage.includes('blob:')"), 'saved wallpaper loaded for shell background');
+    const renderedWallpaper = await cdp.evaluate(`(async () => {
+      const background = getComputedStyle(document.querySelector('.desktop')).backgroundImage;
+      const url = background.match(/url\\(["']?(blob:[^"')]+)["']?\\)/)?.[1];
+      if (!url) return false;
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return image.naturalWidth > 0 && image.naturalHeight > 0;
+    })()`);
+    assert.equal(renderedWallpaper, true, 'the rendered account wallpaper decodes in the browser');
+    assert.ok(await cdp.evaluate("window.shellFixture.calls.some(call=>call.method==='PUT'&&call.path==='/users/me/wallpaper')"), 'wallpaper upload uses authenticated server API');
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 390, height: 844, deviceScaleFactor: 1, mobile: true});
+    const mobileWallpaperControl = await cdp.evaluate("(() => {const input=document.querySelector('input[aria-label=\"选择自定义壁纸\"]');input.scrollIntoView({block:'center'});const rect=input.getBoundingClientRect();return {left:rect.left,right:rect.right,width:innerWidth}})()");
+    assert.ok(mobileWallpaperControl.left >= 0 && mobileWallpaperControl.right <= mobileWallpaperControl.width, 'wallpaper control fits the 390px settings viewport');
+    await cdp.call('Emulation.setDeviceMetricsOverride', {width: 1440, height: 913, deviceScaleFactor: 1, mobile: false});
+    await fs.rm(wallpaperPath, {force: true});
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"减少动态效果\"]').click()");
     await waitFor(() => cdp.evaluate("document.documentElement.dataset.reducedMotion==='true'"), 'reduced motion applied');
     await cdp.evaluate("document.querySelector('button[role=switch][aria-label=\"Dock 自动隐藏\"]').click()");
@@ -566,7 +763,7 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
       return {text:card?.innerText,chart:card?.querySelector('.mac-bars')?.getAttribute('aria-label'),requests:window.shellFixture.calls.filter(call=>call.path.startsWith('/tables?')).map(call=>call.path)};
     })()`);
     assert.match(knowledgeOverview.text,/1 张表/);
-    assert.match(knowledgeOverview.chart,/示例 1 张表/);
+    assert.match(knowledgeOverview.chart,/目录：示例，1 张表/);
     assert.ok(knowledgeOverview.requests.includes('/tables?limit=1000'));
     await cdp.evaluate('window.shellFixture.control.delayTables=true');
     await cdp.evaluate("[...document.querySelectorAll('.dashboard-actions button')].find(button=>button.innerText==='刷新').click()");
@@ -593,9 +790,17 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody')?.innerText.includes('领取已过期')"),'System Agents view marks expired claim');
     assert.match(await cdp.evaluate("document.querySelector('.system-content .system-table-scroll tbody').innerText"),/已过期 · 可重领/);
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='存储').click()");
-    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('容量信息尚未接入')"),'Storage unavailable');
+    await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('hf-cache:read')"),'Storage scope notice without pool numbers');
     await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='审计').click()");
     await waitFor(()=>cdp.evaluate("document.querySelector('.system-content').innerText.includes('xelibrary:admin')"),'Audit permission denied');
+    await cdp.evaluate("[...document.querySelectorAll('.system-sidebar button')].find(button=>button.innerText==='网络').click()");
+    const lanEntry = await cdp.evaluate(`(() => {
+      const row=document.querySelector('.lan-entry');
+      return {origin:row?.querySelector('[data-testid=lan-entry-origin]')?.innerText,text:row?.innerText||'',buttons:[...document.querySelectorAll('.lan-entry button')].map(button=>button.innerText)};
+    })()`);
+    assert.equal(lanEntry.origin,'https://192.168.0.101:9443');
+    assert.ok(lanEntry.buttons.includes('复制内网入口'));
+    assert.match(lanEntry.text,/LAN CA/);
     await cdp.evaluate("document.querySelector('.window[data-app-id=system] .bar .close').click()");
 
     // Failed settings writes remain visible and are never labelled saved.
@@ -645,6 +850,10 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate(`(() => {const frame=document.querySelector('.iframe-app iframe');window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,origin:'http://127.0.0.1:${stalledPort}',data:{type:'app.ready'}}))})()`);
     await waitFor(() => cdp.evaluate("document.querySelector('.iframe-toolbar')?.innerText.includes('应用已连接')"), 'trusted iframe ready');
     assert.equal(await cdp.evaluate("document.querySelector('.iframe-app iframe').getAttribute('sandbox')"), 'allow-same-origin allow-scripts allow-forms', 'sandbox restrictions retained');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .max').click()");
+    const chatMax = await rectOf(cdp, '.window[data-app-id=chat]');
+    assert.deepEqual(chatMax, {x:0,y:30,w:1440,h:870}, 'OpenWebUI iframe window fills the desktop');
+    await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .max').click()");
     const frameId=await cdp.evaluate("document.querySelector('.iframe-app iframe').id");
     await cdp.evaluate("document.querySelector('.window[data-app-id=chat] .bar .min').click()");
     assert.equal(await cdp.evaluate("Boolean(document.getElementById('"+frameId+"'))"), true, 'minimize retains connected iframe');
@@ -760,6 +969,33 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.evaluate("sessionStorage.setItem('shell-fixture:layout',JSON.stringify({dock:[],windows:[],dock_initialized:true}))");
     await cdp.call('Page.reload');
     await waitFor(()=>cdp.evaluate("document.querySelectorAll('nav.dock .dock-item').length===1"),'explicitly empty Dock restored');
+
+    // A retired registry entry must not surface in the real shell. Existing server
+    // layouts migrate that entry to the native app while preserving unrelated state.
+    for (const scenario of ['legacy-xelibrary', 'legacy-xelibrary-duplicate']) {
+      await cdp.call('Page.navigate', {url: `http://127.0.0.1:${portNumber}/tests/shell-fixture.html?scenario=${scenario}`});
+      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=knowledge]'))"), `${scenario} restored as native Knowledge`);
+      await waitFor(() => cdp.evaluate("window.shellFixture.layout.dock.includes('knowledge') && !window.shellFixture.layout.dock.includes('xelibrary') && !window.shellFixture.layout.windows.some(win=>win.app_id==='xelibrary')"), `${scenario} layout migration persisted`);
+      assert.equal(await cdp.evaluate("window.shellFixture.registry.some(app=>app.id==='xelibrary')"), true, 'fixture confirms the legacy registry entry was supplied');
+      assert.equal(await cdp.evaluate("document.querySelectorAll('.window[data-app-id=xelibrary]').length"), 0, 'no legacy iframe window is rendered');
+      assert.equal(await cdp.evaluate("document.querySelectorAll('.window[data-app-id=knowledge]').length"), 1, 'one native knowledge window is restored');
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock button[title=\"知识库\"]'))"), true, 'native Knowledge appears on the Dock');
+      assert.equal(await cdp.evaluate("Boolean(document.querySelector('nav.dock button[title=\"AI 对话\"]'))"), true, 'unrelated chat window remains reachable from the Dock');
+      assert.equal(await cdp.evaluate("document.documentElement.dataset.theme==='dark' && document.documentElement.dataset.wallpaper==='aurora' && Boolean(document.querySelector('.widget-clock')) && Boolean(document.querySelector('.widget-status'))"), true, 'unrelated theme, wallpaper, and widgets remain applied');
+      const windows = await cdp.evaluate('window.shellFixture.layout.windows');
+      const knowledge = windows.find(win => win.app_id === 'knowledge');
+      const chat = windows.find(win => win.app_id === 'chat');
+      assert.ok(knowledge, 'persisted layout uses the native knowledge app id');
+      assert.deepEqual([knowledge.x, knowledge.y, knowledge.width, knowledge.height], [scenario.endsWith('duplicate') ? 120 : 70, scenario.endsWith('duplicate') ? 90 : 60, scenario.endsWith('duplicate') ? 1000 : 900, scenario.endsWith('duplicate') ? 650 : 600], 'the retained Knowledge window keeps its geometry');
+      assert.deepEqual([chat.title, chat.x, chat.y, chat.width, chat.height, chat.minimized], ['AI 对话自定义标题', 160, 120, 850, 560, true], 'unrelated window personalization survives');
+
+      await cdp.evaluate("document.querySelector('button[title=\"LaunchPad\"]').click()");
+      await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.launchpad'))"), `${scenario} LaunchPad`);
+      const launchpadTitles = await cdp.evaluate("[...document.querySelectorAll('.launchpad-app strong')].map(item=>item.textContent)");
+      assert.equal(launchpadTitles.includes('XeLibrary legacy iframe'), false, 'LaunchPad hides the legacy external app');
+      assert.equal(launchpadTitles.filter(title => title === '知识库').length, 1, 'LaunchPad exposes one native Knowledge app');
+      await cdp.key('Escape', 'Escape');
+    }
 
     // Exercise the real App/auth/session boundary with a synthetic server session.
     // Every refresh rotates its bearer token, reproducing production parent renders.
