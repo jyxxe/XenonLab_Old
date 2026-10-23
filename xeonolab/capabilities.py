@@ -158,7 +158,8 @@ def runtime_capabilities(registry, database, owner, scopes):
         permissions = manifest.permissions
         version = manifest.version
         for kind in ("app", "widget"):
-            if getattr(manifest, kind) is None:
+            descriptor = getattr(manifest, kind)
+            if descriptor is None:
                 continue
             items.append({
                 "id": f"plugin.{row['plugin_id']}.{kind}",
@@ -169,7 +170,7 @@ def runtime_capabilities(registry, database, owner, scopes):
                 "dependencies": [],
                 "source": "plugin",
                 "plugin_id": row["plugin_id"],
-                "desktop_id": section["id"],
+                "desktop_id": descriptor.id,
                 "installed": True,
                 "enabled": True,
             })
