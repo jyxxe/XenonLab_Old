@@ -5,7 +5,7 @@ OIDC_ROLE_SCOPES = {
         "accounts:manage dev:read dev:write desktop:read desktop:admin "
         "xelibrary:read xelibrary:write xelibrary:query xelibrary:attach "
         "xelibrary:theorem:read xelibrary:theorem:propose xelibrary:theorem:promote "
-        "xelibrary:admin embedding:read embedding:write deploy:read llm:use"
+        "xelibrary:admin embedding:read embedding:write deploy:read llm:use lean:verify"
     ).split(),
     # Dedicated human role for Embedding operators. desktop:read keeps the
     # desktop shell and /users/me reachable; registered accounts still need the

@@ -1,0 +1,39 @@
+[Unit]
+Description=XeonoLab Lean sandbox verifier (plan §40)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=xeonolab
+Group=xeonolab
+# The service process itself runs in a private network + mount namespace so
+# every Lean child inherits real kernel isolation. Readiness requires the
+# verifier's namespaces to differ from PID 1's; a unit without these settings
+# keeps the service unavailable instead of running verified-but-unsandboxed.
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=no
+LockPersonality=yes
+NoNewPrivileges=yes
+MemoryMax=4G
+TasksMax=256
+# Trusted, root-owned toolchain manifest (entries pin sha256 of each binary).
+Environment=LEAN_TOOLCHAINS_FILE=/etc/xeonolab/lean-toolchains.json
+Environment=DATA_DIR=/var/lib/xeonolab/lean-verifier
+# Read-only toolchain roots and the writable state directory only.
+ReadOnlyPaths=/opt/lean
+ReadWritePaths=/var/lib/xeonolab/lean-verifier
+ExecStart=/opt/xeonolab/current/.venv/bin/python -m uvicorn xeonolab.services:app --factory --host 127.0.0.1 --port 8107
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

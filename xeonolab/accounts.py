@@ -38,6 +38,7 @@ SCOPES = {
     "hf-cache:write",
     "hf-cache:admin",
     "llm:use",
+    "lean:verify",
     "deploy:read",
     "deploy:release",
     "deploy:approve",

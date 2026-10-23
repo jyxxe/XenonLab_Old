@@ -90,6 +90,7 @@ SERVICES = [
     "embedding",
     "hf-cache",
     "library-agent",
+    "lean-verifier",
     "dev-agent",
     "tool-gateway",
     "llm-gateway",
@@ -146,6 +147,10 @@ def create_app(service=None, settings=None):
         return factory(settings)
     if service == "hf-cache":
         from .hf_cache import create_app as factory
+
+        return factory(settings)
+    if service == "lean-verifier":
+        from .lean_verifier import create_app as factory
 
         return factory(settings)
 
