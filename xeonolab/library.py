@@ -3,6 +3,7 @@ import binascii
 import csv
 import fcntl
 import hashlib
+import io
 import json
 import logging
 import math
@@ -20,7 +21,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import BackgroundTasks, Depends, Header, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from .bulk_jobs import BulkJobStore, payload_digest
@@ -1978,6 +1979,55 @@ def create_app(settings=None):
             filename=attachment["filename"],
             media_type="application/octet-stream",
             headers={"X-Content-Type-Options": "nosniff"},
+        )
+
+    @app.get("/api/v1/attachments/{aid}/preview")
+    def preview(aid: str, table_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        """Isolated, non-active preview for server-detected PNG attachments.
+
+        The object is fully decoded and re-encoded with Pillow, so source chunks
+        (EXIF/ICC/text) never reach the browser and a corrupt image fails the
+        request instead of rendering partially. PDF previews need a rendering
+        dependency decision (issue #152) and stay unsupported here.
+        """
+        authorize(actor, table_id, "read")
+        with table_connect(table_id) as db:
+            attachment = db.execute("SELECT * FROM __xl_attachments WHERE attachment_id=?", (aid,)).fetchone()
+            if attachment is None:
+                raise APIError(404, "ATTACHMENT_NOT_FOUND", "attachment not found")
+            authorize(actor, table_id, "read", attachment["row_id"])
+            load_row(db, attachment["row_id"])
+        if attachment["media_type"] != "image/png":
+            raise APIError(415, "PREVIEW_UNSUPPORTED", "only server-detected PNG attachments have an isolated preview")
+        digest = attachment["object_hash"]
+        source = root / "objects" / "sha256" / digest[:2] / digest[2:4] / digest
+        if source.stat().st_size > 8 * 1024 * 1024:
+            raise APIError(413, "PREVIEW_TOO_LARGE", "attachment exceeds the 8 MiB preview limit")
+        from PIL import Image, UnidentifiedImageError
+
+        try:
+            with Image.open(source) as image:
+                if image.format != "PNG" or getattr(image, "n_frames", 1) != 1:
+                    raise APIError(415, "PREVIEW_UNSUPPORTED", "attachment is not a single-frame PNG")
+                # Bound decode memory using the header dimensions before load().
+                if image.width > 4096 or image.height > 4096 or image.width * image.height > 8_000_000:
+                    raise APIError(413, "PREVIEW_TOO_LARGE", "attachment exceeds the preview pixel limits")
+                image.load()
+                normalized = image.convert("RGBA")
+                buffer = io.BytesIO()
+                normalized.save(buffer, format="PNG")
+        except APIError:
+            raise
+        except (UnidentifiedImageError, OSError, ValueError, ZeroDivisionError):
+            raise APIError(422, "PREVIEW_DECODE_FAILED", "attachment could not be decoded as PNG") from None
+        return Response(
+            buffer.getvalue(),
+            media_type="image/png",
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+            },
         )
 
     @app.get("/api/v1/tables/{tid}/export")

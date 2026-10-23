@@ -1,6 +1,7 @@
 import React,{useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from 'react';
 import {ExistingAttachmentPicker} from './ExistingAttachmentPicker';
 import {createUploadStore, type UploadSession, type UploadStore} from './upload-state.js';
+import {canPreviewAttachment} from './attachment-preview.js';
 
 type API=(path:string,init?:RequestInit)=>Promise<any>;
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{[key:string]:any}}>
@@ -11,6 +12,8 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,canRead=
  const [pickerOpen,setPickerOpen]=useState(false);
  const binding=useRef(false);
  const [items,setItems]=useState<Attachment[]>([]),[message,setMessage]=useState(''),[sourceId,setSourceId]=useState(''),[localBusy,setBusy]=useState(false);
+ const [preview,setPreview]=useState<{url:string;filename:string}|null>(null);
+ useEffect(()=>{const current=preview;return()=>{if(current)URL.revokeObjectURL(current.url)}},[preview]);
  const localStore=useMemo(()=>createUploadStore(),[]),store=uploadStore||localStore;
  const uploadKey=JSON.stringify([tableId,rowId]);
  const subscribe=useCallback((notify:()=>void)=>store.subscribe(uploadKey,notify),[store,uploadKey]);
@@ -103,6 +106,16 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,canRead=
    if(!store.alive||active.current!==key)return;await load();if(!store.alive||active.current!==key)return;await onChanged();if(store.alive&&active.current===key)setMessage('附件关联已解除');
   }catch(e){if(store.alive&&active.current===key)setMessage(String(e))}finally{if(store.alive&&active.current===key)setBusy(false)}
  }
+ async function openPreview(attachment:Attachment){
+  clearCompletedMessage();setBusy(true);setMessage('');
+  try{
+   const response=await apiRaw(`/attachments/${attachment.attachment_id}/preview?table_id=${encodeURIComponent(tableId)}`);
+   if(!response.ok)throw new Error(`预览失败（HTTP ${response.status}）`);
+   const objectUrl=URL.createObjectURL(await response.blob());
+   if(!store.alive||active.current!==key){URL.revokeObjectURL(objectUrl);return}
+   setPreview({url:objectUrl,filename:attachment.filename});
+  }catch(e){if(store.alive&&active.current===key)setMessage(String(e))}finally{if(store.alive&&active.current===key)setBusy(false)}
+ }
  async function download(attachment:Attachment){
   clearCompletedMessage();setBusy(true);setMessage('');
   try{
@@ -123,6 +136,13 @@ export function Attachments({tableId,rowId,api,apiPage,apiRaw,canAttach,canRead=
   {listStatus==='loading'&&<p role="status">正在读取附件列表…</p>}
   {listStatus==='error'&&<div><p role="alert">读取附件列表失败：{listError}</p><button disabled={busy} onClick={()=>void load()}>重试读取附件</button></div>}
   {listStatus==='loaded'&&!items.length&&<p>当前记录没有附件。</p>}
-  <ul>{items.map(item=><li key={item.attachment_id}><div><strong>{item.filename}</strong><small>{item.media_type} · {item.size.toLocaleString()} 字节 · {new Date(item.created_at).toLocaleString()}</small><small>{item.attachment_id}</small></div><button disabled={busy} onClick={()=>void download(item)}>鉴权下载</button>{canAttach&&<button disabled={busy} onClick={()=>void unbind(item)}>解除关联</button>}</li>)}</ul>
+  <ul>{items.map(item=><li key={item.attachment_id}><div><strong>{item.filename}</strong><small>{item.media_type} · {item.size.toLocaleString()} 字节 · {new Date(item.created_at).toLocaleString()}</small><small>{item.attachment_id}</small></div>{canPreviewAttachment(item.media_type)&&<button data-preview disabled={busy} onClick={()=>void openPreview(item)}>预览</button>}<button disabled={busy} onClick={()=>void download(item)}>鉴权下载</button>{canAttach&&<button disabled={busy} onClick={()=>void unbind(item)}>解除关联</button>}</li>)}</ul>
+  {preview&&<div className="attachment-preview-overlay" role="dialog" aria-modal="true" aria-label={`${preview.filename} 预览`}>
+   <div className="attachment-preview">
+    <header><strong>{preview.filename}</strong><button onClick={()=>setPreview(null)}>关闭预览</button></header>
+    <img src={preview.url} alt={`${preview.filename} 预览`}/>
+    <p className="muted">服务端重新编码的 PNG 副本（已移除元数据）；PDF 预览暂未启用，请使用鉴权下载。</p>
+   </div>
+  </div>}
  </section>
 }

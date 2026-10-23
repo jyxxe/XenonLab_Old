@@ -220,3 +220,7 @@
 .library-copy-error{color:var(--danger)}
 .history-compare label{display:flex;flex-direction:column;gap:4px;margin:8px 0}.history-diff>div{min-width:0}.history-diff small{display:block;color:var(--text-muted);margin-bottom:4px}
 .library-recent-toggle{display:block;margin-top:var(--spacing-2);text-align:left}
+.attachment-preview-overlay{position:fixed;inset:0;z-index:120;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);padding:var(--spacing-4)}
+.attachment-preview{display:flex;flex-direction:column;gap:var(--spacing-3);max-width:min(92vw,900px);max-height:92vh;padding:var(--spacing-4);border-radius:var(--radius-panel);background:var(--surface-elevated);border:1px solid var(--border);overflow:auto}
+.attachment-preview header{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-3)}
+.attachment-preview img{max-width:100%;max-height:70vh;object-fit:contain;background:var(--surface)}
