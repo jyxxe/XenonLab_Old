@@ -135,3 +135,18 @@ The `值` column remains the unmodified `stringifyExactJSON` output, including r
 Shared `serializeTSV` exposes the optional `spreadsheetTextColumns` list. Its default is empty, preserving existing generic scalar/header/object behavior. Query opts in only columns0–2. There is no Table View caller in this branch; independent PR148 is not silently changed and must choose/verify its own column policy on composition.
 
 Actual follow-up validation on head015fa61a plus this patch: `uv run pytest`479passed/1existing warning; scoped Ruff passed; OpenAPI regenerated with no diff; `npm test`81passed; `npm run build`passed; targeted Query copy/drafts/int64 Chrome7passed/0skipped/0pageerrors. Two new unit cases cover opt-in/default behavior, inert operator/control prefixes, scalar compatibility and untouched JSON int64. Real temporary API native Clipboard acceptance now has inert operator/control-led table names, keeps original text after the marker and asserts no extra API calls. A separate native Clipboard controlled UI case checks9inert metadata prefixes and independent Python CSV/JSON integer parsing. These cases use only local synthetic data and do not open an external spreadsheet. Logs: `runtime/verification/issue-215/text-policy-*.log`; Clipboard artifact: `spreadsheet-text-native-clipboard.tsv`.
+
+## Coordinator integration (2026-10-23)
+
+The branch was refreshed onto release base `0f404989`. `tsv.js`/`tsv.d.ts` were an
+add/add conflict because the base already ships the earlier exact-integer TSV
+serializer; the branch's opt-in `spreadsheetTextColumns` superset was kept and both
+unit suites were retained. `LibraryApp.tsx` gained only the `tableNameForCopy` prop
+that the console copy path needs.
+
+The browser acceptance requires the repository `.venv` interpreter for its
+independent Python CSV/JSON parser; the worktree needed a `.venv` symlink (test
+environment issue, not a source change). Final gates: 579 pytest, full-repository
+Ruff, OpenAPI no diff, frontend unit tests, tsc + Vite build, the query-results copy
+acceptance (4/4) and the full 71/71 browser regression. Exact-head CI, protected
+preflight, approval and deployment evidence are recorded on the PR.

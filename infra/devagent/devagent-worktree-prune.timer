@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily prune of stale DevAgent validation worktrees
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+Unit=devagent-worktree-prune.service
+
+[Install]
+WantedBy=timers.target

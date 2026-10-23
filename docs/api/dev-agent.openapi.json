@@ -155,6 +155,7 @@
       },
       "get": {
         "summary": "Listing",
+        "description": "Server-side lease semantics (issue #93): `active=true|false` filters on the\nsame predicate the UI derives client-side, and every row carries an explicit\n`lease_expired` flag so clients no longer re-implement the comparison.",
         "operationId": "listing_api_v1_work_get",
         "parameters": [
           {
@@ -175,6 +176,16 @@
               "type": "string",
               "default": "",
               "title": "Cursor"
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Active"
             }
           }
         ],
@@ -323,6 +334,56 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/Release"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/work/{work_id}/admin-complete": {
+      "post": {
+        "summary": "Admin Complete",
+        "description": "Queue hygiene close-out for items nobody holds (issue #91).\n\nReconcile only completes a work item when its Forgejo issue closes, and\nrelease is holder-scoped, so implemented-but-abandoned items could never\nleave the queued view. This endpoint is the escape hatch: it refuses to\ntouch an actively held claim or a source-conflict item (resolve those\nthrough reconcile first), fences any stale holder via epoch+1, and the\nclose-out persists across newer open-webhook events until Forgejo\nreports the issue closed again. The optional reason is kept in the\nwork audit trail.",
+        "operationId": "admin_complete_api_v1_work__work_id__admin_complete_post",
+        "parameters": [
+          {
+            "name": "work_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Work Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminComplete",
+                "default": {
+                  "reason": ""
+                }
               }
             }
           }
@@ -506,6 +567,19 @@
   },
   "components": {
     "schemas": {
+      "AdminComplete": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AdminComplete"
+      },
       "Claim": {
         "properties": {
           "ttl_seconds": {

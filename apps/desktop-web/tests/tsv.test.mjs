@@ -18,6 +18,7 @@ test('TSV represents objects and arrays as JSON text in quoted cells', () => {
 });
 
 
+
 test('spreadsheet text protection is opt-in and leaves numeric scalars unchanged', () => {
   const labels = ['=synthetic label', '+synthetic label', '-synthetic label', '@synthetic label', ' \t=synthetic label', '\tplain label', '\rplain label', '\u0000plain label', '\ufeff@synthetic label'];
   for (const label of labels) {

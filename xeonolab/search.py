@@ -306,6 +306,75 @@ def install(
             raise APIError(403, "FORBIDDEN", "job belongs to another caller")
         return response(request, data)
 
+    @app.get("/api/v1/tables/{tid}/index-status")
+    def index_status(tid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        """Per-table index visibility for every reader of the table (issue #72).
+
+        Derives live coverage from the table itself instead of the admin-only
+        job log: rows at their current revision are counted through
+        __xl_vectors, rows still waiting through __xl_changes.indexed_revision.
+        Model/chunker staleness is deliberately not folded into these numbers;
+        search responses already surface it explicitly.
+        """
+        authorize(actor, tid, "read")
+        with table_connect(tid) as db:
+            names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            row_count = db.execute("SELECT COUNT(*) FROM data WHERE _deleted_at IS NULL").fetchone()[0]
+            embedded_rows = chunk_count = pending_rows = 0
+            if "__xl_vectors" in names:
+                embedded_rows = db.execute(
+                    "SELECT COUNT(DISTINCT v.row_id) FROM __xl_vectors v "
+                    "JOIN data d ON d._row_id=v.row_id AND d._deleted_at IS NULL "
+                    "WHERE v.revision=d._revision"
+                ).fetchone()[0]
+                chunk_count = db.execute("SELECT COUNT(*) FROM __xl_vectors").fetchone()[0]
+            if "__xl_changes" in names:
+                pending_rows = db.execute(
+                    "SELECT COUNT(DISTINCT row_id) FROM __xl_changes WHERE revision > indexed_revision"
+                ).fetchone()[0]
+        latest = jobs.list(table_id=tid, limit=1)
+        raw_last = latest[0] if latest else None
+        job_status = (raw_last or {}).get("status")
+        if raw_last is None:
+            last_job = None
+        elif raw_last.get("owner") == actor.sub:
+            # The caller's own job carries full metadata, including errors.
+            last_job = raw_last
+        else:
+            # Shared-table readers only get a minimal summary: no job id, owner
+            # subject, error payload or other caller-identifying metadata.
+            last_job = {key: raw_last[key] for key in ("status", "created_at") if key in raw_last}
+        if job_status == "queued":
+            state = "queued"
+        elif job_status == "running":
+            state = "indexing"
+        elif job_status == "failed":
+            state = "failed"
+        elif row_count == 0:
+            state = "empty"
+        elif embedded_rows == row_count:
+            state = "ready"
+        elif pending_rows > 0 and embedded_rows == 0:
+            # Changes exist but no row has ever been embedded.
+            state = "not_indexed"
+        elif pending_rows > 0 or 0 < embedded_rows < row_count:
+            state = "stale"
+        else:
+            state = "not_indexed"
+        return response(
+            request,
+            {
+                "table_id": tid,
+                "state": state,
+                "row_count": row_count,
+                "embedded_rows": embedded_rows,
+                "missing_rows": max(row_count - embedded_rows, 0),
+                "pending_rows": pending_rows,
+                "chunk_count": chunk_count,
+                "last_job": last_job,
+            },
+        )
+
     def exact_bootstrap(body, request, actor, query, model_revision):
         """Use the explicitly development-only SQLite bootstrap backend."""
         with connect(catalogue) as db:
