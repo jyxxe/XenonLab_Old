@@ -15,6 +15,7 @@ scope with a different payload is a conflict (never silently replayed).
 import hashlib
 import json
 import time
+from pathlib import Path
 from uuid import uuid4
 
 from .common import connect, transaction
@@ -53,6 +54,8 @@ class BulkJobStore:
                 "failed INTEGER NOT NULL DEFAULT 0,"
                 "results TEXT NOT NULL DEFAULT '[]',"
                 "error TEXT,"
+                "output TEXT,"
+                "cancel_requested INTEGER NOT NULL DEFAULT 0,"
                 "created_at REAL NOT NULL,"
                 "updated_at REAL NOT NULL)"
             )
@@ -75,11 +78,15 @@ class BulkJobStore:
                     status="failed",
                     error="worker interrupted; partial results retained; resubmit remaining items",
                 )
+            for row in db.execute("SELECT id,output FROM bulk_jobs WHERE status='cancelled'").fetchall():
+                if row["output"]:
+                    Path(row["output"]).unlink(missing_ok=True)
+                    self._write(db, row["id"], output=None)
             self._prune(db)
 
     @staticmethod
     def _migrate(db):
-        """Rebuild an older table whose batch_id was globally unique and had no digest."""
+        """Rebuild an older table whose batch_id was globally unique and had no digest/export columns."""
         columns = {row[1]: row for row in db.execute("PRAGMA table_info(bulk_jobs)")}
         indexes = {row[1]: row for row in db.execute("PRAGMA index_list(bulk_jobs)")}
         legacy_unique = any(
@@ -94,26 +101,30 @@ class BulkJobStore:
             "payload_digest TEXT NOT NULL,owner TEXT NOT NULL,payload TEXT NOT NULL,"
             "status TEXT NOT NULL,total INTEGER NOT NULL,done INTEGER NOT NULL DEFAULT 0,"
             "failed INTEGER NOT NULL DEFAULT 0,results TEXT NOT NULL DEFAULT '[]',error TEXT,"
+            "output TEXT,cancel_requested INTEGER NOT NULL DEFAULT 0,"
             "created_at REAL NOT NULL,updated_at REAL NOT NULL)"
         )
+        legacy_columns = {row[1] for row in db.execute("PRAGMA table_info(bulk_jobs_legacy)")}
         for row in db.execute("SELECT * FROM bulk_jobs_legacy").fetchall():
             values = dict(row)
             payload = json.loads(values["payload"])
             digest = payload_digest(values["kind"], values["table_id"], payload)
             db.execute(
                 "INSERT INTO bulk_jobs(id,table_id,kind,batch_id,payload_digest,owner,payload,"
-                "status,total,done,failed,results,error,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "status,total,done,failed,results,error,output,cancel_requested,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     values["id"], values["table_id"], values["kind"], values["batch_id"], digest,
                     values["owner"], values["payload"], values["status"], values["total"],
                     values["done"], values["failed"], values["results"], values["error"],
+                    values.get("output") if "output" in legacy_columns else None,
+                    values.get("cancel_requested", 0) if "cancel_requested" in legacy_columns else 0,
                     values["created_at"], values["updated_at"],
                 ),
             )
         db.execute("DROP TABLE bulk_jobs_legacy")
 
-    def create(self, table_id, kind, payload, owner, batch_id=None):
+    def create(self, table_id, kind, payload, owner, batch_id=None, total=None):
         job_id = str(uuid4())
         stamp = time.time()
         digest = payload_digest(kind, table_id, payload)
@@ -123,7 +134,7 @@ class BulkJobStore:
                 "total,done,failed,results,error,created_at,updated_at) "
                 "VALUES(?,?,?,?,?,?,?,?,?,0,0,'[]',NULL,?,?)",
                 (job_id, table_id, kind, batch_id, digest, owner, json.dumps(payload), "queued",
-                 len(payload), stamp, stamp),
+                 len(payload) if total is None else total, stamp, stamp),
             )
             self._prune(db)
         return job_id
@@ -231,6 +242,52 @@ class BulkJobStore:
                 "UPDATE bulk_jobs SET status='failed',error=?,updated_at=? WHERE id=?",
                 (error, time.time(), job_id),
             )
+
+    def complete(self, job_id):
+        with transaction(self.database) as db:
+            db.execute(
+                "UPDATE bulk_jobs SET status='completed',updated_at=? WHERE id=? AND status='running'",
+                (time.time(), job_id),
+            )
+
+    def set_done(self, job_id, done):
+        with transaction(self.database) as db:
+            db.execute(
+                "UPDATE bulk_jobs SET done=?,status='running',updated_at=? WHERE id=? AND status IN ('queued','running')",
+                (done, time.time(), job_id),
+            )
+
+    def request_cancel(self, job_id):
+        """Flag a queued/running job for cooperative cancellation."""
+        with transaction(self.database) as db:
+            row = db.execute("SELECT status FROM bulk_jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None or row["status"] in ("completed", "failed", "cancelled"):
+                return False
+            db.execute(
+                "UPDATE bulk_jobs SET cancel_requested=1,status=CASE WHEN status='queued' THEN 'cancelled' ELSE status END,"
+                "updated_at=? WHERE id=?",
+                (time.time(), job_id),
+            )
+            return True
+
+    def cancel_requested(self, job_id):
+        with connect(self.database) as db:
+            row = db.execute("SELECT cancel_requested FROM bulk_jobs WHERE id=?", (job_id,)).fetchone()
+        return bool(row and row["cancel_requested"])
+
+    def finish_cancelled(self, job_id, output=None):
+        with transaction(self.database) as db:
+            row = db.execute("SELECT output FROM bulk_jobs WHERE id=?", (job_id,)).fetchone()
+            if row and row["output"]:
+                Path(row["output"]).unlink(missing_ok=True)
+            db.execute(
+                "UPDATE bulk_jobs SET status='cancelled',output=NULL,updated_at=? WHERE id=?",
+                (time.time(), job_id),
+            )
+
+    def set_output(self, job_id, output):
+        with transaction(self.database) as db:
+            db.execute("UPDATE bulk_jobs SET output=?,updated_at=? WHERE id=?", (output, time.time(), job_id))
 
     def list(self, table_id=None, limit=50):
         query = "SELECT * FROM bulk_jobs"

@@ -1,5 +1,6 @@
 import base64
 import binascii
+import csv
 import fcntl
 import hashlib
 import json
@@ -15,6 +16,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import BackgroundTasks, Depends, Header, Query, Request, UploadFile
@@ -171,6 +173,20 @@ class BulkDelete(BaseModel):
     batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class ExportRequest(BaseModel):
+    table_id: str
+    format: Literal["jsonl", "csv"] = "jsonl"
+    include_deleted: bool = False
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class ImportRequest(BaseModel):
+    table_id: str
+    content: str = Field(min_length=1)
+    format: Literal["jsonl", "csv"] = "jsonl"
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
 class SchemaWrite(BaseModel):
     columns: list[Column] = Field(min_length=1, max_length=128)
 
@@ -209,6 +225,29 @@ class AttachmentCandidatePage(BaseModel):
 
 class ACLWrite(BaseModel):
     grants: dict[str, list[str]]
+
+
+def csv_value_coercion(column, raw):
+    """Convert a CSV cell to the schema-typed value for import (issue #84)."""
+    kind = column["type"]
+    if raw is None or raw == "":
+        return None
+    if kind in ("string", "text", "date", "datetime", "enum", "reference", "theorem_ref"):
+        return raw
+    if kind == "int64":
+        return int(raw)
+    if kind == "float64":
+        return float(raw)
+    if kind == "boolean":
+        lowered = raw.strip().lower()
+        if lowered in ("true", "1", "yes"):
+            return True
+        if lowered in ("false", "0", "no"):
+            return False
+        raise ValueError(f"invalid boolean {raw!r}")
+    if kind in ("json", "attachment_list"):
+        return json.loads(raw)
+    return raw
 
 
 def clean_path(path):
@@ -1163,6 +1202,34 @@ def create_app(settings=None):
             "done": job["done"], "failed": job["failed"],
         }))
 
+    def _scoped_existing(kind, tid, payload, actor, batch_id):
+        """Scoped idempotency lookup shared by bulk rows and import/export jobs."""
+        if not batch_id:
+            return None
+        digest = payload_digest(kind, tid, payload)
+        existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+        if existing is not None and existing["payload_digest"] != digest:
+            raise APIError(
+                409, "BATCH_CONFLICT",
+                "batch_id was already used for a different payload for this table and caller",
+            )
+        return existing
+
+    def _create_scoped(kind, tid, payload, actor, batch_id, total=None):
+        """Create a job, returning (job_id, winner) where winner is set on a race."""
+        try:
+            return bulk_jobs.create(tid, kind, payload, actor.sub, batch_id, total=total), None
+        except sqlite3.IntegrityError:
+            existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+            if existing is None:
+                raise
+            if existing["payload_digest"] != payload_digest(kind, tid, payload):
+                raise APIError(
+                    409, "BATCH_CONFLICT",
+                    "batch_id was already used for a different payload for this table and caller",
+                ) from None
+            return existing["id"], existing
+
     def _bulk_submit(kind, items, request, background, actor, tid, batch_id):
         sync_limit, max_rows = _bulk_thresholds()
         _bulk_guard(items, actor, tid, max_rows)
@@ -1229,6 +1296,193 @@ def create_app(settings=None):
             "done": job["done"], "failed": job["failed"], "results": job["results"],
             "error": job["error"], "created_at": job["created_at"], "updated_at": job["updated_at"],
         })
+
+    def _import_export_guard(job, actor):
+        if job["owner"] != actor.sub and "xelibrary:admin" not in actor.scopes:
+            raise APIError(403, "FORBIDDEN", "job belongs to another caller")
+
+    def _export_run(job_id, tid, fmt, actor, include_deleted):
+        """Write an ACL-filtered snapshot (JSONL or CSV); only readable rows are included."""
+        suffix = "jsonl" if fmt == "jsonl" else "csv"
+        output = root / "exports" / f"{job_id}.{suffix}"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        bulk_jobs.set_output(job_id, str(output))
+        max_rows = int(os.getenv("XELIBRARY_EXPORT_MAX_ROWS", "100000"))
+        done = 0
+        try:
+            table = authorize(actor, tid, "read")
+            with table_connect(tid) as db, output.open("w", encoding="utf-8", newline="") as handle:
+                columns_now = columns(db)
+                writer = csv.writer(handle) if fmt == "csv" else None
+                if fmt == "csv":
+                    writer.writerow([c["name"] for c in columns_now])
+                for raw in db.execute("SELECT * FROM data"):
+                    if bulk_jobs.cancel_requested(job_id):
+                        bulk_jobs.finish_cancelled(job_id)
+                        return
+                    row = decode(raw)
+                    if row["_deleted_at"] and not include_deleted:
+                        continue
+                    if not allowed(actor, table, "read", row["_row_id"]):
+                        continue
+                    done += 1
+                    if done > max_rows:
+                        raise APIError(413, "EXPORT_TOO_LARGE", f"export exceeds {max_rows} rows")
+                    if fmt == "jsonl":
+                        handle.write(json.dumps(decode(raw)) + "\n")
+                    else:
+                        writer.writerow(
+                            ["" if row["values"].get(c["name"]) is None else row["values"].get(c["name"])
+                             for c in columns_now]
+                        )
+                    bulk_jobs.set_done(job_id, done)
+            bulk_jobs.complete(job_id)
+        except APIError as error:
+            output.unlink(missing_ok=True)
+            bulk_jobs.fail(job_id, f"{error.code}: {error.message}")
+        except Exception:
+            logging.getLogger("xelibrary.export").exception("export job %s crashed", job_id)
+            output.unlink(missing_ok=True)
+            bulk_jobs.fail(job_id, "export worker crashed")
+
+    def _import_run(job_id, tid, fmt, actor, lines):
+        done = 0
+        try:
+            if fmt == "csv":
+                csv_rows = list(csv.reader(lines))
+                header = csv_rows[0] if csv_rows else None
+                entries = csv_rows[1:]
+                with table_connect(tid) as schema_db:
+                    schema = columns(schema_db)
+                names = [c["name"] for c in schema]
+                if header and set(header) - set(names):
+                    bulk_jobs.fail(job_id, "UNKNOWN_COLUMN: unknown CSV header column")
+                    return
+            else:
+                entries = lines
+            for index, entry in enumerate(entries):
+                if bulk_jobs.cancel_requested(job_id):
+                    bulk_jobs.finish_cancelled(job_id)
+                    return
+                failed = False
+                try:
+                    if fmt == "csv":
+                        values = {}
+                        for column, raw in zip(schema, entry):
+                            if column["name"] in header:
+                                values[column["name"]] = csv_value_coercion(column, raw)
+                    else:
+                        values = json.loads(entry)
+                        if not isinstance(values, dict):
+                            raise APIError(422, "INVALID_ROW", "line is not a JSON object")
+                        # exported rows carry the full snapshot; plain value objects also import
+                        if isinstance(values.get("values"), dict):
+                            values = values["values"]
+                    authorize(actor, tid, "write")
+                    with table_transaction(tid) as db:
+                        validated = validate_values(columns(db), values)
+                        rid, stamp = str(uuid4()), now()
+                        db.execute(
+                            "INSERT INTO data VALUES(?,?,?,?,?,?)",
+                            (rid, 1, stamp, stamp, None, json.dumps(validated)),
+                        )
+                        row = load_row(db, rid)
+                        change(db, row, "create")
+                        db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in validated.values())))
+                        index_cjk_row(db, rid, validated.values())
+                    result = {"index": index, "status": "created", "row_id": rid}
+                except APIError as error:
+                    failed = True
+                    result = {"index": index, "status": "failed",
+                              "error": {"code": error.code, "message": error.message}}
+                except Exception:
+                    logging.getLogger("xelibrary.import").exception("import line %s failed", index)
+                    failed = True
+                    result = {"index": index, "status": "failed",
+                              "error": {"code": "INTERNAL_ERROR", "message": "line failed; see service logs"}}
+                done += 1
+                bulk_jobs.record(job_id, result, failed)
+        except Exception:
+            bulk_jobs.fail(job_id, "import worker crashed; partial results retained")
+            raise
+
+    @app.post("/api/v1/exports")
+    def create_export(body: ExportRequest, request: Request, background: BackgroundTasks,
+                      actor=Depends(scope("xelibrary:read"))):
+        authorize(actor, body.table_id, "read")
+        payload = {"format": body.format, "include_deleted": body.include_deleted}
+        existing = _scoped_existing("export", body.table_id, payload, actor, body.batch_id)
+        if existing is not None:
+            return _duplicate_job_response(request, existing)
+        job_id, winner = _create_scoped("export", body.table_id, payload, actor, body.batch_id)
+        if winner is not None:
+            return _duplicate_job_response(request, winner)
+        background.add_task(_export_run, job_id, body.table_id, body.format, actor, body.include_deleted)
+        return JSONResponse(response(request, {"job_id": job_id, "status": "queued"}), status_code=202)
+
+    @app.get("/api/v1/exports/{job_id}")
+    def export_status(job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "export":
+            raise APIError(404, "JOB_NOT_FOUND", "export job not found")
+        _import_export_guard(job, actor)
+        return response(request, {"job_id": job["id"], "status": job["status"], "done": job["done"],
+                                  "error": job["error"], "downloadable": job["status"] == "completed"})
+
+    @app.get("/api/v1/exports/{job_id}/download")
+    def export_download(job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "export":
+            raise APIError(404, "JOB_NOT_FOUND", "export job not found")
+        _import_export_guard(job, actor)
+        if job["status"] != "completed" or not job["output"]:
+            raise APIError(409, "EXPORT_NOT_READY", "export is not finished")
+        return FileResponse(job["output"], media_type="application/x-ndjson",
+                            filename=f"{job['table_id']}.jsonl")
+
+    @app.post("/api/v1/imports")
+    def create_import(body: ImportRequest, request: Request, background: BackgroundTasks,
+                      actor=Depends(scope("xelibrary:write"))):
+        authorize(actor, body.table_id, "write")
+        max_bytes = int(os.getenv("XELIBRARY_IMPORT_MAX_BYTES", "2000000"))
+        if len(body.content.encode()) > max_bytes:
+            raise APIError(413, "IMPORT_TOO_LARGE", f"content exceeds {max_bytes} bytes")
+        lines = [line for line in body.content.splitlines() if line.strip()]
+        if not lines:
+            raise APIError(422, "IMPORT_EMPTY", "no rows to import")
+        # CSV: the first line is the header, so total counts data rows only.
+        total = len(lines) - 1 if body.format == "csv" else len(lines)
+        if total <= 0:
+            raise APIError(422, "IMPORT_EMPTY", "no rows to import")
+        payload = {"format": body.format, "lines": lines}
+        existing = _scoped_existing("import", body.table_id, payload, actor, body.batch_id)
+        if existing is not None:
+            return _duplicate_job_response(request, existing)
+        job_id, winner = _create_scoped("import", body.table_id, payload, actor, body.batch_id, total=total)
+        if winner is not None:
+            return _duplicate_job_response(request, winner)
+        background.add_task(_import_run, job_id, body.table_id, body.format, actor, lines)
+        return JSONResponse(response(request, {"job_id": job_id, "status": "queued", "total": len(lines)}), status_code=202)
+
+    @app.get("/api/v1/imports/{job_id}")
+    def import_status(job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "import":
+            raise APIError(404, "JOB_NOT_FOUND", "import job not found")
+        _import_export_guard(job, actor)
+        return response(request, {"job_id": job["id"], "status": job["status"], "total": job["total"],
+                                  "done": job["done"], "failed": job["failed"], "results": job["results"],
+                                  "error": job["error"]})
+
+    @app.post("/api/v1/imports/{job_id}/cancel")
+    def cancel_import(job_id: str, request: Request, actor=Depends(scope("xelibrary:write"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "import":
+            raise APIError(404, "JOB_NOT_FOUND", "import job not found")
+        _import_export_guard(job, actor)
+        if not bulk_jobs.request_cancel(job_id):
+            raise APIError(409, "JOB_FINISHED", "job already reached a terminal state")
+        return response(request, {"job_id": job_id, "cancelled": True})
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/revisions")
     def revisions(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):

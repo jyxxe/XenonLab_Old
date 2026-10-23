@@ -294,3 +294,6 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 `POST /api/v1/tables/{id}/rows:bulkInsert|rows:bulkUpdate|rows:bulkDelete` 与 `GET /api/v1/tables/{id}/rows:bulk/{job_id}`：逐条复用单行语义（schema/type 校验、表+行 ACL、逐条 revision 检查、`__xl_changes`、FTS/CJK、Qdrant 清理、删除审计），每条独立事务提交，部分成功按条返回 `index/status/error{code,message}`。批量 ≤ `XELIBRARY_BULK_SYNC_LIMIT`（默认 100）同步执行；超过则 202 + `data.job_id`，后台任务从 catalogue `bulk_jobs` 持久化载荷逐条应用，进度实时可查；`XELIBRARY_BULK_MAX_ROWS` 超限 413 `BULK_TOO_LARGE`；finished 作业保留最近 200 条。
 
 审查修复（PR #109 复审）：`batch_id` 由全局唯一改为 `(owner, table_id, kind)` 作用域——同一作用域相同载荷为幂等重复（返回原 job），不同载荷返回 409 `BATCH_CONFLICT`（旧表在启动时幂等迁移重建）；每条已应用结果在**同一个表事务**内写 `__xl_bulk_applied` 标记，进程重启后从标记对账补回丢失的持久结果再标 failed（提交窗口不再丢记录/误报余量）；删除表时若有 queued/running bulk 作业返回 409 `TABLE_BULK_ACTIVE`。未包含：取消/断点续跑、作业列表分页、前端批量 UI。
+### Issue #84 JSONL/CSV import-export（已集成部署）
+
+`POST /api/v1/exports` + `GET /api/v1/exports/{job_id}` + `/download`：按表导出 JSONL/CSV 快照，行级读 ACL 过滤（无读权限的行不会出现），下载与状态仅 owner 或 `xelibrary:admin`。`POST /api/v1/imports` + 状态 + `/cancel`：内容上限 `XELIBRARY_IMPORT_MAX_BYTES`（默认 2MB，超限 413），导出行快照与纯值对象均可导入（往返无缝），逐条结果与错误定位、部分失败不丢弃已应用行；取消为协作式（queued 直接 cancelled，running 由 worker 行间检查），取消/失败清理输出文件。作业持久化扩展 #83 的 `BulkJobStore`（output/cancel_requested 列与 complete/set_done/request_cancel/finish_cancelled），重启恢复语义一致。集成时与 #83 的作用域 batch_id、载荷摘要与恢复对账合并且迁移同时覆盖旧表与导出列；OpenAPI 重新生成。
