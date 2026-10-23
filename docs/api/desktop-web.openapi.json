@@ -775,6 +775,9 @@
               }
             }
           },
+          "409": {
+            "description": "PLUGIN_SNAPSHOT_INVALID: explicitly reinstall to repair the snapshot"
+          },
           "422": {
             "description": "Validation Error",
             "content": {

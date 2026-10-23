@@ -123,22 +123,23 @@ def test_runtime_capabilities_include_only_enabled_plugins(tmp_path):
             "manifest TEXT, installed_version TEXT, catalog_revision INTEGER, installed_at REAL)"
         )
         manifest = {
+            "id": "acme-tools", "name": "Acme tools",
             "version": "1.2.0",
             "permissions": ["desktop:read"],
-            "app": {"id": "plugin-app", "title": "Plugin app"},
-            "widget": {"id": "plugin-widget", "title": "Plugin widget"},
+            "app": {"id": "plugin-app", "title": "Plugin app", "origin": "https://plugin.example"},
+            "widget": {"id": "plugin-widget", "title": "Plugin widget", "origin": "https://plugin.example"},
         }
         db.execute(
             "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
-            ("alice", "acme.tools", 1, jsonlib.dumps(manifest), "1.2.0", 3, 0.0),
+            ("alice", "acme-tools", 1, jsonlib.dumps(manifest), "1.2.0", 3, 0.0),
         )
         db.execute(
             "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
-            ("alice", "acme.disabled", 0, jsonlib.dumps(manifest), "1.2.0", 3, 0.0),
+            ("alice", "acme-disabled", 0, jsonlib.dumps({**manifest, "id": "acme-disabled"}), "1.2.0", 3, 0.0),
         )
         db.execute(
             "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
-            ("alice", "acme.denied", 1, jsonlib.dumps({**manifest, "permissions": ["desktop:admin"]}), "1.2.0", 3, 0.0),
+            ("alice", "acme-denied", 1, jsonlib.dumps({**manifest, "id": "acme-denied", "permissions": ["desktop:admin"]}), "1.2.0", 3, 0.0),
         )
         db.execute(
             "INSERT INTO plugin_installs VALUES(?,?,?,?,?,?,?)",
@@ -148,9 +149,9 @@ def test_runtime_capabilities_include_only_enabled_plugins(tmp_path):
     registry = load_registry()
     capabilities = runtime_capabilities(registry, database, "alice", ["desktop:read"])
     plugin_ids = {item["id"] for item in capabilities if item["source"] == "plugin"}
-    assert plugin_ids == {"plugin.acme.tools.app", "plugin.acme.tools.widget"}
+    assert plugin_ids == {"plugin.acme-tools.app", "plugin.acme-tools.widget"}
     assert all(item["enabled"] for item in capabilities if item["source"] == "plugin")
-    assert {item["kind"] for item in capabilities if item["id"].startswith("plugin.acme.tools")} == {"app", "widget"}
+    assert {item["kind"] for item in capabilities if item["id"].startswith("plugin.acme-tools")} == {"app", "widget"}
 
     other = runtime_capabilities(registry, database, "bob", ["desktop:read"])
     assert not any(item["source"] == "plugin" for item in other)

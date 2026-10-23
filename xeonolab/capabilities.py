@@ -14,6 +14,7 @@ from pathlib import Path
 from fastapi import Depends, Request
 
 from .common import APIError, connect, response, scope
+from .plugins import _installed_manifest
 
 KINDS = {"app", "widget", "tool", "agent", "provider", "worker"}
 TIERS = {"ui", "api", "service"}
@@ -151,19 +152,14 @@ def runtime_capabilities(registry, database, owner, scopes):
     except Exception:  # noqa: BLE001 - a missing plugin store must not break discovery
         rows = []
     for row in rows:
-        try:
-            manifest = json.loads(row["manifest"])
-        except (TypeError, ValueError):
+        manifest = _installed_manifest(row)
+        if manifest is None or not row["enabled"] or not set(manifest.permissions) <= scopes:
             continue
-        if not isinstance(manifest, dict):
-            continue
-        permissions = [permission for permission in manifest.get("permissions") or [] if isinstance(permission, str)]
-        if not row["enabled"] or not set(permissions) <= scopes:
-            continue
-        version = str(manifest.get("version") or "0.0.0")
-        for kind, key in (("app", "app"), ("widget", "widget")):
-            section = manifest.get(key)
-            if not isinstance(section, dict) or not isinstance(section.get("id"), str) or not section["id"]:
+        permissions = manifest.permissions
+        version = manifest.version
+        for kind in ("app", "widget"):
+            descriptor = getattr(manifest, kind)
+            if descriptor is None:
                 continue
             items.append({
                 "id": f"plugin.{row['plugin_id']}.{kind}",
@@ -174,7 +170,7 @@ def runtime_capabilities(registry, database, owner, scopes):
                 "dependencies": [],
                 "source": "plugin",
                 "plugin_id": row["plugin_id"],
-                "desktop_id": section["id"],
+                "desktop_id": descriptor.id,
                 "installed": True,
                 "enabled": True,
             })
