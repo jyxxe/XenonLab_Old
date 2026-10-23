@@ -87,6 +87,6 @@
 
 ## 管理员凭据版
 
-公开提示词不含凭据。需要凭据的版本由运维放在服务端受保护目录
+公开提示词不含凭据。需要凭据的版本由运维放在服务端受保护目录；管理员版只包含 Forgejo 登录凭据，绝不包含模型服务 API key（`api.jyxxe.com` / OpenCode 等）
 （`/etc/xeonolab/agent-prompts`，见 `admin-credentials.md`），仅在管理员登录
 Xenon Panel 的「Agent 提示词」应用中显示；它们不进入 Git/发布包。
