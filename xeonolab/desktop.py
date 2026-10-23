@@ -19,6 +19,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .agent_prompts import load_admin_prompts
+from .capabilities import install as install_capabilities
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
 from .wallpaper_backup import wallpaper_data_lock
 from .wallpaper_limits import WALLPAPER_MAX_BYTES, WALLPAPER_MAX_PIXELS
@@ -680,5 +681,7 @@ def create_app(settings=None):
         with transaction(path) as db:
             db.execute("INSERT OR REPLACE INTO layouts VALUES(?,?)", (actor.sub, body.model_dump_json()))
         return response(request, body.model_dump())
+
+    install_capabilities(app)
 
     return app
