@@ -181,3 +181,23 @@ Docker image or production/model/Qdrant/visual acceptance is claimed.
 The c1274bb combined tree (#325/#327/#332 with native LLM, merged #328 preserved)
 passes 175 focused tests and 15 startup chunker-flag-0 authority tests. Full
 combined regression is tracked separately in the companion lifecycle record.
+
+
+Final combined full regression on `c1274bb`: #325/#327/#332 with native LLM
+recorded 830 passed / the same 13 baseline failures (437.93 s), staged source
+index tree `4c0a34a8bf5411f5b8cebf6da8aa95675b5f425b`. Adding the trusted Tool
+and Chat Provider interfaces from #321/#323 recorded 867 passed / the same 13
+baseline failures (405.01 s), staged source index tree
+`4050e4142b7b009cf690ee450199aebd21edf023`. All failure identifiers were compared
+as sets against the reproduced baseline. The verifier and its tests remain
+byte-identical to baseline c44076a; direct stat probes of `/proc/1/ns/net` and
+`/proc/1/ns/mnt` both returned PermissionError errno 13 on this desktop.
+
+The all-adapter tree has 229 passing focused cases and 49 passing lifecycle
+cases with all four adapter flags set to 0 **before startup**. Its 28 unique
+capability declarations retain all five controlled roots and encode/chunker
+children; trusted Tool/Chat/Embedding/Chunker modules and the public registry
+resolve in an isolated staged Docker-COPY layout. Ruff, regenerated OpenAPI,
+11 service smokes, and transaction/process/crash failure injection also pass.
+These staged integration sources are review/test compositions, not a protected
+branch merge or deployment. Protected CI remains independently required.
