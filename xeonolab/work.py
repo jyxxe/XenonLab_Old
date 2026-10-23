@@ -193,7 +193,7 @@ def install(app):
     with transaction(database) as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS work(id TEXT PRIMARY KEY,repository TEXT,issue_id INTEGER,
-          title TEXT,status TEXT,holder TEXT,expires REAL,epoch INTEGER,
+          title TEXT,status TEXT,holder TEXT,expires REAL,epoch INTEGER,created_at REAL NOT NULL DEFAULT 0,
           UNIQUE(repository,issue_id));
         CREATE TABLE IF NOT EXISTS issue_sync(repository TEXT,issue_id INTEGER,updated REAL,
           PRIMARY KEY(repository,issue_id));
@@ -204,6 +204,9 @@ def install(app):
         CREATE TABLE IF NOT EXISTS work_audit(id TEXT PRIMARY KEY,actor TEXT,event TEXT,
           work_id TEXT,epoch INTEGER,at REAL);
         """)
+        if "created_at" not in {row[1] for row in db.execute("PRAGMA table_info(work)")}:
+            # Issue #92: existing rows keep 0, which sorts them first (oldest) in FIFO order.
+            db.execute("ALTER TABLE work ADD COLUMN created_at REAL NOT NULL DEFAULT 0")
         if "admin_completed" not in {row[1] for row in db.execute("PRAGMA table_info(work)")}:
             db.execute("ALTER TABLE work ADD COLUMN admin_completed INTEGER NOT NULL DEFAULT 0")
 
@@ -288,8 +291,8 @@ def install(app):
         if item is None:
             work_id = str(uuid4())
             db.execute(
-                "INSERT INTO work(id,repository,issue_id,title,status,holder,expires,epoch) "
-                "VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO work(id,repository,issue_id,title,status,holder,expires,epoch,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     work_id,
                     repository,
@@ -299,6 +302,7 @@ def install(app):
                     None,
                     0,
                     0,
+                    time.time(),
                 ),
             )
         else:
@@ -394,9 +398,9 @@ def install(app):
                 return response(request, dict(old))
             work_id = str(uuid4())
             db.execute(
-                "INSERT INTO work(id,repository,issue_id,title,status,holder,expires,epoch) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (work_id, body.repository, body.issue_id, body.title, "queued", None, 0, 0),
+                "INSERT INTO work(id,repository,issue_id,title,status,holder,expires,epoch,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (work_id, body.repository, body.issue_id, body.title, "queued", None, 0, 0, time.time()),
             )
             audit(db, actor, "work.created", work_id, 0)
             return response(request, load(db, work_id))
@@ -407,42 +411,76 @@ def install(app):
         limit: int = 100,
         cursor: str = "",
         active: str = "",
+        status: str = "",
+        repository: str = "",
+        issue_id: int | None = None,
         actor=Depends(scope("dev:read")),
     ):
-        """Server-side lease semantics (issue #93): `active=true|false` filters on the
-        same predicate the UI derives client-side, and every row carries an explicit
-        `lease_expired` flag so clients no longer re-implement the comparison."""
+        """Lease semantics and queue ordering (issues #92, #93).
+
+        Rows are ordered FIFO by creation time (oldest first) with the id as a
+        deterministic tiebreak, so pagination is stable while new items arrive.
+        The cursor is `<created_at>:<id>`. `active=true|false` and the optional
+        `status` (comma-separated), `repository` and `issue_id` filters apply in
+        SQL; `meta.counts` always reports status totals for the whole queue.
+        """
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
         if active not in ("", "true", "false"):
             raise APIError(422, "INVALID_ACTIVE", "active must be true or false")
+        valid_statuses = ("queued", "claimed", "completed", "blocked")
+        statuses = [item for item in status.split(",") if item]
+        if any(item not in valid_statuses for item in statuses):
+            raise APIError(422, "INVALID_STATUS", "unknown status filter")
         now = time.time()
         # `active` (the #93 filter) treats queued items as actionable, but the
         # claim_active contract stays "this caller holds a live lease": only a
         # non-null holder with an unexpired lease counts. Conflating the two
         # would hide the claim button for every queued item.
         active_expression = "(status='queued' OR (holder IS NOT NULL AND expires > :now))"
+        # claim_active/lease_expired keep the #93 live-lease contract: a queued
+        # item has no holder, so it stays claimable but is not an active claim.
         claim_expression = "(holder IS NOT NULL AND expires > :now)"
+        conditions, parameters = [], {"now": now}
+        if cursor:
+            try:
+                cursor_created_raw, cursor_id = cursor.split(":", 1)
+                cursor_created = float(cursor_created_raw)
+            except ValueError:
+                raise APIError(422, "INVALID_CURSOR", "cursor must be '<created_at>:<id>'") from None
+            conditions.append("(created_at > :cursor_created OR (created_at = :cursor_created AND id > :cursor_id))")
+            parameters["cursor_created"] = cursor_created
+            parameters["cursor_id"] = cursor_id
+        if active:
+            conditions.append(active_expression if active == "true" else f"NOT {active_expression}")
+        if statuses:
+            conditions.append("status IN (" + ",".join(f":status{i}" for i in range(len(statuses))) + ")")
+            parameters.update({f"status{i}": item for i, item in enumerate(statuses)})
+        if repository:
+            conditions.append("repository = :repository")
+            parameters["repository"] = repository
+        if issue_id is not None:
+            conditions.append("issue_id = :issue_id")
+            parameters["issue_id"] = issue_id
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         query = (
             "SELECT *,"
             f" {claim_expression} AS claim_active,"
             f" (status='claimed' AND NOT {claim_expression}) AS lease_expired"
-            " FROM work WHERE id>:cursor"
+            f" FROM work{where} ORDER BY created_at ASC, id ASC LIMIT :limit"
         )
-        parameters: dict = {"cursor": cursor, "now": now}
-        if active:
-            query += " AND " + (active_expression if active == "true" else f"NOT {active_expression}")
-        query += " ORDER BY id LIMIT :limit"
         parameters["limit"] = limit + 1
         with connect(database) as db:
             rows = [dict(r) for r in db.execute(query, parameters)]
+            counts = {name: 0 for name in valid_statuses}
+            for counted in db.execute("SELECT status, COUNT(*) AS total FROM work GROUP BY status"):
+                counts[counted["status"]] = counted["total"]
         for row in rows:
             # SQLite yields the computed columns as 0/1; the API contract is JSON booleans.
             row["claim_active"] = bool(row["claim_active"])
             row["lease_expired"] = bool(row["lease_expired"])
-        return response(
-            request, rows[:limit], next_cursor=rows[limit - 1]["id"] if len(rows) > limit else None
-        )
+        next_cursor = f"{rows[limit - 1]['created_at']}:{rows[limit - 1]['id']}" if len(rows) > limit else None
+        return response(request, rows[:limit], next_cursor=next_cursor, counts=counts)
 
     @app.post(
         "/api/v1/work/{work_id}/claim",
