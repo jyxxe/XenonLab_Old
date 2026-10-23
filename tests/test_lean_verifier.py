@@ -1,7 +1,12 @@
+import hashlib
 import json
+import os
 import sqlite3
 import textwrap
 import time
+from types import SimpleNamespace
+
+import xeonolab.lean_verifier as lean_verifier
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,6 +54,10 @@ FAKE_LEAN = textwrap.dedent(
     if mode == "hang":
         time.sleep(30)
         sys.exit(0)
+    if mode == "flood":
+        sys.stdout.write("x" * 200000)
+        sys.stdout.flush()
+        sys.exit(0)
     if mode == "error":
         print("source error: declaration 'target' has type mismatch", file=sys.stderr)
         sys.exit(1)
@@ -60,14 +69,31 @@ FAKE_LEAN = textwrap.dedent(
 )
 
 
+@pytest.fixture(autouse=True)
+def trusted_test_sandbox(monkeypatch, settings):
+    """Simulate the reviewed deployment: root-owned files and active namespaces."""
+    # Persisted rate limits would throttle polling across restarted app instances.
+    settings.rate_limit_enabled = False
+    real_stat = os.stat
+
+    def fake_stat(path):
+        text = str(path)
+        info = real_stat(text)
+        inode = 1 if text.startswith("/proc/self/ns/") else 2 if text.startswith("/proc/1/ns/") else info.st_ino
+        return SimpleNamespace(st_uid=0, st_mode=info.st_mode, st_ino=inode, st_size=info.st_size)
+
+    monkeypatch.setattr(lean_verifier, "_stat", fake_stat)
+
+
 def write_toolchain(tmp_path, body=FAKE_LEAN):
     bin_dir = tmp_path / "toolchain-bin"
     bin_dir.mkdir(exist_ok=True)
     lean = bin_dir / "lean"
     lean.write_text(body.lstrip())
     lean.chmod(0o755)
+    digest = hashlib.sha256(lean.read_bytes()).hexdigest()
     manifest = tmp_path / "toolchains.json"
-    manifest.write_text(json.dumps({"toolchains": [{"name": "lean4", "path": str(lean)}]}))
+    manifest.write_text(json.dumps({"toolchains": [{"name": "lean4", "path": str(lean), "sha256": digest}]}))
     return manifest
 
 
@@ -85,7 +111,13 @@ def verifier(settings, monkeypatch, tmp_path):
 def wait_terminal(api, job_id, seconds=10):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        current = api.get(f"/api/v1/lean/jobs/{job_id}", headers=auth()).json()["data"]
+        response = api.get(f"/api/v1/lean/jobs/{job_id}", headers=auth())
+        if response.status_code == 429:
+            time.sleep(0.5)
+            continue
+        if response.status_code != 200:
+            raise AssertionError(f"job read failed: {response.status_code} {response.text[:300]}")
+        current = response.json()["data"]
         if current["status"] in ("verified", "failed", "timeout", "cancelled", "runner_error"):
             return current
         time.sleep(0.05)
@@ -125,7 +157,8 @@ def test_load_toolchains_rejects_relative_paths_and_bad_names(tmp_path):
             {"name": "../escape", "path": "/bin/sh"},
             {"name": "", "path": "/bin/sh"},
             {"name": "missing", "path": "/nonexistent/lean"},
-            {"name": "lean4", "path": str(tmp_path / "toolchain-bin" / "lean")},
+            {"name": "lean4", "path": str(tmp_path / "toolchain-bin" / "lean"),
+             "sha256": hashlib.sha256((tmp_path / "toolchain-bin" / "lean").read_bytes()).hexdigest()},
         ]
     }))
     assert list(load_toolchains(str(manifest))) == ["lean4"]
@@ -358,3 +391,103 @@ def test_extract_axioms_handles_declared_and_printed():
     stdout = "'target' depends on axioms: [myAxiom, \"Quot.sound\"]\n"
     assert extract_axioms(source, stdout) == ["Quot.sound", "helper", "myAxiom"]
     assert extract_axioms("", "") == []
+
+
+def test_job_ownership_is_enforced_on_status_and_cancel(verifier):
+    created = verifier.post(
+        "/api/v1/lean/verify", headers=auth(),
+        json={"source": VERIFIED_SOURCE, "timeout_seconds": 10, "wait": False},
+    )
+    job_id = created.json()["data"]["id"]
+    assert verifier.get(f"/api/v1/lean/jobs/{job_id}", headers=auth("bob")).status_code == 403
+    cancelled = verifier.post(f"/api/v1/lean/jobs/{job_id}/cancel", headers=auth("bob"))
+    assert cancelled.status_code == 403
+    assert cancelled.json()["error"]["code"] == "JOB_FORBIDDEN"
+    assert wait_terminal(verifier, job_id)["status"] == "verified"
+
+
+def test_untrusted_manifest_and_sha_mismatch_fail_closed(settings, monkeypatch, tmp_path):
+    import xeonolab.lean_verifier as lv
+
+    settings.dev_tokens["alice"]["scope"] += " lean:verify"
+    write_toolchain(tmp_path)
+    manifest = tmp_path / "toolchains.json"
+    real_stat = os.stat
+
+    def non_root(path):
+        info = real_stat(str(path))
+        uid = 1000 if str(path).endswith(("toolchains.json", "lean")) else 0
+        return SimpleNamespace(st_uid=uid, st_mode=info.st_mode, st_ino=info.st_ino, st_size=info.st_size)
+
+    monkeypatch.setattr(lv, "_stat", non_root)
+    assert load_toolchains(str(manifest)) == {}
+
+    monkeypatch.undo()
+    # restore the trusted/sandbox seam for the rest of the test
+    def trusted(path):
+        info = real_stat(str(path))
+        inode = 1 if str(path).startswith("/proc/self/ns/") else 2 if str(path).startswith("/proc/1/ns/") else info.st_ino
+        return SimpleNamespace(st_uid=0, st_mode=info.st_mode, st_ino=inode, st_size=info.st_size)
+
+    monkeypatch.setattr(lv, "_stat", trusted)
+    tampered = json.loads(manifest.read_text())
+    tampered["toolchains"][0]["sha256"] = "0" * 64
+    manifest.write_text(json.dumps(tampered))
+    assert load_toolchains(str(manifest)) == {}
+
+
+def test_service_unavailable_without_observable_sandbox(settings, monkeypatch, tmp_path):
+    import xeonolab.lean_verifier as lv
+
+    settings.dev_tokens["alice"]["scope"] += " lean:verify"
+    write_toolchain(tmp_path)
+    monkeypatch.setenv("LEAN_TOOLCHAINS_FILE", str(tmp_path / "toolchains.json"))
+    monkeypatch.setattr(lv, "_namespace_isolated", lambda: False)
+    api = TestClient(create_app(settings))
+    assert api.get("/health/ready").status_code == 503
+    result = api.post("/api/v1/lean/verify", headers=auth(), json={"source": VERIFIED_SOURCE})
+    assert result.status_code == 503
+    assert result.json()["error"]["code"] == "VERIFIER_UNAVAILABLE"
+
+
+def test_shared_admission_and_queue_bounds(settings, monkeypatch, tmp_path):
+    import xeonolab.lean_verifier as lv
+
+    settings.dev_tokens["alice"]["scope"] += " lean:verify"
+    write_toolchain(tmp_path)
+    monkeypatch.setenv("LEAN_TOOLCHAINS_FILE", str(tmp_path / "toolchains.json"))
+    monkeypatch.setattr(lv, "MAX_CONCURRENT", 1)
+    monkeypatch.setattr(lv, "MAX_QUEUED", 1)
+    api = TestClient(create_app(settings))
+    running = api.post(
+        "/api/v1/lean/verify", headers=auth(),
+        json={"source": VERIFIED_SOURCE + " lean-marker: hang", "timeout_seconds": 30, "wait": False},
+    )
+    job_id = running.json()["data"]["id"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if api.get(f"/api/v1/lean/jobs/{job_id}", headers=auth()).json()["data"]["status"] == "running":
+            break
+        time.sleep(0.02)
+    busy = api.post("/api/v1/lean/verify", headers=auth(), json={"source": VERIFIED_SOURCE, "timeout_seconds": 5})
+    assert busy.status_code == 429, busy.text
+    assert busy.json()["error"]["code"] == "LEAN_BUSY"
+    queued = api.post(
+        "/api/v1/lean/verify", headers=auth(),
+        json={"source": VERIFIED_SOURCE, "timeout_seconds": 5, "wait": False},
+    )
+    assert queued.status_code == 429, queued.text
+    assert queued.json()["error"]["code"] == "LEAN_QUEUE_FULL"
+    api.post(f"/api/v1/lean/jobs/{job_id}/cancel", headers=auth())
+
+
+def test_output_is_bounded_while_the_process_runs(verifier):
+    result = verifier.post(
+        "/api/v1/lean/verify", headers=auth(),
+        json={"source": VERIFIED_SOURCE + " lean-marker: flood", "timeout_seconds": 10},
+    )
+    outcome = result.json()["data"]
+    assert outcome["status"] == "verified"
+    assert outcome["stdout_truncated"] is True
+    assert len(outcome["stdout"]) <= 16 * 1024
+    assert outcome["dependency_lock_checked"] is False
