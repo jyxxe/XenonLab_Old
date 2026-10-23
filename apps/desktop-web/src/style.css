@@ -247,6 +247,8 @@ a.job-table:hover{text-decoration:underline}
 .pinned-apps li{display:flex;align-items:center;gap:var(--spacing-2)}
 .preference-form .pinned-apps li label{display:flex;align-items:center;gap:var(--spacing-2);flex:1;min-width:0;margin:0}
 
+.embedding-input-item{display:grid;gap:8px}.embedding-result-item{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}.embedding-result-item h5{margin:0}.embedding-result-input{font-family:inherit}
+
 .embedding-table-target{display:grid;gap:4px;min-width:0}.embedding-table-target>span{overflow:hidden;text-overflow:ellipsis}.embedding-table-target>button{justify-self:start}
 
 .existing-attachment-list {list-style:none;padding:0;}

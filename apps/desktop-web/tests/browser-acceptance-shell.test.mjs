@@ -348,6 +348,47 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await editEmbeddingText('fresh after failure');
     assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-error'))"), false, 'editing clears a completed error for the old input');
     await cdp.evaluate('window.shellFixture.control.busyEmbedding=false');
+    // Batch encoding stays one synchronous request and maps out-of-order indexes.
+    const addInput = () => cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('新增输入项')).click()");
+    await addInput();
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('生成编码')).disabled"), true, 'blank added item blocks submitting');
+    await cdp.evaluate(`(() => {const input=document.querySelector('#embedding-text-1');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'second text');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await cdp.evaluate('window.shellFixture.resetCalls()');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-result-item').length===2"), 'two indexed embedding results');
+    const batchCalls = await cdp.evaluate("window.shellFixture.calls.filter(call=>call.path==='/embed/text')");
+    assert.equal(batchCalls.length,1,'multiple items generate a single request');
+    assert.deepEqual(batchCalls[0].body.input,['fresh after failure','second text']);
+    await cdp.evaluate("document.querySelectorAll('.embedding-result-item details').forEach(details=>details.open=true)");
+    assert.deepEqual(await cdp.evaluate("[...document.querySelectorAll('.embedding-result-item')].map(item=>({index:item.dataset.inputIndex,input:item.querySelector('.embedding-result-input').innerText,vector:JSON.parse(item.querySelector('details pre').innerText)}))"),
+      [{index:'0',input:'fresh after failure',vector:[0.125,-0.5,0.25]},{index:'1',input:'second text',vector:[1.125,-0.5,0.25]}]);
+    if (process.env.UI_SCREENSHOT_DIR) {
+      await fs.mkdir(process.env.UI_SCREENSHOT_DIR,{recursive:true});
+      await cdp.evaluate("document.querySelector('.embedding-result').scrollIntoView({block:'center'})");
+      const screenshot=await cdp.call('Page.captureScreenshot',{format:'png'});
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue145-batch-results.png'),Buffer.from(screenshot.data,'base64'));
+      await fs.writeFile(path.join(process.env.UI_SCREENSHOT_DIR,'issue145-batch-report.json'),JSON.stringify({browser:chromePath,dataSource:'synthetic shell fixture',request:batchCalls[0],requestCount:batchCalls.length,rendered:await cdp.evaluate("[...document.querySelectorAll('.embedding-result-item')].map(item=>({index:item.dataset.inputIndex,input:item.querySelector('.embedding-result-input').innerText,vector:JSON.parse(item.querySelector('details pre').innerText)}))"),realModelInference:false},null,2)+'\n');
+    }
+    await cdp.evaluate('window.shellFixture.control.malformedEmbedding=true');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('输入索引')"), 'malformed batch response shown as error');
+    assert.equal(await cdp.evaluate("Boolean(document.querySelector('.embedding-result'))"),false,'malformed response never publishes partial vectors');
+    await cdp.evaluate('window.shellFixture.control.malformedEmbedding=false;window.shellFixture.control.busyEmbedding=true');
+    await generateEmbedding();
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-error')?.innerText.includes('D100M worker busy')"), 'batch worker429 stays an error and is not queued');
+    await cdp.evaluate('window.shellFixture.control.busyEmbedding=false');
+    for (let i=2;i<32;i++) await addInput();
+    assert.equal(await cdp.evaluate("document.querySelectorAll('.embedding-input-item').length"),32,'input count reaches maximum32');
+    assert.equal(await cdp.evaluate("[...document.querySelectorAll('.embedding-app button')].find(button=>button.innerText.includes('新增输入项')).disabled"),true,'cannot add item33');
+    assert.equal(await cdp.evaluate("document.querySelector('#embedding-text').maxLength"),32768,'existing per-text character limit remains');
+    for (let i=32;i>1;i--) await cdp.evaluate(`document.querySelector('button[aria-label="移除输入项 ${i}"]').click()`);
+    assert.equal(await cdp.evaluate("document.querySelectorAll('.embedding-input-item').length"),1,'items can be removed back to single mode');
+    assert.equal(await cdp.evaluate("document.querySelector('button[aria-label=\"移除输入项 1\"]').disabled"),true,'last input cannot be removed');
+    await cdp.evaluate('window.shellFixture.control.embeddingReadOnly=true;window.shellFixture.resetCalls()');
+    await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
+    await waitFor(() => cdp.evaluate("document.querySelector('.embedding-app').innerText.includes('需要生成权限')"), 'read-only account cannot generate');
+    assert.equal(await cdp.evaluate("window.shellFixture.calls.some(call=>call.path==='/embed/text')"),false,'no request without write scope');
+    await cdp.evaluate('window.shellFixture.control.embeddingReadOnly=false');
     await cdp.evaluate('window.shellFixture.control.failEmbeddingQueue=true');
     await cdp.evaluate("document.querySelector('.embedding-app > header button').click()");
     await waitFor(() => cdp.evaluate("document.querySelectorAll('.embedding-panel')[1]?.innerText.includes('403 embedding:read required')"), 'queue API denial surfaced');
