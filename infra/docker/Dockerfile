@@ -2,6 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY pyproject.toml ./
 COPY xeonolab ./xeonolab
+COPY infra/plugins/builtin-capabilities.json ./infra/plugins/builtin-capabilities.json
 RUN pip install --no-cache-dir . && useradd --uid 10001 --create-home platform
 RUN mkdir /data && chown platform:platform /data
 USER platform

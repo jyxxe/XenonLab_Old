@@ -144,3 +144,15 @@ Phase 1 can implement the registry without touching runtime behaviour. Adapter
 interfaces for Tool Gateway/providers must be designed per contract before any
 business module moves, and service plugins remain blocked on the Phase 3
 security design and Deploy Gateway integration.
+
+### Phase 2: first trusted LLM Provider migration (#322)
+
+`ChatProvider` / `PreparedChat` separate static provider configuration and canonical
+HTTP transport from the gateway's identity, input/SSE validation, deadlines and
+resource ownership. A trusted `ChatProviderRegistry` checks provider/api capability,
+llm:use, version and process-local enablement; it does not execute manifest code.
+`LLM_CAPABILITY_ADAPTERS` enables resolution (default 1) or selects the original
+HTTP binding (0). JSON now shares the gateway's absolute deadline/error boundary.
+Details, process-local lifecycle limits, rollback and validation are recorded in
+`docs/issue322-chat-provider.md`. Persistent cross-service lifecycle coordination,
+Embedding adaptation and service runtime security are still separate work.

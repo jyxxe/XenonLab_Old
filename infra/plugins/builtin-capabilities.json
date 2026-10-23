@@ -26,6 +26,7 @@
     {"id": "builtin.platform.widget.app-shortcuts", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.widget.work", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.widget.search", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
-    {"id": "builtin.platform.widget.notes", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []}
+    {"id": "builtin.platform.widget.notes", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
+    {"id": "builtin.platform.provider.llm-chat", "kind": "provider", "version": "1.0.0", "runtime": "api", "permissions": ["llm:use"], "dependencies": []}
   ]
 }

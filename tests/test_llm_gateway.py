@@ -1,13 +1,12 @@
 import asyncio
 import json
 import logging
-from types import SimpleNamespace
 
 import httpx
 from fastapi.testclient import TestClient
 from starlette.requests import ClientDisconnect, Request
 
-from xeonolab.common import APIError
+from xeonolab.common import APIError, Identity
 from xeonolab.services import _sse_frame_kind, create_app
 
 from .conftest import auth
@@ -343,7 +342,7 @@ def test_streaming_handles_asgi_disconnects_and_releases_resources(settings, mon
             return {"type": "http.disconnect"}
 
         request = Request(scope, receive)
-        task = asyncio.create_task(endpoint(request, SimpleNamespace()))
+        task = asyncio.create_task(endpoint(request, Identity("synthetic", {"llm:use"})))
         await started.wait()
         disconnect.set()
         try:
@@ -400,7 +399,7 @@ def test_streaming_body_disconnect_closes_provider(settings, monkeypatch):
         scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
                  "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
                  "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
-        response = await endpoint(Request(scope, request_receive), SimpleNamespace())
+        response = await endpoint(Request(scope, request_receive), Identity("synthetic", {"llm:use"}))
 
         async def receive():
             await disconnected.wait()
@@ -477,7 +476,7 @@ def test_asgi20_disconnect_waits_for_shielded_provider_and_client_cleanup(settin
             "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
             "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123),
         }
-        response = await endpoint(Request(scope, request_receive), SimpleNamespace())
+        response = await endpoint(Request(scope, request_receive), Identity("synthetic", {"llm:use"}))
 
         async def send(message):
             if message["type"] == "http.response.start":
@@ -533,7 +532,7 @@ def test_streaming_asgi_24_send_oserror_closes_provider(settings, monkeypatch):
                  "method": "POST", "scheme": "http", "path": "/v1/chat/completions",
                  "raw_path": b"/v1/chat/completions", "query_string": b"", "headers": [],
                  "server": ("test", 80), "client": ("test", 123)}
-        response = await endpoint(Request(scope, receive), SimpleNamespace())
+        response = await endpoint(Request(scope, receive), Identity("synthetic", {"llm:use"}))
         sent = []
 
         async def send(message):
@@ -591,7 +590,7 @@ def test_stream_disconnect_racing_provider_headers_closes_returned_response(sett
                  "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
                  "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
         request = Request(scope, receive)
-        task = asyncio.create_task(endpoint(request, SimpleNamespace()))
+        task = asyncio.create_task(endpoint(request, Identity("synthetic", {"llm:use"})))
         await send_started.wait()
         disconnect.set()
         send_release.set()
@@ -643,7 +642,7 @@ def test_chat_request_body_deadline_returns_json_error(settings, monkeypatch):
                  "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
                  "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
         try:
-            await endpoint(Request(scope, receive), SimpleNamespace())
+            await endpoint(Request(scope, receive), Identity("synthetic", {"llm:use"}))
         except APIError as error:
             assert error.status == 408
             assert error.code == "REQUEST_TIMEOUT"
@@ -685,7 +684,7 @@ def test_stream_capacity_rejects_without_provider_call_and_releases_slot(setting
             scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
                      "scheme": "http", "path": "/v1/chat/completions", "raw_path": b"/v1/chat/completions",
                      "query_string": b"", "headers": [], "server": ("test", 80), "client": ("test", 123)}
-            return await endpoint(Request(scope, receive), SimpleNamespace())
+            return await endpoint(Request(scope, receive), Identity("synthetic", {"llm:use"}))
 
         first_response = await make_request()
         assert app.state.llm_stream_slots.qsize() == 0
