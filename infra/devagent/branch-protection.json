@@ -1,0 +1,21 @@
+{
+  "rule_name": "feature/platform-v1",
+  "enable_push": false,
+  "enable_merge_whitelist": true,
+  "merge_whitelist_usernames": ["devagent-maintainer", "codex", "xenon-admin"],
+  "enable_status_check": true,
+  "status_check_contexts": [
+    "verify / backend (pull_request)",
+    "verify / frontend (pull_request)",
+    "devagent/preflight"
+  ],
+  "required_approvals": 1,
+  "enable_approvals_whitelist": true,
+  "approvals_whitelist_username": ["devagent-maintainer", "codex"],
+  "block_on_rejected_reviews": true,
+  "block_on_official_review_requests": true,
+  "block_on_outdated_branch": true,
+  "dismiss_stale_approvals": true,
+  "ignore_stale_approvals": false,
+  "apply_to_admins": true
+}

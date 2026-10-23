@@ -1,3 +1,6 @@
+import base64
+import binascii
+import csv
 import fcntl
 import hashlib
 import json
@@ -13,14 +16,18 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
+from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import Depends, Header, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, Header, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from .bulk_jobs import BulkJobStore, payload_digest
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
+from .quality_pipeline import ranked_fusion
 from .query import evaluate, json_ast, parse, path_matches, sort_key
+from .search_models import SEARCH_ERRORS, SearchResponse
 from .uploads import register_upload_routes
 
 TYPES = {
@@ -101,6 +108,28 @@ def now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+SORT_CURSOR_PREFIX = "sort1."
+
+
+def encode_rows_sort_cursor(payload):
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return SORT_CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_rows_sort_cursor(cursor):
+    if not cursor.startswith(SORT_CURSOR_PREFIX):
+        raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+    encoded = cursor[len(SORT_CURSOR_PREFIX) :]
+    try:
+        raw = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        payload = json.loads(raw)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed") from None
+    if not isinstance(payload, dict):
+        raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+    return payload
+
+
 class Column(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]{0,63}$")
     type: str
@@ -116,6 +145,46 @@ class TableCreate(BaseModel):
 
 class RowWrite(BaseModel):
     values: dict
+
+
+class BulkInsert(BaseModel):
+    rows: list[RowWrite] = Field(min_length=1)
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class BulkUpdateItem(BaseModel):
+    row_id: str
+    revision: int = Field(ge=1)
+    values: dict
+
+
+class BulkUpdate(BaseModel):
+    rows: list[BulkUpdateItem] = Field(min_length=1)
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class BulkDeleteItem(BaseModel):
+    row_id: str
+    revision: int = Field(ge=1)
+
+
+class BulkDelete(BaseModel):
+    rows: list[BulkDeleteItem] = Field(min_length=1)
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class ExportRequest(BaseModel):
+    table_id: str
+    format: Literal["jsonl", "csv"] = "jsonl"
+    include_deleted: bool = False
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class ImportRequest(BaseModel):
+    table_id: str
+    content: str = Field(min_length=1)
+    format: Literal["jsonl", "csv"] = "jsonl"
+    batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class SchemaWrite(BaseModel):
@@ -138,8 +207,47 @@ class AttachmentBind(BaseModel):
     attachment_id: str = Field(min_length=1, max_length=64)
 
 
+class AttachmentCandidate(BaseModel):
+    attachment_id: str
+    row_id: str
+    filename: str
+    media_type: str
+    size: int
+    created_at: str
+    metadata: dict
+    source_label: str
+
+
+class AttachmentCandidatePage(BaseModel):
+    data: list[AttachmentCandidate]
+    meta: dict
+
+
 class ACLWrite(BaseModel):
     grants: dict[str, list[str]]
+
+
+def csv_value_coercion(column, raw):
+    """Convert a CSV cell to the schema-typed value for import (issue #84)."""
+    kind = column["type"]
+    if raw is None or raw == "":
+        return None
+    if kind in ("string", "text", "date", "datetime", "enum", "reference", "theorem_ref"):
+        return raw
+    if kind == "int64":
+        return int(raw)
+    if kind == "float64":
+        return float(raw)
+    if kind == "boolean":
+        lowered = raw.strip().lower()
+        if lowered in ("true", "1", "yes"):
+            return True
+        if lowered in ("false", "0", "no"):
+            return False
+        raise ValueError(f"invalid boolean {raw!r}")
+    if kind in ("json", "attachment_list"):
+        return json.loads(raw)
+    return raw
 
 
 def clean_path(path):
@@ -155,6 +263,7 @@ def create_app(settings=None):
     (root / "tables").mkdir(exist_ok=True)
     (root / "objects" / "sha256").mkdir(parents=True, exist_ok=True)
     catalogue = root / "catalogue.sqlite"
+    bulk_jobs = BulkJobStore(catalogue)
     with transaction(catalogue) as db:
         db.executescript("""
         CREATE TABLE IF NOT EXISTS tables(id TEXT PRIMARY KEY, path TEXT, name TEXT,
@@ -587,6 +696,8 @@ def create_app(settings=None):
                 jobs = [json.loads(row[0]) for row in db.execute("SELECT payload FROM index_jobs")] if jobs_exists else []
             if any(job.get("table_id") == tid and job.get("status") in ("queued", "running") for job in jobs):
                 raise APIError(409, "TABLE_INDEX_ACTIVE", "wait for the table's index job to finish")
+            if bulk_jobs.active_for_table(tid):
+                raise APIError(409, "TABLE_BULK_ACTIVE", "wait for the table's bulk row job to finish")
 
             upload_database = root / "uploads.sqlite"
             if upload_database.exists():
@@ -758,29 +869,135 @@ def create_app(settings=None):
         limit: int = 100,
         cursor: str = "",
         include_deleted: bool = False,
+        sort_by: str | None = Query(default=None, description="Optional schema or system field for table-wide ordering."),
+        direction: str | None = Query(default=None, description="Sort direction: asc or desc; defaults to asc when sort_by is set."),
         actor=Depends(scope("xelibrary:read")),
     ):
+        """List visible rows; sorted cursors are bound to the table, ordering, and deleted-row filter."""
         table, permits = authorize_request(actor, tid, "read")
         if not 1 <= limit <= 1000:
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
         with table_connect(tid) as db:
-            rows = [
-                decode(r)
-                for r in db.execute(
-                    "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id",
-                    (include_deleted, cursor),
-                )
-                if permits("read", r["_row_id"])
-            ][: limit + 1]
+            if sort_by is None:
+                if direction is not None:
+                    raise APIError(422, "INVALID_SORT", "direction requires sort_by")
+                if cursor.startswith(SORT_CURSOR_PREFIX):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested sort")
+                query = "SELECT * FROM data WHERE (? OR _deleted_at IS NULL) AND _row_id>? ORDER BY _row_id"
+                raw_rows = db.execute(query, (include_deleted, cursor))
+                rows = []
+                for raw in raw_rows:
+                    if permits("read", raw["_row_id"]):
+                        rows.append(decode(raw))
+                        if len(rows) > limit:
+                            break
+                page = rows[:limit]
+                next_cursor = page[-1]["_row_id"] if len(rows) > limit else None
+                return response(request, page, next_cursor=next_cursor)
+
+            direction = "asc" if direction is None else direction
+            if direction not in {"asc", "desc"}:
+                raise APIError(422, "INVALID_SORT", "direction must be asc or desc")
+            if not sort_by:
+                raise APIError(422, "INVALID_SORT", "sort_by must be a non-empty field name")
+
+            system_sort_expressions = {
+                "_row_id": "_row_id",
+                "_revision": "_revision",
+                "_created_at": "_created_at",
+                "_updated_at": "_updated_at",
+                "_deleted_at": "_deleted_at",
+            }
+            if sort_by in system_sort_expressions:
+                sort_expression = system_sort_expressions[sort_by]
+                sort_parameters = []
+            else:
+                if not any(column["name"] == sort_by for column in columns(db)):
+                    raise APIError(422, "INVALID_SORT", "sort_by must name a schema or supported system field")
+                # Schema field names are constrained by Column.name. Bind the JSON path
+                # as data as well, so it can never become SQL syntax.
+                sort_expression = "json_extract(values_json, ?)"
+                sort_parameters = ['$.' + json.dumps(sort_by, ensure_ascii=False)]
+
+            sort_cursor = None
+            if cursor:
+                sort_cursor = decode_rows_sort_cursor(cursor)
+                expected = {
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                }
+                if any(sort_cursor.get(key) != value for key, value in expected.items()):
+                    raise APIError(422, "INVALID_CURSOR", "cursor does not match the requested table, sort, or filters")
+                after_row_id = sort_cursor.get("after_row_id")
+                after_value = sort_cursor.get("after_value")
+                if not isinstance(after_row_id, str) or not after_row_id or not (
+                    after_value is None or type(after_value) in {int, float, str}
+                ):
+                    raise APIError(422, "INVALID_CURSOR", "cursor is malformed")
+
+            query = f"SELECT * FROM (SELECT data.*, {sort_expression} AS __sort_value FROM data) "
+            query += "WHERE (? OR _deleted_at IS NULL)"
+            parameters = [*sort_parameters, include_deleted]
+            if sort_cursor:
+                after_value = sort_cursor["after_value"]
+                after_row_id = sort_cursor["after_row_id"]
+                if after_value is None:
+                    # SQLite sorts NULL first for ASC and last for DESC. An ASC
+                    # cursor inside the NULL group must still admit every
+                    # non-NULL row that follows it; only DESC NULLs are terminal.
+                    if direction == "asc":
+                        query += " AND ((__sort_value IS NULL AND _row_id>?) OR __sort_value IS NOT NULL)"
+                    else:
+                        query += " AND __sort_value IS NULL AND _row_id>?"
+                    parameters.append(after_row_id)
+                else:
+                    operator = ">" if direction == "asc" else "<"
+                    query += f" AND (__sort_value {operator} ? OR (__sort_value = ? AND _row_id>?)"
+                    parameters.extend((after_value, after_value, after_row_id))
+                    # SQLite puts NULL first for ASC and last for DESC. Only the
+                    # latter can still appear after a non-null cursor value.
+                    if direction == "desc":
+                        query += " OR __sort_value IS NULL"
+                    query += ")"
+            query += f" ORDER BY __sort_value {direction.upper()}, _row_id ASC"
+            rows = []
+            for raw in db.execute(query, parameters):
+                if permits("read", raw["_row_id"]):
+                    rows.append((decode(raw), raw["__sort_value"]))
+                    if len(rows) > limit:
+                        break
+
+            page = [row for row, _ in rows[:limit]]
+            next_cursor = None
+            if len(rows) > limit:
+                last_row, last_value = rows[limit - 1]
+                next_cursor = encode_rows_sort_cursor({
+                    "v": 1,
+                    "table_id": tid,
+                    "sort_by": sort_by,
+                    "direction": direction,
+                    "include_deleted": include_deleted,
+                    "after_value": last_value,
+                    "after_row_id": last_row["_row_id"],
+                })
         return response(
-            request, rows[:limit], next_cursor=rows[limit - 1]["_row_id"] if len(rows) > limit else None
+            request, page, next_cursor=next_cursor
         )
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}")
-    def get_row(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+    def get_row(
+        tid: str,
+        rid: str,
+        request: Request,
+        include_deleted: bool = False,
+        actor=Depends(scope("xelibrary:read")),
+    ):
         authorize(actor, tid, "read", rid)
         with table_connect(tid) as db:
-            row = load_row(db, rid)
+            row = load_row(db, rid, include_deleted=include_deleted)
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
     @app.patch("/api/v1/tables/{tid}/rows/{rid}")
@@ -847,6 +1064,425 @@ def create_app(settings=None):
                 db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (rid,))
         audit(actor, "row.deleted", f"{tid}:{rid}")
         return response(request, {"deleted": True})
+
+    def _bulk_thresholds():
+        sync_limit = int(os.getenv("XELIBRARY_BULK_SYNC_LIMIT", "100"))
+        max_rows = int(os.getenv("XELIBRARY_BULK_MAX_ROWS", "5000"))
+        if sync_limit < 1 or max_rows < sync_limit:
+            raise APIError(500, "BULK_CONFIG_INVALID", "bulk threshold configuration invalid")
+        return sync_limit, max_rows
+
+    def _bulk_guard(items, actor, tid, max_rows):
+        if len(items) > max_rows:
+            raise APIError(413, "BULK_TOO_LARGE", f"batch exceeds {max_rows} rows; split the batch")
+        authorize(actor, tid, "write")
+
+    def _bulk_apply(job_id, tid, kind, rows, actor):
+        """Apply a persisted bulk job row by row (issue #83).
+
+        Every item reuses the single-row semantics - schema validation, table and
+        row ACL, per-item revision checks, change log, FTS maintenance and Qdrant
+        cleanup - and commits in its own transaction, so partial success never
+        rolls back rows that were already applied. The per-item result is written
+        in the same table transaction as the mutation, so a crash between the
+        table commit and the durable job record can be reconciled on restart
+        instead of silently losing applied rows.
+        """
+        bulk_jobs.start(job_id)
+        with table_transaction(tid) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS __xl_bulk_applied("
+                "job_id TEXT,item_index INTEGER,result TEXT NOT NULL,failed INTEGER NOT NULL,"
+                "PRIMARY KEY(job_id,item_index))"
+            )
+
+        def mark(db, index, result, failed=False):
+            db.execute(
+                "INSERT OR REPLACE INTO __xl_bulk_applied VALUES(?,?,?,?)",
+                (job_id, index, json.dumps(result, sort_keys=True), 1 if failed else 0),
+            )
+
+        try:
+            for index, item in enumerate(rows):
+                failed = False
+                try:
+                    if kind == "insert":
+                        authorize(actor, tid, "write")
+                        with table_transaction(tid) as db:
+                            values = validate_values(columns(db), item.values)
+                            rid, stamp = str(uuid4()), now()
+                            db.execute(
+                                "INSERT INTO data VALUES(?,?,?,?,?,?)",
+                                (rid, 1, stamp, stamp, None, json.dumps(values)),
+                            )
+                            row = load_row(db, rid)
+                            change(db, row, "create")
+                            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+                            index_cjk_row(db, rid, values.values())
+                            result = {"index": index, "status": "created", "row_id": rid, "revision": 1}
+                            mark(db, index, result)
+                    elif kind == "update":
+                        authorize(actor, tid, "write", item.row_id)
+                        with table_transaction(tid) as db:
+                            row = load_row(db, item.row_id)
+                            if item.revision != row["_revision"]:
+                                raise APIError(412, "STALE_REVISION", "revision mismatch")
+                            remove_qdrant_points(tid, item.row_id)
+                            values = {**row["values"], **validate_values(columns(db), item.values, True)}
+                            db.execute(
+                                "UPDATE data SET values_json=?,_revision=_revision+1,_updated_at=? WHERE _row_id=?",
+                                (json.dumps(values), now(), item.row_id),
+                            )
+                            row = load_row(db, item.row_id)
+                            change(db, row, "update")
+                            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
+                            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (item.row_id, " ".join(str(x) for x in values.values())))
+                            index_cjk_row(db, item.row_id, values.values())
+                            result = {"index": index, "status": "updated", "row_id": item.row_id, "revision": row["_revision"]}
+                            mark(db, index, result)
+                    else:
+                        authorize(actor, tid, "write", item.row_id)
+                        with table_transaction(tid) as db:
+                            row = load_row(db, item.row_id)
+                            if item.revision != row["_revision"]:
+                                raise APIError(412, "STALE_REVISION", "revision mismatch")
+                            remove_qdrant_points(tid, item.row_id)
+                            db.execute(
+                                "UPDATE data SET _deleted_at=?,_revision=_revision+1 WHERE _row_id=?",
+                                (now(), item.row_id),
+                            )
+                            change(db, load_row(db, item.row_id, True), "delete")
+                            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
+                            if cjk_fts_exists(db):
+                                db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (item.row_id,))
+                            result = {"index": index, "status": "deleted", "row_id": item.row_id}
+                            mark(db, index, result)
+                        audit(actor, "row.deleted", f"{tid}:{item.row_id}")
+                except APIError as error:
+                    failed = True
+                    result = {
+                        "index": index, "status": "failed",
+                        "error": {"code": error.code, "message": error.message},
+                    }
+                except Exception:
+                    logging.getLogger("xelibrary.bulk").exception("bulk item %s failed", index)
+                    failed = True
+                    result = {
+                        "index": index, "status": "failed",
+                        "error": {"code": "INTERNAL_ERROR", "message": "item failed; see service logs"},
+                    }
+                bulk_jobs.record(job_id, result, failed)
+        except Exception:
+            bulk_jobs.fail(job_id, "bulk worker crashed; partial results retained")
+            raise
+
+    def _bulk_marker_reader(tid, job_id):
+        target = file(tid)
+        if not target.is_file():
+            return []
+        with connect(target) as db:
+            if not db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='__xl_bulk_applied'"
+            ).fetchone():
+                return []
+            return [
+                (row["item_index"], row["result"], row["failed"])
+                for row in db.execute(
+                    "SELECT item_index,result,failed FROM __xl_bulk_applied WHERE job_id=? ORDER BY item_index",
+                    (job_id,),
+                )
+            ]
+
+    bulk_jobs.recover(_bulk_marker_reader)
+
+    def _duplicate_job_response(request, job):
+        return JSONResponse(response(request, {
+            "mode": job["status"], "job_id": job["id"], "duplicate": True,
+            "status": job["status"], "total": job["total"],
+            "done": job["done"], "failed": job["failed"],
+        }))
+
+    def _scoped_existing(kind, tid, payload, actor, batch_id):
+        """Scoped idempotency lookup shared by bulk rows and import/export jobs."""
+        if not batch_id:
+            return None
+        digest = payload_digest(kind, tid, payload)
+        existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+        if existing is not None and existing["payload_digest"] != digest:
+            raise APIError(
+                409, "BATCH_CONFLICT",
+                "batch_id was already used for a different payload for this table and caller",
+            )
+        return existing
+
+    def _create_scoped(kind, tid, payload, actor, batch_id, total=None):
+        """Create a job, returning (job_id, winner) where winner is set on a race."""
+        try:
+            return bulk_jobs.create(tid, kind, payload, actor.sub, batch_id, total=total), None
+        except sqlite3.IntegrityError:
+            existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+            if existing is None:
+                raise
+            if existing["payload_digest"] != payload_digest(kind, tid, payload):
+                raise APIError(
+                    409, "BATCH_CONFLICT",
+                    "batch_id was already used for a different payload for this table and caller",
+                ) from None
+            return existing["id"], existing
+
+    def _bulk_submit(kind, items, request, background, actor, tid, batch_id):
+        sync_limit, max_rows = _bulk_thresholds()
+        _bulk_guard(items, actor, tid, max_rows)
+        payload = [item.model_dump() for item in items]
+        digest = payload_digest(kind, tid, payload)
+        existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind) if batch_id else None
+        if existing is not None:
+            if existing["payload_digest"] != digest:
+                raise APIError(
+                    409, "BATCH_CONFLICT",
+                    "batch_id was already used for a different payload for this table and caller",
+                )
+            return _duplicate_job_response(request, existing)
+        try:
+            job_id = bulk_jobs.create(tid, kind, payload, actor.sub, batch_id)
+        except sqlite3.IntegrityError:
+            # Concurrent identical requests race on the scoped unique index; the
+            # loser re-reads the winning job instead of applying the batch twice.
+            existing = bulk_jobs.find_batch(batch_id, actor.sub, tid, kind)
+            if existing is None:
+                raise
+            if existing["payload_digest"] != digest:
+                raise APIError(
+                    409, "BATCH_CONFLICT",
+                    "batch_id was already used for a different payload for this table and caller",
+                ) from None
+            return _duplicate_job_response(request, existing)
+        if len(items) <= sync_limit:
+            _bulk_apply(job_id, tid, kind, items, actor)
+            job = bulk_jobs.get(job_id)
+            return JSONResponse(response(request, {
+                "mode": "sync", "job_id": job_id, "status": job["status"],
+                "total": job["total"], "done": job["done"], "failed": job["failed"],
+                "results": job["results"],
+            }))
+        background.add_task(_bulk_apply, job_id, tid, kind, items, actor)
+        return JSONResponse(response(request, {
+            "mode": "job", "job_id": job_id, "status": "queued", "total": len(items),
+        }), status_code=202)
+
+    @app.post("/api/v1/tables/{tid}/rows:bulkInsert")
+    def bulk_insert(tid: str, body: BulkInsert, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
+        return _bulk_submit("insert", body.rows, request, background, actor, tid, body.batch_id)
+
+    @app.post("/api/v1/tables/{tid}/rows:bulkUpdate")
+    def bulk_update(tid: str, body: BulkUpdate, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
+        return _bulk_submit("update", body.rows, request, background, actor, tid, body.batch_id)
+
+    @app.post("/api/v1/tables/{tid}/rows:bulkDelete")
+    def bulk_delete(tid: str, body: BulkDelete, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
+        return _bulk_submit("delete", body.rows, request, background, actor, tid, body.batch_id)
+
+    @app.get("/api/v1/tables/{tid}/rows:bulk/{job_id}")
+    def bulk_job_status(tid: str, job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        authorize(actor, tid, "read")
+        job = bulk_jobs.get(job_id)
+        if job is None or job["table_id"] != tid:
+            raise APIError(404, "JOB_NOT_FOUND", "bulk job not found")
+        if job["owner"] != actor.sub and "xelibrary:admin" not in actor.scopes:
+            raise APIError(403, "FORBIDDEN", "bulk job belongs to another caller")
+        return response(request, {
+            "job_id": job["id"], "table_id": job["table_id"], "kind": job["kind"],
+            "batch_id": job["batch_id"], "status": job["status"], "total": job["total"],
+            "done": job["done"], "failed": job["failed"], "results": job["results"],
+            "error": job["error"], "created_at": job["created_at"], "updated_at": job["updated_at"],
+        })
+
+    def _import_export_guard(job, actor):
+        if job["owner"] != actor.sub and "xelibrary:admin" not in actor.scopes:
+            raise APIError(403, "FORBIDDEN", "job belongs to another caller")
+
+    def _export_run(job_id, tid, fmt, actor, include_deleted):
+        """Write an ACL-filtered snapshot (JSONL or CSV); only readable rows are included."""
+        suffix = "jsonl" if fmt == "jsonl" else "csv"
+        output = root / "exports" / f"{job_id}.{suffix}"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        bulk_jobs.set_output(job_id, str(output))
+        max_rows = int(os.getenv("XELIBRARY_EXPORT_MAX_ROWS", "100000"))
+        done = 0
+        try:
+            table = authorize(actor, tid, "read")
+            with table_connect(tid) as db, output.open("w", encoding="utf-8", newline="") as handle:
+                columns_now = columns(db)
+                writer = csv.writer(handle) if fmt == "csv" else None
+                if fmt == "csv":
+                    writer.writerow([c["name"] for c in columns_now])
+                for raw in db.execute("SELECT * FROM data"):
+                    if bulk_jobs.cancel_requested(job_id):
+                        bulk_jobs.finish_cancelled(job_id)
+                        return
+                    row = decode(raw)
+                    if row["_deleted_at"] and not include_deleted:
+                        continue
+                    if not allowed(actor, table, "read", row["_row_id"]):
+                        continue
+                    done += 1
+                    if done > max_rows:
+                        raise APIError(413, "EXPORT_TOO_LARGE", f"export exceeds {max_rows} rows")
+                    if fmt == "jsonl":
+                        handle.write(json.dumps(decode(raw)) + "\n")
+                    else:
+                        writer.writerow(
+                            ["" if row["values"].get(c["name"]) is None else row["values"].get(c["name"])
+                             for c in columns_now]
+                        )
+                    bulk_jobs.set_done(job_id, done)
+            bulk_jobs.complete(job_id)
+        except APIError as error:
+            output.unlink(missing_ok=True)
+            bulk_jobs.fail(job_id, f"{error.code}: {error.message}")
+        except Exception:
+            logging.getLogger("xelibrary.export").exception("export job %s crashed", job_id)
+            output.unlink(missing_ok=True)
+            bulk_jobs.fail(job_id, "export worker crashed")
+
+    def _import_run(job_id, tid, fmt, actor, lines):
+        done = 0
+        try:
+            if fmt == "csv":
+                csv_rows = list(csv.reader(lines))
+                header = csv_rows[0] if csv_rows else None
+                entries = csv_rows[1:]
+                with table_connect(tid) as schema_db:
+                    schema = columns(schema_db)
+                names = [c["name"] for c in schema]
+                if header and set(header) - set(names):
+                    bulk_jobs.fail(job_id, "UNKNOWN_COLUMN: unknown CSV header column")
+                    return
+            else:
+                entries = lines
+            for index, entry in enumerate(entries):
+                if bulk_jobs.cancel_requested(job_id):
+                    bulk_jobs.finish_cancelled(job_id)
+                    return
+                failed = False
+                try:
+                    if fmt == "csv":
+                        values = {}
+                        for column, raw in zip(schema, entry):
+                            if column["name"] in header:
+                                values[column["name"]] = csv_value_coercion(column, raw)
+                    else:
+                        values = json.loads(entry)
+                        if not isinstance(values, dict):
+                            raise APIError(422, "INVALID_ROW", "line is not a JSON object")
+                        # exported rows carry the full snapshot; plain value objects also import
+                        if isinstance(values.get("values"), dict):
+                            values = values["values"]
+                    authorize(actor, tid, "write")
+                    with table_transaction(tid) as db:
+                        validated = validate_values(columns(db), values)
+                        rid, stamp = str(uuid4()), now()
+                        db.execute(
+                            "INSERT INTO data VALUES(?,?,?,?,?,?)",
+                            (rid, 1, stamp, stamp, None, json.dumps(validated)),
+                        )
+                        row = load_row(db, rid)
+                        change(db, row, "create")
+                        db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in validated.values())))
+                        index_cjk_row(db, rid, validated.values())
+                    result = {"index": index, "status": "created", "row_id": rid}
+                except APIError as error:
+                    failed = True
+                    result = {"index": index, "status": "failed",
+                              "error": {"code": error.code, "message": error.message}}
+                except Exception:
+                    logging.getLogger("xelibrary.import").exception("import line %s failed", index)
+                    failed = True
+                    result = {"index": index, "status": "failed",
+                              "error": {"code": "INTERNAL_ERROR", "message": "line failed; see service logs"}}
+                done += 1
+                bulk_jobs.record(job_id, result, failed)
+        except Exception:
+            bulk_jobs.fail(job_id, "import worker crashed; partial results retained")
+            raise
+
+    @app.post("/api/v1/exports")
+    def create_export(body: ExportRequest, request: Request, background: BackgroundTasks,
+                      actor=Depends(scope("xelibrary:read"))):
+        authorize(actor, body.table_id, "read")
+        payload = {"format": body.format, "include_deleted": body.include_deleted}
+        existing = _scoped_existing("export", body.table_id, payload, actor, body.batch_id)
+        if existing is not None:
+            return _duplicate_job_response(request, existing)
+        job_id, winner = _create_scoped("export", body.table_id, payload, actor, body.batch_id)
+        if winner is not None:
+            return _duplicate_job_response(request, winner)
+        background.add_task(_export_run, job_id, body.table_id, body.format, actor, body.include_deleted)
+        return JSONResponse(response(request, {"job_id": job_id, "status": "queued"}), status_code=202)
+
+    @app.get("/api/v1/exports/{job_id}")
+    def export_status(job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "export":
+            raise APIError(404, "JOB_NOT_FOUND", "export job not found")
+        _import_export_guard(job, actor)
+        return response(request, {"job_id": job["id"], "status": job["status"], "done": job["done"],
+                                  "error": job["error"], "downloadable": job["status"] == "completed"})
+
+    @app.get("/api/v1/exports/{job_id}/download")
+    def export_download(job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "export":
+            raise APIError(404, "JOB_NOT_FOUND", "export job not found")
+        _import_export_guard(job, actor)
+        if job["status"] != "completed" or not job["output"]:
+            raise APIError(409, "EXPORT_NOT_READY", "export is not finished")
+        return FileResponse(job["output"], media_type="application/x-ndjson",
+                            filename=f"{job['table_id']}.jsonl")
+
+    @app.post("/api/v1/imports")
+    def create_import(body: ImportRequest, request: Request, background: BackgroundTasks,
+                      actor=Depends(scope("xelibrary:write"))):
+        authorize(actor, body.table_id, "write")
+        max_bytes = int(os.getenv("XELIBRARY_IMPORT_MAX_BYTES", "2000000"))
+        if len(body.content.encode()) > max_bytes:
+            raise APIError(413, "IMPORT_TOO_LARGE", f"content exceeds {max_bytes} bytes")
+        lines = [line for line in body.content.splitlines() if line.strip()]
+        if not lines:
+            raise APIError(422, "IMPORT_EMPTY", "no rows to import")
+        # CSV: the first line is the header, so total counts data rows only.
+        total = len(lines) - 1 if body.format == "csv" else len(lines)
+        if total <= 0:
+            raise APIError(422, "IMPORT_EMPTY", "no rows to import")
+        payload = {"format": body.format, "lines": lines}
+        existing = _scoped_existing("import", body.table_id, payload, actor, body.batch_id)
+        if existing is not None:
+            return _duplicate_job_response(request, existing)
+        job_id, winner = _create_scoped("import", body.table_id, payload, actor, body.batch_id, total=total)
+        if winner is not None:
+            return _duplicate_job_response(request, winner)
+        background.add_task(_import_run, job_id, body.table_id, body.format, actor, lines)
+        return JSONResponse(response(request, {"job_id": job_id, "status": "queued", "total": len(lines)}), status_code=202)
+
+    @app.get("/api/v1/imports/{job_id}")
+    def import_status(job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "import":
+            raise APIError(404, "JOB_NOT_FOUND", "import job not found")
+        _import_export_guard(job, actor)
+        return response(request, {"job_id": job["id"], "status": job["status"], "total": job["total"],
+                                  "done": job["done"], "failed": job["failed"], "results": job["results"],
+                                  "error": job["error"]})
+
+    @app.post("/api/v1/imports/{job_id}/cancel")
+    def cancel_import(job_id: str, request: Request, actor=Depends(scope("xelibrary:write"))):
+        job = bulk_jobs.get(job_id)
+        if job is None or job["kind"] != "import":
+            raise APIError(404, "JOB_NOT_FOUND", "import job not found")
+        _import_export_guard(job, actor)
+        if not bulk_jobs.request_cancel(job_id):
+            raise APIError(409, "JOB_FINISHED", "job already reached a terminal state")
+        return response(request, {"job_id": job_id, "cancelled": True})
 
     @app.get("/api/v1/tables/{tid}/rows/{rid}/revisions")
     def revisions(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
@@ -1167,6 +1803,84 @@ def create_app(settings=None):
     )
     recover_table_deletions()
 
+    @app.get("/api/v1/tables/{tid}/attachments", response_model=AttachmentCandidatePage, description=(
+        "List same-table attachment metadata for currently readable, live source rows. "
+        "Requires xelibrary:read and table/row ACL. UUID keyset cursor is bound to table "
+        "and normalized search, not authority; every page checks current identity/ACL. "
+        "At most 500 references are examined per page; empty pages may have next_cursor. "
+        "Search is a casefolded substring of filename or displayed source_label. "
+        "No content, object hash, row values, preview or total count is returned."
+    ))
+    def list_table_attachments(
+        tid: str,
+        request: Request,
+        limit: int = Query(default=25, ge=1, le=100),
+        q: str = Query(default="", max_length=200),
+        cursor: str = Query(default="", max_length=2048),
+        actor=Depends(scope("xelibrary:read")),
+    ):
+        _, permits = authorize_request(actor, tid, "read")
+        query = q.strip().casefold()
+        after = ""
+        if cursor:
+            try:
+                decoded = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+                if not isinstance(decoded, dict) or set(decoded) != {"v", "table", "q", "after"}:
+                    raise ValueError
+                after = decoded["after"]
+                if (type(decoded["v"]) is not int or decoded["v"] != 1 or decoded["table"] != tid or decoded["q"] != query
+                        or not isinstance(after, str) or str(UUID(after)) != after):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError, binascii.Error):
+                raise APIError(422, "INVALID_CURSOR", "invalid attachment list cursor") from None
+        visible = []
+        last = after
+        more = False
+        with table_connect(tid) as db:
+            schema = columns(db)
+            names = [c["name"] for c in schema if c["type"] in ("string", "text")]
+            names = [name for name in ("title", "name") if name in names] + [
+                name for name in names if name not in ("title", "name")
+            ]
+            rows = db.execute(
+                "SELECT a.*,d._row_id AS source_row_id,d._deleted_at FROM __xl_attachments a LEFT JOIN data d ON d._row_id=a.row_id "
+                "WHERE a.attachment_id>? "
+                "ORDER BY a.attachment_id LIMIT 501", (after,)
+            ).fetchall()
+            # References can share a large source row; retain only its bounded label,
+            # and never load its values before checking the current read permission.
+            labels = {}
+            for attachment in rows[:500]:
+                if (attachment["source_row_id"] is not None and not attachment["_deleted_at"]
+                        and permits("read", attachment["row_id"])):
+                    source = attachment["row_id"]
+                    if source not in labels:
+                        row = db.execute(
+                            "SELECT values_json FROM data WHERE _row_id=? "
+                            "AND (_deleted_at IS NULL OR _deleted_at='')", (source,)
+                        ).fetchone()
+                        labels[source] = None
+                        if row is not None and row["values_json"] is not None:
+                            values = json.loads(row["values_json"])
+                            labels[source] = next((values[name].strip()[:256] for name in names
+                                                   if isinstance(values.get(name), str) and values[name].strip()), source)
+                    label = labels[source]
+                    if label is not None and (not query or query in attachment["filename"].casefold()
+                                              or query in label.casefold()):
+                        if len(visible) == limit:
+                            more = True
+                            break
+                        # Only the readable row's label is exposed, never its other values.
+                        visible.append({**attachment_metadata(attachment), "source_label": label})
+                last = attachment["attachment_id"]
+            more = more or len(rows) > 500
+        next_cursor = None
+        if more:
+            next_cursor = base64.urlsafe_b64encode(json.dumps({
+                "v": 1, "table": tid, "q": query, "after": last
+            }, separators=(",", ":"), ensure_ascii=False).encode()).decode()
+        return response(request, visible, next_cursor=next_cursor)
+
     @app.get("/api/v1/tables/{tid}/rows/{rid}/attachments")
     def list_attachments(tid: str, rid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         authorize(actor, tid, "read", rid)
@@ -1304,12 +2018,7 @@ def create_app(settings=None):
     )
     install_theorems(app, catalogue, allowed, audit)
 
-    @app.post("/api/v1/search/hybrid")
-    def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
-        raise APIError(503, "HYBRID_NOT_CONFIGURED", "hybrid fusion not yet implemented")
-
-    @app.post("/api/v1/search/text")
-    def text_search(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+    def collect_text(body, actor):
         # Literal term query: user input cannot inject FTS operators.
         terms = body.query.split()
         fts_query = " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
@@ -1444,12 +2153,41 @@ def create_app(settings=None):
                         break
         results = list(results_by_row.values())
         results.sort(key=lambda x: x["score"], reverse=True)
-        return response(
-            request,
-            results[: body.limit],
-            partial=partial,
-            approximate=partial or any(hit["approximate"] for hit in results[: body.limit]),
-        )
+        return results[: body.limit], {
+            "partial": partial,
+            "approximate": partial or any(hit["approximate"] for hit in results[: body.limit]),
+        }
+
+    @app.post(
+        "/api/v1/search/text",
+        response_model=SearchResponse,
+        response_model_exclude_none=True,
+        responses=SEARCH_ERRORS,
+    )
+    def text_search(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        hits, meta = collect_text(body, actor)
+        return response(request, hits, **meta)
+
+    @app.post(
+        "/api/v1/search/hybrid",
+        response_model=SearchResponse,
+        response_model_exclude_none=True,
+        responses=SEARCH_ERRORS,
+    )
+    def hybrid(body: Search, request: Request, actor=Depends(scope("xelibrary:query"))):
+        # FTS and vector scores occupy different spaces; merge ranks only.
+        quality = app.state.quality_pipeline
+        deadline = quality.clock() + quality.time_budget if body.mode == "quality" else None
+        semantic_hits, meta = app.state.semantic_collect(body, actor, request.state.request_id, deadline=deadline)
+        text_body = body.model_copy(update={"limit": min(max(body.limit * 5, 100), 500)})
+        text_hits, text_meta = collect_text(text_body, actor)
+        hits = ranked_fusion([semantic_hits, text_hits], "hybrid_rrf")
+        current = [hit for hit in hits if app.state.search_revalidate(hit, body, actor)]
+        if deadline is not None:
+            quality.check_deadline(deadline)
+        meta["partial"] = bool(meta["partial"] or text_meta["partial"] or len(current) != len(hits))
+        meta["approximate"] = bool(text_meta["approximate"] or any(hit["approximate"] for hit in current))
+        return response(request, current[: body.limit], **meta)
 
     snapshot_ttl = 60
     snapshot_lock = threading.Lock()

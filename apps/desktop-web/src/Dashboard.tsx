@@ -2,6 +2,8 @@ import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Bars,Legend,Meter,Ring,chartColor} from './MacCharts';
 import {ErrorState} from './design-system/primitives';
 import {isActiveWork, isExpiredWorkClaim, workDisplayStatus} from './work-state';
+import {forgejoIssueUrl} from './shell/forgejo-links.js';
+import {directoryDistribution} from './directory-distribution.js';
 type APIPage=(path:string,init?:RequestInit)=>Promise<{data:any;meta:{request_id?:string;next_cursor?:string|null;[key:string]:any}}>;
 type WorkItem={id:string;repository:string;issue_id:number;title:string;status:string;holder:string|null;claim_active:boolean};
 type Job={job_id:string;owner:string;table_id:string;status:string;created_at?:string;updated_at?:string;error?:string};
@@ -26,11 +28,7 @@ function jobDuration(job:Job){
   if(Number.isNaN(start)||Number.isNaN(end)||end<start)return '';
   return end-start<1000?`${end-start} ms`:`${((end-start)/1000).toFixed(1)} s`;
 }
-function issueHref(repository:string,issueId:number){
-  const [owner,repo]=repository.split('/');
-  return `https://xenon.jyxxe.com/dev/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${issueId}`;
-}
-export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)=>void}){
+export function Dashboard({apiPage,openApp,canOpenTasks=false}:{apiPage:APIPage;openApp:(id:string)=>void;canOpenTasks?:boolean}){
   const [work,setWork]=useState<WorkItem[]>([]),[workTruncated,setWorkTruncated]=useState(false),[jobs,setJobs]=useState<Job[]>([]),[tables,setTables]=useState<Table[]>([]),[tablesTruncated,setTablesTruncated]=useState(false),[tablesLoading,setTablesLoading]=useState(true),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null);
   const [notes,setNotes]=useState<Record<string,string>>({}),[health,setHealth]=useState<{service:string;ready:boolean;latency:number}|null>(null);
   const [stamp,setStamp]=useState(0),[tick,setTick]=useState(0);
@@ -75,9 +73,10 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
   const jobSegments=jobOrder.map(status=>({label:jobLabels[status],value:jobCounts?.[status]??jobs.filter(job=>job.status===status).length,color:jobColors[status]}));
   const workSegments=workOrder.map((status,index)=>({label:workLabels[status],value:status==='claimed'?work.filter(item=>item.status==='claimed'&&item.claim_active).length:status==='expired'?work.filter(isExpiredWorkClaim).length:work.filter(item=>item.status===status).length,color:chartColor(index)}));
   const visibleWork=[...work.filter(isExpiredWorkClaim),...work.filter(isActiveWork)];
-  const pathCounts:Record<string,number>={};
-  tables.forEach(table=>{const top=table.path.split('/').filter(Boolean)[0]||'/';pathCounts[top]=(pathCounts[top]||0)+1});
-  const pathData=Object.entries(pathCounts).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([label,value])=>({label:label.length>6?label.slice(0,6)+'…':label,value}));
+  const pathCategories=directoryDistribution(tables);
+  const pathData=pathCategories.map((category,index)=>({label:String(index+1),value:category.value,
+    color:category.kind==='other'?'#8e8e93':chartColor(index),
+    hint:category.kind==='other'?`其他（汇总）：${category.directories.length} 个目录，${category.value} 张表；完整目录：${category.directories.map(directory=>`${directory.name}（${directory.value} 张表）`).join('、')}`:`目录：${category.name}，${category.value} 张表`}));
   return <section className="dashboard">
     <header className="dashboard-head"><div><h2>系统面板</h2><p>Embedding 索引队列、Harness 任务与知识库概览</p></div>
       <div className="dashboard-actions"><small>{stamp?`更新于 ${new Date(stamp).toLocaleTimeString('zh-CN')}`:'加载中…'}</small><button onClick={retry}>刷新</button></div></header>
@@ -100,15 +99,19 @@ export function Dashboard({apiPage,openApp}:{apiPage:APIPage;openApp:(id:string)
           <Legend items={workSegments}/>
         </div>}
         {!notes.work&&workTruncated&&<p className="muted">状态统计仅覆盖当前载入的前 1000 项。</p>}
-        {!notes.work&&visibleWork.length>0&&<ul className="job-list">{visibleWork.slice(0,4).map(item=><li key={item.id}>
+        {!notes.work&&visibleWork.length>0&&<ul className="job-list">{visibleWork.slice(0,4).map(item=>{
+          const href=forgejoIssueUrl(item.repository,item.issue_id);
+          return <li key={item.id}>
           <span className={`chip ${workDisplayStatus(item)}`}>{workDisplayStatus(item)==='expired'?'已过期 · 可重领':workLabels[item.status]||item.status}</span>
-          <a className="job-table" href={issueHref(item.repository,item.issue_id)} target="_blank" rel="noopener noreferrer" title={item.title}>#{item.issue_id} {item.title}</a>
+          {href?<a className="job-table" href={href} target="_blank" rel="noopener noreferrer" title={item.title}>#{item.issue_id} {item.title}</a>:<span className="job-table" title={item.title}>#{item.issue_id} {item.title}</span>}
           <small>{item.holder||'待领取'}</small>
-        </li>)}</ul>}
-        <button onClick={()=>openApp('work')}>打开任务中心</button>
+        </li>})}</ul>}
+        {canOpenTasks?<button onClick={()=>openApp('issues')}>打开任务中心</button>:<p className="muted">当前身份没有可用的任务应用。</p>}
       </article>
       <article className="mac-card"><header><h3>知识库概览</h3><span className="mac-badge">{tablesLoading?'读取中…':notes.tables?'不可用':tablesTruncated?`${tables.length}+ 张表`:`${tables.length} 张表`}</span></header>
-        {notes.tables?<ErrorState title="无法读取知识库概览" message={notes.tables} onRetry={retry}/>:tablesLoading?<p className="muted" role="status">正在读取可见知识表…</p>:pathData.length?<Bars data={pathData} unit=" 张表"/>:<p className="muted">暂无可见知识表。</p>}
+        {notes.tables?<ErrorState title="无法读取知识库概览" message={notes.tables} onRetry={retry}/>:tablesLoading?<p className="muted" role="status">正在读取可见知识表…</p>:pathData.length?<div className="directory-distribution"><Bars data={pathData} unit=" 张表"/><ol className="directory-legend" aria-label="首层目录分布">{pathCategories.map((category,index)=><li key={index} title={pathData[index].hint}>
+          <b style={{borderBottomColor:pathData[index].color}} aria-hidden="true">{index+1}</b><span>{category.kind==='other'?`其他（${category.directories.length} 个目录汇总）`:`目录：${category.name}`}</span><em>{category.value} 张表</em>
+        </li>)}</ol></div>:<p className="muted">暂无可见知识表。</p>}
         {!notes.tables&&!tablesLoading&&tablesTruncated&&<p className="muted">路径统计仅覆盖当前载入的前 1000 张表。</p>}
         <button onClick={()=>openApp('knowledge')}>打开知识库</button>
       </article>

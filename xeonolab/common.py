@@ -185,6 +185,7 @@ class Identity:
     issued_at: float = 0
     credential_epoch: str = ""
     ancestors: tuple[str, ...] = ()
+    token_scopes: set[str] | None = None
 
     def require(self, scope):
         if scope not in self.scopes:
@@ -316,6 +317,7 @@ def token_identity(token, settings):
         claims.get("iat", 0),
         claims.get("account_epoch", ""),
         tuple(claims.get("ancestors", ())),
+        token_scopes=set(scopes),
     )
 
 
@@ -372,8 +374,10 @@ def route_group(request, actor):
             body = json.loads(raw_body)
         except (UnicodeDecodeError, json.JSONDecodeError):
             pass
-    if path.endswith("/search/semantic"):
+    if path.endswith(("/search/semantic", "/search/hybrid")):
         return "embedding-quality" if body.get("mode") == "quality" else "embedding-fast"
+    if path in {"/api/v1/embed/image", "/api/v1/search/image"}:
+        return "embedding-quality"
     if path.endswith("/embed/text") or path.endswith("/v1/embeddings"):
         if body.get("model") in {"quality", "Qwen/Qwen3-VL-Embedding-2B"}:
             return "embedding-quality"
@@ -382,6 +386,10 @@ def route_group(request, actor):
         return "embedding-quality"
     if "/embedding/" in path or "/embed/" in path or "/embeddings/" in path or path.endswith("/embeddings"):
         return "embedding-fast"
+    # Issue #84: polling an import/export job status is a light read; the bulk
+    # quota (10/min) is reserved for the heavy submission endpoints themselves.
+    if request.method == "GET" and ("/exports/" in path or "/imports/" in path):
+        return "interactive"
     if any(segment in path for segment in ("/bulk", "/import", "/export", "/index")):
         return "bulk"
     if any(

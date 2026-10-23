@@ -1,3 +1,4 @@
+import {Icon} from '../design-system/Icon';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {useFocusTrap} from '../design-system/primitives';
 
@@ -138,7 +139,7 @@ export function CommandPalette({
                     onMouseEnter={() => setActive(index)}
                     onClick={() => run(command)}
                   >
-                    <b aria-hidden="true">{command.icon || '›'}</b>
+                    <b aria-hidden="true"><Icon value={command.icon || '›'} size={20} /></b>
                     <span>{command.title}</span>
                     {command.subtitle ? <small>{command.subtitle}</small> : null}
                   </button>

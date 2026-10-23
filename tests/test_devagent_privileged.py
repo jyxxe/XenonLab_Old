@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -93,6 +94,105 @@ def test_staged_archive_rejects_credentials_paths_and_links(name, link):
 def test_job_queries_cannot_select_paths(identifier):
     with pytest.raises(ValueError):
         broker.request_valid({"action": "operation-logs", "args": [identifier]})
+
+
+def test_publication_recovery_is_read_only_and_absence_is_not_recovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(broker, "ROOT", tmp_path)
+    identifier = "a" * 32
+    broker.request_valid({"action": "publication-recovery", "args": [identifier]})
+    assert broker.publication_recovery(identifier) is None
+
+    directory = tmp_path / "publication-recoveries"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    receipt = directory / (identifier + ".json")
+    receipt.write_text("{}")
+    receipt.chmod(0o600)
+    original_lstat = broker.Path.lstat
+
+    def root_owned_lstat(path):
+        info = original_lstat(path)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_size=info.st_size)
+
+    monkeypatch.setattr(broker.Path, "lstat", root_owned_lstat)
+    with pytest.raises(ValueError, match="invalid publication recovery receipt"):
+        broker.publication_recovery(identifier)
+
+
+def test_publication_recovery_rejects_symlink_and_invalid_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(broker, "ROOT", tmp_path)
+    identifier = "b" * 32
+    directory = tmp_path / "publication-recoveries"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    target = tmp_path / "outside.json"
+    target.write_text("{}")
+    (directory / (identifier + ".json")).symlink_to(target)
+    original_lstat = broker.Path.lstat
+
+    def root_owned_lstat(path):
+        info = original_lstat(path)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_size=info.st_size)
+
+    monkeypatch.setattr(broker.Path, "lstat", root_owned_lstat)
+    with pytest.raises(ValueError, match="unsafe publication recovery receipt"):
+        broker.publication_recovery(identifier)
+    (directory / (identifier + ".json")).unlink()
+
+    path = directory / (identifier + ".json")
+    path.write_text("{}")
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="invalid publication recovery receipt"):
+        broker.publication_recovery(identifier)
+
+
+def test_publication_recovery_rejects_audit_marked_recovery_required(tmp_path, monkeypatch):
+    monkeypatch.setattr(broker, "ROOT", tmp_path)
+    operation_id = "c" * 32
+    commit, head, baseline = "a" * 40, "b" * 40, "d" * 40
+    job_dir = tmp_path / "jobs" / operation_id
+    audit_dir = tmp_path / "deployments" / operation_id
+    receipt_dir = tmp_path / "publication-recoveries"
+    for path in (tmp_path / "jobs", job_dir, tmp_path / "deployments", audit_dir, receipt_dir):
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.chmod(0o700)
+    status = {"id": operation_id, "state": "failed", "action": "deploy", "commit": commit,
+              "recovery_required": False}
+    request = {"action": "deploy", "args": ["xenon-admin/XeonoLab", commit, "production"]}
+    audit = {"repository": "xenon-admin/XeonoLab", "commit": commit, "environment": "production",
+             "state_before_failure": "preflight", "state": "failed", "previous": {}, "verification": {}}
+    status_path, request_path, audit_path = job_dir / "status.json", job_dir / "request.json", audit_dir / "audit.json"
+    status_bytes, audit_bytes = json.dumps(status).encode(), json.dumps(audit).encode()
+    status_path.write_bytes(status_bytes)
+    request_path.write_text(json.dumps(request))
+    audit_path.write_bytes(audit_bytes)
+    for path in (status_path, request_path, audit_path):
+        path.chmod(0o600)
+    receipt = {"receipt_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "state": "operator_aborted",
+               "operation_id": operation_id, "number": 14, "head": head, "commit": commit,
+               "baseline_commit": baseline,
+               "evidence": {"native_job_sha256": hashlib.sha256(status_bytes).hexdigest(),
+                           "native_audit_sha256": hashlib.sha256(audit_bytes).hexdigest(),
+                           "targets_verified": True, "gateway_unresolved": False, "lease_active": False}}
+    receipt_path = receipt_dir / (operation_id + ".json")
+    receipt_path.write_text(json.dumps(receipt))
+    receipt_path.chmod(0o600)
+    original_lstat = broker.Path.lstat
+
+    def root_owned_lstat(path):
+        info = original_lstat(path)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_size=info.st_size)
+
+    monkeypatch.setattr(broker.Path, "lstat", root_owned_lstat)
+    assert broker.publication_recovery(operation_id) == receipt
+
+    audit["recovery_required"] = True
+    audit_bytes = json.dumps(audit).encode()
+    audit_path.write_bytes(audit_bytes)
+    receipt["evidence"]["native_audit_sha256"] = hashlib.sha256(audit_bytes).hexdigest()
+    receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match="failed pre-activation"):
+        broker.publication_recovery(operation_id)
 
 
 def test_async_submission_is_not_completion_and_excludes_another_job(tmp_path, monkeypatch):
@@ -271,3 +371,21 @@ def test_gateway_rollout_requires_terminal_exact_activation_and_owned_lease(tmp_
         with pytest.raises(ValueError):
             stage.restart_gateway(old_sha if case == "sha" else expected, identifier)
         assert calls == []
+
+
+def test_deploy_rejects_historical_or_newly_superseded_integration_commit(tmp_path, monkeypatch):
+    runner = load('deploy_runner')
+    calls = []
+    tip = 'a' * 40
+
+    def git(argv, **kwargs):
+        calls.append(argv)
+        assert '--no-replace-objects' in argv
+        return SimpleNamespace(stdout=tip + '\n', returncode=0)
+
+    monkeypatch.setattr(runner.subprocess, 'run', git)
+    runner.ensure_release_head(tip)
+    assert calls[0][-3:] == ['fetch', 'origin', 'feature/platform-v1']
+    tip = 'b' * 40
+    with pytest.raises(RuntimeError, match='current production integration head'):
+        runner.ensure_release_head('a' * 40)

@@ -43,6 +43,30 @@ export type Job = {
   error?: string;
 };
 
+export type IndexStatusState = 'ready' | 'stale' | 'not_indexed' | 'queued' | 'indexing' | 'failed' | 'empty';
+
+/** Shared-table readers only receive a minimal, owner-safe job summary. */
+export type IndexStatusLastJob = {
+  job_id?: string;
+  owner?: string;
+  table_id?: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  created_at?: string;
+  updated_at?: string;
+  error?: string;
+};
+
+export type IndexStatus = {
+  table_id: string;
+  state: IndexStatusState;
+  row_count: number;
+  embedded_rows: number;
+  missing_rows: number;
+  pending_rows: number;
+  chunk_count: number;
+  last_job: IndexStatusLastJob | null;
+};
+
 export type SearchHit = {
   table_id: string;
   row_id: string;
@@ -102,3 +126,7 @@ export type QueryExplain = {
 };
 
 export type RecentEntry = {kind: 'table' | 'row' | 'path' | 'theorem'; id: string; title: string; at: number};
+
+/** Selection AI extension point (Issue #71 §17): the action ids are part of the
+ * library ⇄ chat contract; future native chat apps consume the same draft. */
+export type SelectionAIAction = 'ask' | 'summarize' | 'related';

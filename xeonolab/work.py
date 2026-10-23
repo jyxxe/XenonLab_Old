@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import httpx
 from fastapi import Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .common import APIError, connect, response, scope, transaction
 
@@ -39,6 +39,11 @@ class Claim(BaseModel):
 class Release(BaseModel):
     epoch: int = Field(ge=1)
     completed: bool = False
+
+
+class AdminComplete(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(default="", max_length=500)
 
 
 class Renew(BaseModel):
@@ -202,6 +207,8 @@ def install(app):
         if "created_at" not in {row[1] for row in db.execute("PRAGMA table_info(work)")}:
             # Issue #92: existing rows keep 0, which sorts them first (oldest) in FIFO order.
             db.execute("ALTER TABLE work ADD COLUMN created_at REAL NOT NULL DEFAULT 0")
+        if "admin_completed" not in {row[1] for row in db.execute("PRAGMA table_info(work)")}:
+            db.execute("ALTER TABLE work ADD COLUMN admin_completed INTEGER NOT NULL DEFAULT 0")
 
     def load(db, work_id):
         row = db.execute("SELECT * FROM work WHERE id=?", (work_id,)).fetchone()
@@ -284,7 +291,8 @@ def install(app):
         if item is None:
             work_id = str(uuid4())
             db.execute(
-                "INSERT INTO work VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO work(id,repository,issue_id,title,status,holder,expires,epoch,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     work_id,
                     repository,
@@ -300,10 +308,30 @@ def install(app):
         else:
             work_id = item["id"]
             db.execute("UPDATE work SET title=? WHERE id=?", (title, work_id))
-            if state == "closed" or (state == "open" and item["status"] in ("completed", "blocked")):
+            if state == "closed":
                 db.execute(
-                    "UPDATE work SET status=?,holder=NULL,expires=0,epoch=epoch+1 WHERE id=?",
-                    ("completed" if state == "closed" else "queued", work_id),
+                    "UPDATE work SET status='completed',holder=NULL,expires=0,epoch=epoch+1,"
+                    "admin_completed=0 WHERE id=?",
+                    (work_id,),
+                )
+            elif state == "open" and item["status"] == "blocked":
+                # A resolved source conflict re-opens the queue entry.
+                db.execute(
+                    "UPDATE work SET status='queued',holder=NULL,expires=0,epoch=epoch+1 WHERE id=?",
+                    (work_id,),
+                )
+            elif state == "open" and item["status"] == "completed" and not item["admin_completed"]:
+                # A Forgejo reopen re-queues ordinary completions.
+                db.execute(
+                    "UPDATE work SET status='queued',holder=NULL,expires=0,epoch=epoch+1 WHERE id=?",
+                    (work_id,),
+                )
+            elif state == "open" and item["status"] == "completed":
+                # An explicit admin close-out is a deliberate human decision and
+                # survives newer open-webhook events (issue #91 review).
+                db.execute(
+                    "INSERT INTO work_audit VALUES(?,?,?,?,?,?)",
+                    (str(uuid4()), "forgejo-webhook", "issue.sync_ignored_admin_completed", work_id, item["epoch"], time.time()),
                 )
         db.execute(
             "INSERT INTO issue_snapshots VALUES(?,?,?,0) ON CONFLICT(repository,issue_id) "
@@ -370,7 +398,8 @@ def install(app):
                 return response(request, dict(old))
             work_id = str(uuid4())
             db.execute(
-                "INSERT INTO work VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO work(id,repository,issue_id,title,status,holder,expires,epoch,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
                 (work_id, body.repository, body.issue_id, body.title, "queued", None, 0, 0, time.time()),
             )
             audit(db, actor, "work.created", work_id, 0)
@@ -404,7 +433,14 @@ def install(app):
         if any(item not in valid_statuses for item in statuses):
             raise APIError(422, "INVALID_STATUS", "unknown status filter")
         now = time.time()
+        # `active` (the #93 filter) treats queued items as actionable, but the
+        # claim_active contract stays "this caller holds a live lease": only a
+        # non-null holder with an unexpired lease counts. Conflating the two
+        # would hide the claim button for every queued item.
         active_expression = "(status='queued' OR (holder IS NOT NULL AND expires > :now))"
+        # claim_active/lease_expired keep the #93 live-lease contract: a queued
+        # item has no holder, so it stays claimable but is not an active claim.
+        claim_expression = "(holder IS NOT NULL AND expires > :now)"
         conditions, parameters = [], {"now": now}
         if cursor:
             try:
@@ -429,8 +465,8 @@ def install(app):
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         query = (
             "SELECT *,"
-            f" {active_expression} AS claim_active,"
-            f" (status='claimed' AND NOT {active_expression}) AS lease_expired"
+            f" {claim_expression} AS claim_active,"
+            f" (status='claimed' AND NOT {claim_expression}) AS lease_expired"
             f" FROM work{where} ORDER BY created_at ASC, id ASC LIMIT :limit"
         )
         parameters["limit"] = limit + 1
@@ -561,6 +597,40 @@ def install(app):
                 ("completed" if body.completed else "queued", work_id),
             )
             audit(db, actor, "work.completed" if body.completed else "work.released", work_id, body.epoch)
+            return response(request, load(db, work_id))
+
+    @app.post("/api/v1/work/{work_id}/admin-complete")
+    def admin_complete(
+        work_id: str, body: AdminComplete = AdminComplete(), request: Request = None, actor=Depends(scope("dev:write"))
+    ):
+        """Queue hygiene close-out for items nobody holds (issue #91).
+
+        Reconcile only completes a work item when its Forgejo issue closes, and
+        release is holder-scoped, so implemented-but-abandoned items could never
+        leave the queued view. This endpoint is the escape hatch: it refuses to
+        touch an actively held claim or a source-conflict item (resolve those
+        through reconcile first), fences any stale holder via epoch+1, and the
+        close-out persists across newer open-webhook events until Forgejo
+        reports the issue closed again. The optional reason is kept in the
+        work audit trail.
+        """
+        with transaction(database) as db:
+            current = load(db, work_id)
+            if current["status"] == "completed":
+                raise APIError(409, "WORK_COMPLETED", "task is already completed")
+            if current["status"] == "blocked":
+                raise APIError(
+                    409, "SYNC_CONFLICT", "resolve the source conflict (reconcile) before completing"
+                )
+            if current["holder"] is not None and current["expires"] > time.time():
+                raise APIError(409, "WORK_CLAIMED", "task has an active claim; the holder must release it")
+            db.execute(
+                "UPDATE work SET status='completed',holder=NULL,expires=0,epoch=epoch+1,"
+                "admin_completed=1 WHERE id=?",
+                (work_id,),
+            )
+            event = "work.admin_completed" + (f": {body.reason}" if body.reason else "")
+            audit(db, actor, event, work_id, current["epoch"])
             return response(request, load(db, work_id))
 
     @app.post("/api/v1/issues/{issue_id}/links", status_code=201)

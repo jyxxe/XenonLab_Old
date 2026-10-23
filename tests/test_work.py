@@ -801,6 +801,124 @@ def test_renew_extends_active_claim_and_fences_stale_or_expired_holders(settings
     assert client.post(path + "/release", headers=auth(), json={"epoch": second["epoch"]}).status_code == 409
 
 
+def test_admin_complete_closes_queue_hygiene_gaps(settings):
+    for user in ("alice", "bob"):
+        settings.dev_tokens[user]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+
+    stale = create(401, "Abandoned item")
+    live = create(402, "Actively held item")
+    done = create(403, "Already completed")
+    client.post(f"/api/v1/work/{live['id']}/claim", headers=auth(), json={"ttl_seconds": 3600})
+    client.post(f"/api/v1/work/{done['id']}/claim", headers=auth(), json={"ttl_seconds": 60})
+    client.post(f"/api/v1/work/{done['id']}/release", headers=auth(), json={"epoch": 1, "completed": True})
+
+    # unheld queued item: admin complete succeeds and fences via epoch+1
+    result = client.post(f"/api/v1/work/{stale['id']}/admin-complete", headers=auth())
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["status"] == "completed"
+    assert result.json()["data"]["holder"] is None
+    assert result.json()["data"]["epoch"] == stale["epoch"] + 1
+    # idempotency guard
+    assert client.post(f"/api/v1/work/{stale['id']}/admin-complete", headers=auth()).status_code == 409
+
+    # actively held claim must not be completed by an administrator
+    conflict = client.post(f"/api/v1/work/{live['id']}/admin-complete", headers=auth())
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "WORK_CLAIMED"
+    # already completed
+    assert client.post(f"/api/v1/work/{done['id']}/admin-complete", headers=auth()).status_code == 409
+    # missing item
+    assert client.post("/api/v1/work/missing/admin-complete", headers=auth()).status_code == 404
+    # unauthenticated
+    assert client.post(f"/api/v1/work/{stale['id']}/admin-complete").status_code == 401
+    # expired claim CAN be completed (queue hygiene goal): claim then age it out
+    expired = create(404, "Expired claim item")
+    client.post(f"/api/v1/work/{expired['id']}/claim", headers=auth(), json={"ttl_seconds": 3600})
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET expires=? WHERE id=?", (time.time() - 5, expired["id"]))
+        db.commit()
+    result = client.post(f"/api/v1/work/{expired['id']}/admin-complete", headers=auth())
+    assert result.status_code == 200
+    assert result.json()["data"]["status"] == "completed"
+    # audit trail records the administrative close-out
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        events = [dict(r)["event"] for r in db.execute(
+            "SELECT event FROM work_audit WHERE work_id=?", (expired["id"],))]
+    assert "work.admin_completed" in events
+
+
+def test_admin_complete_rejects_blocked_and_persists_closeout(settings):
+    """Issue #91 review: blocked items must be reconciled first, and an admin
+    close-out survives newer open-webhook events for its issue."""
+    settings.dev_tokens["alice"]["scope"] += " dev:read dev:write"
+    client = TestClient(create_app("dev-agent", settings))
+
+    def create(issue_id, title):
+        body = {"repository": "xenon-admin/XeonoLab", "issue_id": issue_id, "title": title}
+        return client.post("/api/v1/work", headers=auth(), json=body).json()["data"]
+
+    conflicted = create(411, "Source conflict item")
+    closeout = create(412, "Admin closed-out item")
+    reopenable = create(413, "Reopen after close")
+
+    # blocked (source conflict) items are refused until reconciled
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET status='blocked',holder=NULL,expires=0 WHERE id=?", (conflicted["id"],))
+        db.commit()
+    refusal = client.post(f"/api/v1/work/{conflicted['id']}/admin-complete", headers=auth())
+    assert refusal.status_code == 409
+    assert refusal.json()["error"]["code"] == "SYNC_CONFLICT"
+
+    # a close-out with a reason persists across newer open-webhook events
+    done = client.post(
+        f"/api/v1/work/{closeout['id']}/admin-complete", headers=auth(), json={"reason": "已由 PR #99 交付"}
+    )
+    assert done.status_code == 200 and done.json()["data"]["status"] == "completed"
+    ingest_webhook = client.app.state.ingest_forgejo
+
+    def issue_payload(number, title, state, stamp):
+        return {
+            "repository": {"full_name": "xenon-admin/XeonoLab"},
+            "issue": {"number": number, "title": title, "state": state, "updated_at": stamp},
+        }
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "open", "2026-10-02T12:00:00Z"))
+    still = client.get("/api/v1/work", headers=auth()).json()["data"]
+    row = next(item for item in still if item["id"] == closeout["id"])
+    assert row["status"] == "completed" and row["admin_completed"] == 1
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        events = [dict(r)["event"] for r in db.execute(
+            "SELECT event FROM work_audit WHERE work_id=?", (closeout["id"],))]
+    assert any(event.startswith("work.admin_completed") and "PR #99" in event for event in events)
+    assert "issue.sync_ignored_admin_completed" in events
+
+    # without the admin flag, a newer open event re-queues a completed item
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.execute("UPDATE work SET status='completed',holder=NULL,expires=0,admin_completed=0 WHERE id=?", (reopenable["id"],))
+        db.commit()
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(413, "Reopen after close", "open", "2026-10-02T12:05:00Z"))
+    row = next(item for item in client.get("/api/v1/work", headers=auth()).json()["data"] if item["id"] == reopenable["id"])
+    assert row["status"] == "queued"
+
+    # a Forgejo close clears the admin flag so a later reopen re-queues normally
+    with sqlite3.connect(settings.data_dir / "work.sqlite") as db:
+        db.row_factory = sqlite3.Row
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "closed", "2026-10-02T12:10:00Z"))
+        ingest_webhook(db, issue_payload(412, "Admin closed-out item", "open", "2026-10-02T12:15:00Z"))
+    row = next(item for item in client.get("/api/v1/work", headers=auth()).json()["data"] if item["id"] == closeout["id"])
+    assert row["status"] == "queued" and row["admin_completed"] == 0
+
+
 def test_listing_active_filter_and_lease_expired(settings):
     for user in ("alice", "bob"):
         settings.dev_tokens[user]["scope"] += " dev:read dev:write"
@@ -828,6 +946,10 @@ def test_listing_active_filter_and_lease_expired(settings):
     for title in ("Queued item", "Live claim", "Blocked item"):
         assert by_title[title]["lease_expired"] is False, title
     assert by_title["Live claim"]["claim_active"] is True
+    # claim_active stays the live-lease contract: a queued item has no holder,
+    # so it must remain claimable in the UI (regression for PR #102 review).
+    assert by_title["Queued item"]["claim_active"] is False
+    assert by_title["Blocked item"]["claim_active"] is False
 
     active_ids = {row["title"] for row in
                   client.get("/api/v1/work?active=true&limit=100", headers=auth()).json()["data"]}

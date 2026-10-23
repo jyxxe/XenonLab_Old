@@ -1,9 +1,12 @@
-import React, {useMemo, useState} from 'react';
-import {Badge, Button, EmptyState, ErrorState, Input, Skeleton, Tabs, Textarea} from '../design-system/primitives';
-import {describeError, isKeywordResult, parseFieldFilters, searchWarnings} from './logic.js';
+import {Icon} from '../design-system/Icon';
+import React, {useMemo} from 'react';
+import {Badge, Button, EmptyState, ErrorState, Input, Select, Skeleton, Tabs, Textarea} from '../design-system/primitives';
+import {SEARCH_LIMIT_OPTIONS, describeError, isKeywordResult, parseFieldFilters, searchResultSummary, searchWarnings} from './logic.js';
 import type {SearchHit, SearchMeta, SearchMode} from './types';
 
 export function SearchView({
+  showFilters,
+  onShowFilters,
   mode,
   onMode,
   kind,
@@ -14,6 +17,9 @@ export function SearchView({
   onPath,
   filterText,
   onFilterText,
+  limit,
+  onLimit,
+  resultLimit,
   hits,
   meta,
   error,
@@ -24,6 +30,8 @@ export function SearchView({
   onOpenHit,
   tableName,
 }: {
+  showFilters: boolean;
+  onShowFilters: (value: boolean) => void;
   mode: SearchMode;
   onMode: (mode: SearchMode) => void;
   kind: 'semantic' | 'keyword';
@@ -34,6 +42,9 @@ export function SearchView({
   onPath: (value: string) => void;
   filterText: string;
   onFilterText: (value: string) => void;
+  limit: number;
+  onLimit: (value: number) => void;
+  resultLimit: number | null;
   hits: SearchHit[];
   meta: SearchMeta;
   error: unknown;
@@ -44,7 +55,6 @@ export function SearchView({
   onOpenHit: (hit: SearchHit) => void;
   tableName: (tableId: string) => string;
 }) {
-  const [showFilters, setShowFilters] = useState(false);
   const parsed = useMemo(() => parseFieldFilters(filterText), [filterText]);
   const warnings = useMemo(() => searchWarnings(meta), [meta]);
   const errorInfo = error ? describeError(error, '搜索') : null;
@@ -81,6 +91,16 @@ export function SearchView({
           onChange={event => onQuery(event.target.value)}
           onKeyDown={event => event.key === 'Enter' && onRun()}
         />
+        <label className="library-search-limit">
+          结果条数
+          <Select
+            aria-label="结果条数上限"
+            value={String(limit)}
+            onChange={event => onLimit(Number(event.target.value))}
+          >
+            {SEARCH_LIMIT_OPTIONS.map(option => <option key={option} value={String(option)}>{option}</option>)}
+          </Select>
+        </label>
         <Button variant="primary" onClick={onRun} disabled={running}>{running ? '搜索中…' : '搜索'}</Button>
       </div>
 
@@ -92,12 +112,12 @@ export function SearchView({
       )}
       {mode === 'quality' && (
         <p className="library-notice" role="status">
-          Quality search is not currently available. Qwen quality worker 尚未部署；此模式下请求会返回 QWEN_UNAVAILABLE。
+          Quality 对候选记录进一步精排，可能需要更长时间；服务不可用时会显示原因，可改用 Fast 或 Structured。
         </p>
       )}
 
       <div className="library-search-filters">
-        <button type="button" className="library-link" onClick={() => setShowFilters(value => !value)}>
+        <button type="button" className="library-link" onClick={() => onShowFilters(!showFilters)}>
           {showFilters ? '收起过滤条件' : '过滤条件'}
         </button>
         {showFilters && (
@@ -111,20 +131,20 @@ export function SearchView({
               字段精确匹配
               <Textarea
                 aria-label="字段过滤"
-                placeholder={'type = theorem\nconfidence = 0.91'}
+                placeholder={'type = theorem\nconfidence = 0.91\nlabel = "0.91"'}
                 value={filterText}
                 onChange={event => onFilterText(event.target.value)}
               />
-              <small>每行一条 <code>字段 = 值</code>；只做与行值完全相等的匹配，服务端不支持的过滤不会在此出现。</small>
+              <small>每行一条 <code>字段 = 值</code>。数字、true / false、null、数组和对象按 JSON 类型精确匹配；普通文本是字符串；以数字开头的文本及数字形态字符串须加双引号，例如 <code>"0.91"</code>。JSON 字符串使用双引号；非法 JSON、非有限数和不安全整数会阻止整次搜索。</small>
             </label>
-            {parsed.errors.map((message, index) => <p key={index} className="library-error">{message}</p>)}
+            {parsed.errors.map((message, index) => <p key={index} className="library-error" role="alert">{message}</p>)}
           </div>
         )}
       </div>
 
       {warnings.length > 0 && (
         <div className="library-warning" role="alert">
-          <strong>⚠ 结果可能不完整</strong>
+          <strong><Icon value="warning" size={16} /> 结果可能不完整</strong>
           <ul>{warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
         </div>
       )}
@@ -146,7 +166,12 @@ export function SearchView({
           }
         />
       ) : hits.length ? (
-        <ol className="library-results">
+        <>
+          <p className="library-result-count" role="status">
+            <span className="library-result-count-main">{searchResultSummary(resultLimit ?? limit, hits.length)}</span>
+            <small>指本次请求的上限与返回数，不代表知识库中匹配的总数。</small>
+          </p>
+          <ol className="library-results">
           {hits.map(hit => (
             <li key={`${hit.table_id}:${hit.row_id}`}>
               <button type="button" onClick={() => onOpenHit(hit)}>
@@ -169,7 +194,8 @@ export function SearchView({
               </button>
             </li>
           ))}
-        </ol>
+          </ol>
+        </>
       ) : (
         <EmptyState icon="⌕" title="统一搜索" description="在 Fast 中输入关键词，或在 Structured 中编写 Query DSL。" />
       )}

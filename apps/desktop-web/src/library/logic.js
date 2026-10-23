@@ -1,10 +1,21 @@
+import {stringifyExactJSON} from './json.js';
 /**
  * Pure helpers for the XeLibrary application. Kept as plain JS so the Node test
  * runner can exercise them without a bundler.
  */
 
 export function formatNumber(value) {
+  if (typeof value === 'bigint') return value.toLocaleString('zh-CN');
   return typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
+}
+
+/** Inclusive range in the current loaded view, independent of virtual mounting. */
+export function rowSelectionRange(visibleIds, anchorId, targetId) {
+  const to = visibleIds.indexOf(targetId);
+  if (to < 0) return [];
+  const from = visibleIds.indexOf(anchorId);
+  if (from < 0) return [targetId];
+  return visibleIds.slice(Math.min(from, to), Math.max(from, to) + 1);
 }
 
 export function formatBytes(value) {
@@ -34,16 +45,16 @@ export function relativeTime(value, now = Date.now()) {
 export function sortableValue(value) {
   if (value === null || value === undefined) return [0, ''];
   if (typeof value === 'boolean') return [1, value ? 1 : 0];
-  if (typeof value === 'number') return [2, value];
+  if (typeof value === 'number' || typeof value === 'bigint') return [2, value];
   if (typeof value === 'string') return [3, value];
-  return [4, JSON.stringify(value)];
+  return [4, stringifyExactJSON(value)];
 }
 
 function compare(left, right) {
   const a = sortableValue(left);
   const b = sortableValue(right);
   if (a[0] !== b[0]) return a[0] - b[0];
-  if (a[1] === b[1]) return 0;
+  if (a[1] === b[1] || (a[0] === 2 && a[1] >= b[1] && a[1] <= b[1])) return 0;
   return a[1] > b[1] ? 1 : -1;
 }
 
@@ -73,7 +84,7 @@ export function filterRows(rows, query) {
     if (row._row_id.toLowerCase().includes(needle)) return true;
     return Object.values(row.values || {}).some(value => {
       if (value === null || value === undefined) return false;
-      return String(typeof value === 'object' ? JSON.stringify(value) : value).toLowerCase().includes(needle);
+      return String(typeof value === 'object' ? stringifyExactJSON(value) : value).toLowerCase().includes(needle);
     });
   });
 }
@@ -117,6 +128,18 @@ export function filterTree(node, needle) {
   const clone = {...node, children, tables: matchesSelf ? node.tables : tables};
   clone.count = clone.tables.length + clone.children.reduce((total, child) => total + child.count, 0);
   return clone;
+}
+
+/** Default expansion for a filtered tree, with only this filter's explicit collapses. */
+export function filteredTreeExpansion(root, collapsed = new Set()) {
+  const expanded = new Set();
+  const visit = node => {
+    if (!node) return;
+    if (!collapsed.has(node.path)) expanded.add(node.path);
+    for (const child of node.children) visit(child);
+  };
+  visit(root);
+  return expanded;
 }
 
 /** Depth-first list of visible tree rows for rendering; tables render at their node. */
@@ -199,9 +222,9 @@ export function classifySchemaChange(current = [], draft = []) {
   };
 }
 
-/** Parse `field = value` lines used by search filters into an exact-match dict. */
+/** Parse exact-match filters: JSON literals retain types; ordinary text is a string. */
 export function parseFieldFilters(text) {
-  const filters = {};
+  const entries = [];
   const errors = [];
   for (const line of String(text || '').split(/\n+/)) {
     const trimmed = line.trim();
@@ -211,9 +234,36 @@ export function parseFieldFilters(text) {
       errors.push(`无法解析「${trimmed}」，请使用 字段 = 值`);
       continue;
     }
-    filters[match[1]] = match[2];
+    const raw = match[2];
+    let value = raw;
+    if (/^(?:"|\[|\{|[+-]?(?:\d|\.\d)|true$|false$|null$|NaN$|[+-]?Infinity$)/.test(raw)) {
+      try {
+        value = JSON.parse(raw);
+        const pending = [value];
+        while (pending.length) {
+          const item = pending.pop();
+          if (typeof item === 'number' && (!Number.isFinite(item) || (Number.isInteger(item) && !Number.isSafeInteger(item)))) {
+            throw new Error('数值必须有限，整数必须在 JavaScript 安全整数范围内');
+          }
+          if (item && typeof item === 'object') pending.push(...Object.values(item));
+        }
+      } catch (cause) {
+        errors.push(`字段「${match[1]}」的 JSON 值无效：${cause.message}；字符串请使用双引号`);
+        continue;
+      }
+    }
+    entries.push([match[1], value]);
   }
-  return {filters, errors};
+  return {filters: Object.fromEntries(entries), errors};
+}
+
+/** Choices offered for the search `limit` field; the API contract caps at 100. */
+export const SEARCH_LIMIT_OPTIONS = [25, 50, 100];
+
+export function searchResultSummary(limit, hitCount) {
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) return null;
+  if (typeof hitCount !== 'number' || !Number.isFinite(hitCount) || hitCount < 1) return null;
+  return `最多 ${limit} 条 · 返回 ${hitCount} 条`;
 }
 
 export function searchWarnings(meta = {}) {
@@ -265,20 +315,139 @@ export function indexStatusFromJobs(jobs = []) {
   return {state, detail, latest};
 }
 
+export function libraryPrefsKey(entry) {
+  return `${entry.kind}:${entry.id}`;
+}
+
+// Deletion markers travel with the favorites list (issue #72 review): a
+// tombstone newer than an entry suppresses that entry's revival on any device
+// that still has a stale cached copy.
+export function mergeServerPrefs(local, server, kind, tombstones = []) {
+  const newestDeletion = new Map();
+  for (const tombstone of tombstones || []) {
+    if (!tombstone || !tombstone.kind || !tombstone.id) continue;
+    const key = libraryPrefsKey(tombstone);
+    const at = Number(tombstone.at) || 0;
+    if (at > (newestDeletion.get(key) ?? -Infinity)) newestDeletion.set(key, at);
+  }
+  const merged = new Map();
+  for (const entry of server || []) {
+    if (!entry || !entry.kind || !entry.id || entry.deleted) continue;
+    const key = libraryPrefsKey(entry);
+    if (Number(entry.at) <= (newestDeletion.get(key) ?? -Infinity)) continue;
+    merged.set(key, {...entry});
+  }
+  for (const entry of local || []) {
+    if (!entry || !entry.kind || !entry.id || entry.deleted) continue;
+    const key = libraryPrefsKey(entry);
+    if (Number(entry.at) <= (newestDeletion.get(key) ?? -Infinity)) continue;
+    const existing = merged.get(key);
+    if (!existing || Number(entry.at) > Number(existing.at)) merged.set(key, {...entry});
+  }
+  const list2 = [...merged.values()];
+  if (kind === 'recent') return list2.sort((a, b) => Number(b.at) - Number(a.at)).slice(0, 8);
+  return list2.slice(0, 50);
+}
+
+// Union of deletion markers keyed by kind+id, keeping the newest per key.
+export function mergeTombstones(local, server) {
+  const merged = new Map();
+  for (const tombstone of [...(server || []), ...(local || [])]) {
+    if (!tombstone || !tombstone.kind || !tombstone.id || !tombstone.deleted) continue;
+    const key = libraryPrefsKey(tombstone);
+    const existing = merged.get(key);
+    if (!existing || Number(tombstone.at) > Number(existing.at)) merged.set(key, {...tombstone});
+  }
+  return [...merged.values()];
+}
+
+export function indexStatusFromServer(status) {
+  if (!status || typeof status !== 'object') {
+    return {state: 'unavailable', tone: 'neutral', label: '—', detail: '索引状态数据不可用。'};
+  }
+  const rows = Number(status.row_count) || 0;
+  const embedded = Number(status.embedded_rows) || 0;
+  const pending = Number(status.pending_rows) || 0;
+  const state = String(status.state || '');
+  const base = {state, rows, embedded, pending, last_job: status.last_job || null};
+  if (state === 'ready') return {...base, tone: 'success', label: 'ready', detail: `全部 ${rows} 行已按当前版本建立向量索引。`};
+  if (state === 'stale') return {...base, tone: 'warning', label: 'stale', detail: `有 ${pending} 行变更待重新索引；当前已索引 ${embedded}/${rows} 行。`};
+  if (state === 'queued') return {...base, tone: 'warning', label: 'queued', detail: '索引任务已排队，等待 Embedding worker。'};
+  if (state === 'indexing') return {...base, tone: 'warning', label: 'indexing', detail: '索引任务正在运行。'};
+  if (state === 'failed') return {...base, tone: 'danger', label: 'failed', detail: `最近一次索引任务失败${status.last_job?.error ? `：${status.last_job.error}` : '。'}`};
+  if (state === 'empty') return {...base, tone: 'neutral', label: 'empty', detail: '表内暂无行；写入数据后再重建索引。'};
+  if (state === 'not_indexed') return {...base, tone: 'neutral', label: 'not_indexed', detail: rows ? `${rows} 行尚未建立向量索引；语义搜索不会覆盖该表。` : '表内暂无行。'};
+  return {...base, tone: 'neutral', label: state || '—', detail: '索引状态未知。'};
+}
+
+/** Maximum visible Recent entries in the sidebar before an explicit expand. */
+export const RECENT_VISIBLE_LIMIT = 6;
+
+/**
+ * Sidebar Recent display state (issue #255): the count shows every saved entry,
+ * so when more than RECENT_VISIBLE_LIMIT exist offer an accessible "show all"
+ * control instead of silently hiding them. Consumes only the in-memory recent
+ * list; no request or server history claim is added.
+ */
+export function recentListDisplay(recent, showAll = false) {
+  const list = Array.isArray(recent) ? recent : [];
+  const collapsed = list.length > RECENT_VISIBLE_LIMIT;
+  const expanded = Boolean(showAll) && collapsed;
+  return {
+    visible: expanded ? list : list.slice(0, RECENT_VISIBLE_LIMIT),
+    expanded,
+    toggle: collapsed,
+    hidden: collapsed && !expanded ? list.length - RECENT_VISIBLE_LIMIT : 0,
+    label: collapsed ? (expanded ? '收起到 6 项' : `显示全部 ${list.length} 项`) : '',
+  };
+}
+
 export function mergeRecent(list, entry, limit = 8) {
   const filtered = list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
   return [entry, ...filtered].slice(0, limit);
 }
 
-export function toggleFavorite(list, entry) {
+
+/** Display legacy/generic and duplicate theorem titles without changing stored IDs. */
+export function recentEntryPresentation(entry, list = []) {
+  if (entry.kind !== 'theorem') return {title: entry.title, identifier: '', label: entry.title};
+  const title = theoremRecentTitle(entry);
+  const sameTitle = list.some(item => item.kind === 'theorem' && item.id !== entry.id && theoremRecentTitle(item) === title);
+  if (title !== '定理' && !sameTitle) return {title, identifier: '', label: title};
+  const id = String(entry.id);
+  const suffix = id.slice(-8);
+  const collision = list.some(item => item.kind === 'theorem' && item.id !== entry.id && String(item.id).slice(-8) === suffix);
+  const identifier = collision ? id : suffix;
+  return {title, identifier, label: `${title} · ${identifier}`};
+}
+
+function theoremRecentTitle(entry) {
+  return typeof entry.title === 'string' && entry.title.trim() ? entry.title.trim() : '定理';
+}
+
+// Toggling favorites also maintains deletion tombstones so the removal wins
+// over stale cached copies on other devices (issue #72 review).
+export function toggleFavorite(list, entry, tombstones = [], at = Date.now()) {
   const exists = list.some(item => item.kind === entry.kind && item.id === entry.id);
-  if (exists) return list.filter(item => !(item.kind === entry.kind && item.id === entry.id));
-  return [...list, entry].slice(0, 50);
+  const key = libraryPrefsKey(entry);
+  if (exists) {
+    return {
+      favorites: list.filter(item => !(item.kind === entry.kind && item.id === entry.id)),
+      tombstones: [
+        ...tombstones.filter(tombstone => libraryPrefsKey(tombstone) !== key),
+        {kind: entry.kind, id: entry.id, title: entry.title || '', at, deleted: true},
+      ].slice(-200),
+    };
+  }
+  return {
+    favorites: [...list, {...entry, at}].slice(0, 50),
+    tombstones: tombstones.filter(tombstone => libraryPrefsKey(tombstone) !== key),
+  };
 }
 
 export function libraryPrefsStorageKey(subject, section) {
-  const owner = subject ? encodeURIComponent(subject) : 'anonymous';
-  return `xeonolab.library.${owner}.${section}`;
+  if (typeof subject !== 'string' || !subject.trim()) return null;
+  return `xeonolab.library.${encodeURIComponent(subject)}.${section}`;
 }
 
 export function isFavorite(list, entry) {
@@ -287,7 +456,7 @@ export function isFavorite(list, entry) {
 
 export function changedFields(before = {}, after = {}) {
   const names = new Set([...Object.keys(before), ...Object.keys(after)]);
-  return [...names].filter(name => JSON.stringify(before[name] ?? null) !== JSON.stringify(after[name] ?? null));
+  return [...names].filter(name => stringifyExactJSON(before[name] ?? null) !== stringifyExactJSON(after[name] ?? null));
 }
 
 export function rowHasAttachment(row, columns = []) {
@@ -325,7 +494,11 @@ export function describeError(error, context = '') {
     INVALID_QUERY: {title: '查询语法错误', message: 'DSL 只支持 FROM / WHERE / ORDER BY / LIMIT / OFFSET 及其已实现的运算符。', retryable: false},
     QUERY_TYPE_ERROR: {title: '查询类型不匹配', message: '比较的两个字段类型不一致。', retryable: false},
     QUERY_UNSUPPORTED: {title: '查询包含未实现的函数', message: '该函数不在已实现的函数列表中。', retryable: false},
-    QWEN_UNAVAILABLE: {title: 'Quality 搜索不可用', message: 'Qwen quality worker 尚未部署；请使用 Fast 或 Structured。', retryable: false},
+    QWEN_UNAVAILABLE: {title: 'Quality 搜索不可用', message: '精排服务当前不可用，请稍后重试或使用 Fast、Structured。', retryable: true},
+    QUALITY_BUSY: {title: 'Quality 搜索繁忙', message: '已有精排请求正在处理，请稍后重试。', retryable: true},
+    QUALITY_TIMEOUT: {title: 'Quality 搜索超时', message: '精排未能在时间预算内完成，请缩短查询或使用 Fast。', retryable: true},
+    QUALITY_INPUT_REJECTED: {title: 'Quality 输入无法处理', message: '精排输入超出处理限制，请缩短查询或使用 Fast。', retryable: false},
+    QWEN_PROTOCOL_ERROR: {title: 'Quality 服务响应异常', message: '精排服务返回了不兼容的结果，请稍后重试或使用 Fast。', retryable: true},
     HYBRID_NOT_CONFIGURED: {title: 'Hybrid 搜索不可用', message: '混合检索尚未实现。', retryable: false},
     SEARCH_NOT_CONFIGURED: {title: '搜索未配置', message: 'Embedding URL、服务令牌或 tokenizer 未配置。', retryable: false},
     EMBEDDING_UNAVAILABLE: {title: 'Embedding 服务不可用', message: '向量服务请求失败，请稍后重试。', retryable: true},
@@ -406,4 +579,118 @@ export function withQueryPagination(expression, limit, offset) {
   for (const span of spans) base = base.slice(0, span.start) + base.slice(span.end);
   base = base.replace(/;\s*$/, '').trim();
   return `${base} LIMIT ${safeLimit} OFFSET ${safeOffset}`;
+}
+
+/**
+ * Ask-AI extension point for record selections (Issue #71 §17). These helpers
+ * only compose a transparent draft; they never call a model or an API by
+ * themselves — the user reviews and edits the prompt before anything leaves
+ * the library window.
+ */
+
+export const SELECTION_AI_ACTIONS = [
+  {id: 'ask', label: 'Ask AI about selection', hint: '就所选记录提出你的问题'},
+  {id: 'summarize', label: 'Summarize selection', hint: '让 AI 总结所选记录的要点'},
+  {id: 'related', label: 'Find related knowledge', hint: '让 AI 按所选记录查找相关知识'},
+];
+
+const SELECTION_AI_ROW_LIMIT = 20;
+const SELECTION_AI_VALUE_LIMIT = 200;
+
+function selectionValueText(value) {
+  if (value === null || value === undefined) return '';
+  const text = typeof value === 'object' ? stringifyExactJSON(value) : String(value);
+  return text.length > SELECTION_AI_VALUE_LIMIT ? `${text.slice(0, SELECTION_AI_VALUE_LIMIT)}…` : text;
+}
+
+/** Describe what the prompt will share, so the dialog can show it up front. */
+export function selectionContextSummary(table, rows, columns) {
+  const list = Array.isArray(rows) ? rows : [];
+  const names = (Array.isArray(columns) ? columns : []).map(column => column?.name).filter(Boolean);
+  const sharedRows = Math.min(list.length, SELECTION_AI_ROW_LIMIT);
+  return {
+    tablePath: table ? `${table.path}/${table.name}` : '',
+    tableId: table?.id || '',
+    rowCount: list.length,
+    sharedRows,
+    truncated: list.length > SELECTION_AI_ROW_LIMIT,
+    fields: names,
+    rowIds: list.slice(0, SELECTION_AI_ROW_LIMIT).map(row => row?._row_id || ''),
+  };
+}
+
+/**
+ * Compose the editable draft for a selection AI action. Bounded: at most
+ * SELECTION_AI_ROW_LIMIT rows and SELECTION_AI_VALUE_LIMIT characters per
+ * value, with an explicit note when the selection is truncated.
+ */
+export function buildSelectionPrompt(action, table, rows, columns, question = '') {
+  const list = Array.isArray(rows) ? rows : [];
+  const meta = SELECTION_AI_ACTIONS.find(entry => entry.id === action) || SELECTION_AI_ACTIONS[0];
+  const summary = selectionContextSummary(table, list, columns);
+  const lines = [];
+  if (action === 'summarize') lines.push('请总结以下 XeLibrary 选中的记录：归纳共同主题、重要字段值与任何异常。');
+  else if (action === 'related') lines.push('请根据以下 XeLibrary 选中的记录，查找可能相关的知识点，并逐条说明关联理由。');
+  else lines.push('请根据以下 XeLibrary 选中的记录回答问题。');
+  lines.push('');
+  lines.push(`知识表：${summary.tablePath}`);
+  if (summary.fields.length) lines.push(`字段：${summary.fields.join(', ')}`);
+  lines.push(`选中记录：${list.length} 行`);
+  lines.push('');
+  for (const row of list.slice(0, SELECTION_AI_ROW_LIMIT)) {
+    const pairs = (Array.isArray(columns) ? columns : [])
+      .map(column => column?.name)
+      .filter(Boolean)
+      .map(name => `${name}=${selectionValueText(row?.values?.[name])}`);
+    lines.push(`- ${row?._row_id || '(unknown row)'} r${row?._revision ?? '?'}: ${pairs.join('; ')}`);
+  }
+  if (summary.truncated) lines.push(`（选中 ${list.length} 行，仅包含前 ${SELECTION_AI_ROW_LIMIT} 行）`);
+  if (action === 'ask') {
+    lines.push('');
+    lines.push(`问题：${String(question || '').trim() || '（请在发送前补充你的问题）'}`);
+  }
+  return lines.join('\n');
+}
+
+// Only a deleted row actually returned by the current authenticated include_deleted page
+// replaces the default detail read. Active/unloaded rows retain their existing read path.
+export function loadedDeletedRow(rows, rowId) {
+  return rows?.find(row => row._row_id === rowId && row._deleted_at) || null;
+}
+
+// Keep the precise mutation result when refreshing only the first page. A newer
+// server page containing the same row takes precedence over the retained value.
+export function retainRefreshedRow(rows, retainedRow) {
+  if (!retainedRow || rows.some(row => row._row_id === retainedRow._row_id)) return rows;
+  return [...rows, retainedRow];
+}
+
+/** Resolve a local field order against the current schema; system fields stay outside it. */
+export function orderedColumns(columns, preference) {
+  const byName = new Map(columns.map(column => [column.name, column]));
+  const names = Array.isArray(preference) ? preference.filter(name => typeof name === 'string' && byName.has(name)) : [];
+  return [...new Set([...names, ...columns.map(column => column.name)])].map(name => byName.get(name));
+}
+
+export function moveColumn(columns, preference, name, direction) {
+  const names = orderedColumns(columns, preference).map(column => column.name);
+  const index = names.indexOf(name);
+  const next = index + direction;
+  if (index < 0 || next < 0 || next >= names.length || ![1, -1].includes(direction)) return names;
+  [names[index], names[next]] = [names[next], names[index]];
+  return names;
+}
+
+/** Shared pixel preference limits for both pointer and keyboard column resizing. */
+export function clampColumnWidth(width) {
+  return Math.max(80, Math.min(520, Number.isFinite(width) ? width : 160));
+}
+
+export function keyboardColumnWidth(width, key, shift = false) {
+  if (key === 'Home') return 80;
+  if (key === 'End') return 520;
+  const step = shift ? 40 : 10;
+  if (key === 'ArrowLeft') return clampColumnWidth(width - step);
+  if (key === 'ArrowRight') return clampColumnWidth(width + step);
+  return null;
 }
