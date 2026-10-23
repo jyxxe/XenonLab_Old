@@ -468,7 +468,14 @@ def test_shared_admission_and_queue_bounds(settings, monkeypatch, tmp_path):
         if api.get(f"/api/v1/lean/jobs/{job_id}", headers=auth()).json()["data"]["status"] == "running":
             break
         time.sleep(0.02)
-    busy = api.post("/api/v1/lean/verify", headers=auth(), json={"source": VERIFIED_SOURCE, "timeout_seconds": 5})
+    # The async worker may still be between "running" and acquiring admission;
+    # retry until the hang job actually holds the only slot.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        busy = api.post("/api/v1/lean/verify", headers=auth(), json={"source": VERIFIED_SOURCE, "timeout_seconds": 5})
+        if busy.status_code == 429:
+            break
+        time.sleep(0.02)
     assert busy.status_code == 429, busy.text
     assert busy.json()["error"]["code"] == "LEAN_BUSY"
     queued = api.post(
