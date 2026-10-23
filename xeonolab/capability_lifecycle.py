@@ -15,7 +15,8 @@ from .common import APIError, connect, identity, response, transaction
 
 QUERY_CAPABILITY = "builtin.platform.tool.xelibrary-query"
 # Expand only alongside an actual invocation + discovery integration and tests.
-CONTROLLABLE = frozenset({QUERY_CAPABILITY})
+LLM_CAPABILITY = "builtin.platform.provider.llm-chat"
+CONTROLLABLE = frozenset({QUERY_CAPABILITY, LLM_CAPABILITY})
 MAX_GENERATION = 2**63 - 1
 
 

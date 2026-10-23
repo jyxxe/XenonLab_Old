@@ -1,11 +1,12 @@
-# #331 / #305: durable authority controls for the query tool
+# #331 / #305: durable authority controls for query and LLM
 
-This increment makes **one already implemented capability** use durable state:
-`builtin.platform.tool.xelibrary-query`. The core store/protocol is reusable,
-but no other capability is advertised as controllable until its invocation and
-discovery paths are integrated. Providers, worker jobs, UI installs and service
-runtimes retain their existing lifecycle. No code loading, deployment, approval,
-service grant exchange, runtime stop or artifact upgrade is added here.
+This increment controls two existing builtin API capabilities:
+`builtin.platform.tool.xelibrary-query` and
+`builtin.platform.provider.llm-chat`. The latter covers LLM Gateway's model
+catalogue and JSON/SSE chat admission, including the original native HTTP path.
+Other providers, workers, UI installs and independent services are not
+controllable until both their discovery and invocation paths enforce the same
+state. No code loading, deployment, runtime stop or artifact upgrade is added.
 
 ## Authority and admission
 
@@ -62,12 +63,14 @@ validated; malformed state is rejected. Updated clients honor a supplied valid
 snapshot even when the rollout flag is off. The authority always reads persisted
 controls; turning its mutation flag off does not re-enable a stopped capability.
 
-Capability list/detail and tool list/query invocation consult the same identity
-snapshot. Disabled query is omitted from both lists, detail/query returns 404,
-and its handler does not forward upstream. Other tools and builtin capabilities
-are unaffected. Normal scope validation is retained before invocation; lifecycle
+Capability list/detail and the controlled public handlers consult the same
+identity snapshot. Disabled query is omitted from tool discovery and returns
+404 before forwarding. Disabled LLM is absent from capability discovery;
+`/v1/models` and both JSON/SSE `/v1/chat/completions` return 404 without reading
+the chat body, consuming a slot or preparing/calling a provider. Other tools and
+capabilities remain unaffected. Normal scope validation is retained before invocation; lifecycle
 enabled state never grants a scope. Existing user Authorization/request-id
-forwarding and source API authorization remain unchanged. State/discovery/tools
+forwarding and source API authorization remain unchanged. State/discovery/tools/model-catalogue
 and authorization responses use `Cache-Control: no-store`.
 
 Admission is the authority snapshot read for that request. An operation admitted
@@ -90,8 +93,14 @@ supplied it is still validated and enforced. Local standalone development withou
 an authority remains the old behavior only while strict mode is off.
 
 This flag is a deployment gate, not proof that all old clients have upgraded.
-**Do not enable production mutations until every invocation instance is updated,
-uses the same authority and has passed strict-mode acceptance.** An old binary
+**Do not enable production mutations until every authorization consumer is
+updated to this snapshot vocabulary and every controlled invocation instance uses
+the same authority with strict-mode acceptance.** The older query-only snapshot
+parser rejects the newly disabled LLM id with 503 rather than ignoring it. Update
+all authority consumers, not just the LLM gateways, before allowing LLM mutations;
+otherwise even unrelated authenticated requests on old strict consumers can
+become unavailable. The protocol shape stays version 1; the supported controlled
+id vocabulary is deployment-coupled and fails closed on unknown ids. An old binary
 that ignores snapshots, a gateway deliberately configured outside that authority,
 or a direct owning-service API is not disabled by this feature. The last is
 intentional: disabling a Tool Gateway capability does not revoke the user's
@@ -102,14 +111,14 @@ Maintainer-only staged rollout (not performed by this PR):
 
 1. Deploy the updated authority with flag `0`; verify its new snapshot and empty
    control state. The three table additions are additive and default enabled.
-2. Deploy **every** tool-gateway instance with this admission guard and flag `1`,
+2. Deploy **every** authority consumer and query/LLM gateway with this protocol and flag `1`,
    preserving exact TLS/issuer/account authority configuration. Verify valid
    snapshot admission and denial on missing/unavailable authority; old versions
    must be removed from routing. No developer credential authorizes this step.
 3. Explicitly provision the narrow human management grant, then enable the
    authority flag `1` through the protected maintenance/configuration flow.
 4. With synthetic acceptance data, exercise disable/discovery/direct-invocation,
-   multiple instances/restarts, account scope denial and re-enable, and retain
+   multiple instances/restarts, LLM JSON/SSE and both Provider flag paths, scope denial and re-enable, and retain
    real deployment/gateway evidence before declaring production acceptance.
 
 If authority replicas are later added they must share one strongly consistent
@@ -117,11 +126,19 @@ control authority; per-host copied SQLite files are not a replicated authority.
 This implementation has one authority and no watch cache, outbox executor or
 asynchronous reconciliation. It does not claim Phase 3 service lifecycle.
 
+Pending PR #323 supplies a trusted ChatProvider interface. Its authority check
+must run before its adapter/legacy flag branch and before chat body/slot admission;
+local enable cannot override global disable. Its actorless readiness remains a
+configuration/health check, never authorization. This PR's native LLM guards and
+matching descriptor make its standalone behavior enforceable before #323 lands.
+Both branches copy the builtin manifest into the Docker layout. All gates still
+control Gateway APIs only, not an external provider's credentials or service.
+
 Pending PR #321 refactors the same tool routes and metadata. Integration must
 preserve `actor.require_capability` for query before invoking its adapter and
 omit it from `ToolAdapters.describe`; its process-local enablement must intersect
-with this authority state. Until that combination is tested, neither PR is
-claimed integrated. Other pending Provider/Worker hooks need equivalent explicit
+with this authority state. The tested #321 combinations are recorded in its document; this does not imply
+maintainer acceptance or deployment. Other pending Provider/Worker hooks need equivalent explicit
 integration before expanding `CONTROLLABLE`. The live builtin manifest remains
 the same; this PR does not duplicate their adapters.
 
@@ -172,3 +189,74 @@ match the previously reproduced unmodified baseline Lean failures: this desktop
 account cannot stat `/proc/1/ns/net` and `/proc/1/ns/mnt` (PermissionError 13), so
 sandbox preflight cannot initialize. No sandbox checks were altered or skipped.
 Protected CI and maintainer acceptance are still outstanding.
+
+## LLM authority increment (#322 / #323)
+
+The shared authority additionally accepts `builtin.platform.provider.llm-chat`.
+The new fixture exercises actual authority SQLite operations and two gateway app
+instances with a synthetic HTTP provider. It covers model/capability discovery,
+JSON and SSE success/denial, restart and re-enable, independent query state,
+missing snapshot/outage/scope denial, no body/slot work on rejection, and an
+already admitted SSE draining/closing while the next request is denied.
+
+The direct-ASGI tests now pass a real synthetic `Identity` with `llm:use`, rather
+than an empty `SimpleNamespace`. Two exploratory runs waited indefinitely for an
+upstream-start signal after the empty actor failed the new guard; those identified
+runs were terminated, corrected and are not counted as validation.
+
+79 focused tests pass on the standalone core branch; Provider branch focused
+suite: 55 pass. The combined tree's 110 focused tests pass, as do its four LLM
+lifecycle cases with `LLM_CAPABILITY_ADAPTERS=0`. The imported authority fixture
+is explicitly re-exported for pytest/Ruff; its four cases were rerun after that
+lint-only correction. Both isolated branches pass Ruff and OpenAPI export with
+no new API schema drift. `/v1/models` responses use no-store.
+
+The combined source starts from `acc52f3`, adds #323 with the authority guard,
+then #332's core changes. It retains the core's native query-tool block and
+#323's Provider LLM block; the LLM descriptor and direct-ASGI fixtures are
+identical, not duplicated. Local staged source tree:
+`e6a3003c26dab92e7d38ddd84f74dbd3026082ca` (not a merge/release/signature).
+The public models result shape and alias remain unchanged. Actorless readiness
+can stay healthy during policy denial; it does not assert account authorization.
+
+Docker COPY layout probes for both branches resolve the LLM capability in an
+isolated Python process. Docker CLI is unavailable (`docker --version`: exit127),
+so no image build or container-isolation acceptance was done. No real provider,
+OIDC, multi-host rollout, production or visual acceptance was performed. Actual
+control mutations/flags/grants were changed only in temporary synthetic tests.
+
+
+Current full-suite results (Python 3.12.14, base `acc52f3`):
+
+- Provider branch: **751 passed / 13 failed in 412.09s**.
+- Core lifecycle branch: **759 passed / 13 failed in 428.55s**.
+- Combined source: **781 passed / 13 failed in 290.73s**.
+
+All three exact failure-name sets match the previously reproduced unmodified
+baseline's 13 Lean verifier failures (`/proc/1/ns/net`, `mnt` stat PermissionError
+13). No sandbox checks were skipped or weakened. The first two suites ran
+concurrently; durations are not a performance comparison. The small subsequent
+fixture re-export correction changed no test behavior; its four cases were
+rerun. Source branches pass Ruff, export OpenAPI without new API-schema drift
+and diff check. Combined 11-service smoke and crash failure injection pass.
+Current protected CI and maintainer acceptance remain outstanding.
+
+```sh
+# Provider branch:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_chat_provider.py tests/test_llm_gateway.py tests/test_capabilities.py tests/test_plugin_manifest.py -q
+# Core branch:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_llm_lifecycle.py tests/test_capability_lifecycle.py tests/test_llm_gateway.py tests/test_accounts.py tests/test_capabilities.py -q
+# Combined source:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_llm_lifecycle.py tests/test_chat_provider.py tests/test_capability_lifecycle.py tests/test_llm_gateway.py tests/test_accounts.py tests/test_capabilities.py tests/test_plugin_manifest.py tests/test_services.py -q
+LLM_CAPABILITY_ADAPTERS=0 UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_llm_lifecycle.py -q
+# Each source in its own worktree/temporary directory:
+mkdir -p runtime
+# In the Provider worktree:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/llm-authority-test-tmp
+# In the core worktree:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/llm-lifecycle-test-tmp
+# In the combined worktree:
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/llm-combined-test-tmp
+```
+
+No real provider/production configuration, grant or data was used or changed.

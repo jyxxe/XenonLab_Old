@@ -207,11 +207,11 @@ model replacement, lifecycle coordination and Phase 3 isolation remain separate.
 
 ## Persistent lifecycle increment (#331)
 
-The [query-tool lifecycle increment](../issue331-capability-lifecycle.md) adds
+The [query/LLM lifecycle increment](../issue331-capability-lifecycle.md) adds
 transactional controls to the account authority and passes a versioned snapshot
-through its existing live authorization channel. Query discovery and invocation
+through its existing live authorization channel. Query and LLM discovery/invocation
 honor it; mutation is an explicit, default-off rollout gated by a dedicated human
-grant. Other capabilities and Phase 3 service runtime remain unintegrated.
+grant. Other Provider/Worker controls and Phase 3 service runtime remain unintegrated.
 This does not turn process-local adapter hooks into a global controller or imply
 that old consumer binaries can safely ignore a disable. See the rollout and
 rollback prerequisites before enabling controls.

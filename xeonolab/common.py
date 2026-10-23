@@ -605,7 +605,7 @@ def base_app(service, settings=None):
 
         duration = time.monotonic() - started
         result.headers["X-Request-ID"] = request.state.request_id
-        if request.url.path.startswith(("/api/v1/auth/", "/api/v1/capabilities")) or request.url.path == "/api/v1/tools":
+        if request.url.path.startswith(("/api/v1/auth/", "/api/v1/capabilities")) or request.url.path in {"/api/v1/tools", "/v1/models"}:
             result.headers["Cache-Control"] = "no-store"
         record_request(result.status_code, duration)
         return result
