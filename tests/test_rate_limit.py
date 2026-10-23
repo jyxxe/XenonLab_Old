@@ -194,3 +194,38 @@ def test_embeddings_route_quality_model_to_quality_bucket(tmp_path):
     assert client.post("/v1/embeddings", headers=headers, json=fast_body).status_code == 503
     blocked = client.post("/v1/embeddings", headers=headers, json=quality_body)
     assert blocked.status_code == 429
+
+
+def test_image_embeddings_share_quality_bucket_and_do_not_consume_fast_bucket(tmp_path):
+    import io
+
+    from PIL import Image
+
+    settings = make_settings(tmp_path)
+    settings.dev_tokens["alice"]["scope"] = "embedding:write"
+    settings.rate_limit_policies["embedding-quality"]["requests"] = 1
+    stream = io.BytesIO()
+    Image.new("RGB", (8, 8), "blue").save(stream, "PNG")
+    with TestClient(create_embedding_app(settings)) as client:
+        headers = auth("alice")
+        files = {"upload": ("image.png", stream.getvalue(), "image/png")}
+        assert client.post("/api/v1/embed/image", headers=headers, files=files).status_code == 503
+        assert client.post("/v1/embeddings", headers=headers, json={"input": "fast"}).status_code == 503
+        blocked = client.post("/v1/embeddings", headers=headers, json={"model": "quality", "input": "q"})
+        assert blocked.status_code == 429
+        assert blocked.headers["Retry-After"] == "60"
+
+
+def test_quality_image_and_hybrid_route_classification_matches_internal_cost_groups():
+    from starlette.requests import Request
+
+    from xeonolab.common import route_group
+
+    for path in ("/api/v1/embed/image", "/api/v1/search/image"):
+        request = Request({"type": "http", "path": path, "headers": []})
+        assert route_group(request, {}) == "embedding-quality"
+    for path in ("/api/v1/search/semantic", "/api/v1/search/hybrid"):
+        request = Request({"type": "http", "path": path, "headers": []})
+        for mode, expected in (("quality", "embedding-quality"), ("fast", "embedding-fast")):
+            request._body = json.dumps({"mode": mode}).encode()
+            assert route_group(request, {}) == expected
