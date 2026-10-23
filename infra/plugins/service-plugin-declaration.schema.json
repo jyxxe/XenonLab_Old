@@ -1,0 +1,81 @@
+{
+  "$defs": {
+    "PolicyReference": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ],
+      "title": "PolicyReference",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "plugin_id": {
+      "pattern": "^[a-z0-9][a-z0-9.-]{1,62}$",
+      "title": "Plugin Id",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$",
+      "title": "Version",
+      "type": "string"
+    },
+    "artifact_format": {
+      "const": "oci",
+      "title": "Artifact Format",
+      "type": "string"
+    },
+    "artifact_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Artifact Digest",
+      "type": "string"
+    },
+    "capability_manifest_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Capability Manifest Digest",
+      "type": "string"
+    },
+    "release_commit": {
+      "pattern": "^[a-f0-9]{40}$",
+      "title": "Release Commit",
+      "type": "string"
+    },
+    "execution_policy": {
+      "$ref": "#/$defs/PolicyReference"
+    }
+  },
+  "required": [
+    "schema_version",
+    "plugin_id",
+    "version",
+    "artifact_format",
+    "artifact_digest",
+    "capability_manifest_digest",
+    "release_commit",
+    "execution_policy"
+  ],
+  "title": "ServicePluginDeclaration",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xenon.jyxxe.com/schemas/service-plugin-declaration-v1.json",
+  "description": "Offline proposed contract only; validation grants no trust, deployment or execution rights."
+}
