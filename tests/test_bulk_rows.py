@@ -208,3 +208,115 @@ def test_bulk_store_marks_interrupted_jobs_failed_on_restart(tmp_path):
     assert "interrupted" in job["error"]
     assert job["done"] == 1 and job["results"][0]["status"] == "created"
     assert store.find_batch("batch-restart-1")["id"] == job_id
+
+
+def test_batch_id_is_scoped_to_caller_table_and_payload(settings):
+    client = make_client(settings)
+    first = create_table(client, "批次一")
+    second = create_table(client, "批次二")
+    rows = [{"values": {"body": "same-batch"}}]
+    accepted = client.post(
+        f"/api/v1/tables/{first}/rows:bulkInsert",
+        headers=auth(), json={"rows": rows, "batch_id": "batch-scope-0001"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    job_id = accepted.json()["data"]["job_id"]
+
+    # The same batch_id on another table is a different scope, not a duplicate.
+    other = client.post(
+        f"/api/v1/tables/{second}/rows:bulkInsert",
+        headers=auth(), json={"rows": rows, "batch_id": "batch-scope-0001"},
+    )
+    assert other.status_code == 200, other.text
+    assert other.json()["data"]["job_id"] != job_id
+    assert other.json()["data"].get("duplicate") is not True
+
+    replay = client.post(
+        f"/api/v1/tables/{first}/rows:bulkInsert",
+        headers=auth(), json={"rows": rows, "batch_id": "batch-scope-0001"},
+    )
+    assert replay.status_code == 200
+    assert replay.json()["data"]["duplicate"] is True
+    assert replay.json()["data"]["job_id"] == job_id
+
+    conflict = client.post(
+        f"/api/v1/tables/{first}/rows:bulkInsert",
+        headers=auth(),
+        json={"rows": [{"values": {"body": "different payload"}}], "batch_id": "batch-scope-0001"},
+    )
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["error"]["code"] == "BATCH_CONFLICT"
+
+    # Another caller reusing the batch_id on the same table is a separate scope.
+    assert put_acl(client, "table", first, {"bob": ["read", "write"]}).status_code == 200
+    bob = client.post(
+        f"/api/v1/tables/{first}/rows:bulkInsert",
+        headers=auth("bob"), json={"rows": rows, "batch_id": "batch-scope-0001"},
+    )
+    assert bob.status_code == 200, bob.text
+    assert bob.json()["data"]["job_id"] != job_id
+
+
+def test_table_delete_waits_for_active_bulk_jobs(settings):
+    from xeonolab.common import connect
+
+    client = make_client(settings)
+    table_id = create_table(client, "删除保护")
+    store = BulkJobStore(settings.data_dir / "catalogue.sqlite")
+    job_id = store.create(table_id, "insert", [{"values": {"body": "queued"}}], "alice", None)
+    table = client.get(f"/api/v1/tables/{table_id}", headers=auth("admin"))
+    delete = client.delete(
+        f"/api/v1/tables/{table_id}",
+        headers=auth("admin", **{"If-Match": table.headers["ETag"]}),
+    )
+    assert delete.status_code == 409, delete.text
+    assert delete.json()["error"]["code"] == "TABLE_BULK_ACTIVE"
+    with connect(settings.data_dir / "catalogue.sqlite") as db:
+        db.execute("UPDATE bulk_jobs SET status='completed' WHERE id=?", (job_id,))
+
+
+def test_recovery_reconciles_results_committed_but_not_recorded(settings, tmp_path):
+    import json
+    import sqlite3
+
+    client = make_client(settings)
+    table_id = create_table(client, "恢复")
+    catalogue = settings.data_dir / "catalogue.sqlite"
+    table_file = settings.data_dir / "tables" / f"{table_id}.xl"
+    store = BulkJobStore(catalogue)
+    job_id = store.create(
+        table_id, "insert", [{"values": {"body": "one"}}, {"values": {"body": "two"}}], "alice", None,
+    )
+    store.start(job_id)
+    # Simulate a crash after the first row's table commit (marker written) and
+    # before the durable job record: only the marker survives.
+    first_result = {"index": 0, "status": "created", "row_id": "committed-row", "revision": 1}
+    with sqlite3.connect(table_file) as db:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS __xl_bulk_applied("
+            "job_id TEXT,item_index INTEGER,result TEXT NOT NULL,failed INTEGER NOT NULL,"
+            "PRIMARY KEY(job_id,item_index))"
+        )
+        db.execute(
+            "INSERT INTO __xl_bulk_applied VALUES(?,?,?,?)",
+            (job_id, 0, json.dumps(first_result), 0),
+        )
+
+    reopened = BulkJobStore(catalogue)
+    assert [job["id"] for job in reopened.stranded] == [job_id]
+
+    def reader(tid, expected_job):
+        with sqlite3.connect(settings.data_dir / "tables" / f"{tid}.xl") as db:
+            return [
+                (row[0], row[1], row[2])
+                for row in db.execute(
+                    "SELECT item_index,result,failed FROM __xl_bulk_applied WHERE job_id=?", (expected_job,)
+                )
+            ]
+
+    reopened.recover(reader)
+    job = reopened.get(job_id)
+    assert job["status"] == "failed"
+    assert "recovered" in job["error"]
+    assert job["done"] == 1 and job["failed"] == 0
+    assert job["results"] == [first_result]
