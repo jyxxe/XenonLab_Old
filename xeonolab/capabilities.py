@@ -46,6 +46,8 @@ class CapabilityRegistry:
             raise ValueError("capabilities must be a non-empty list")
         seen, graph = set(), {}
         for capability in capabilities:
+            if not isinstance(capability, dict):
+                raise ValueError("capability must be an object")
             identifier = capability.get("id")
             if not isinstance(identifier, str) or not CAPABILITY_ID.fullmatch(identifier):
                 raise ValueError(f"invalid capability id {identifier!r}")
@@ -64,10 +66,25 @@ class CapabilityRegistry:
             if not isinstance(permissions, list) or any(not PERMISSION.fullmatch(str(p)) for p in permissions):
                 raise ValueError(f"invalid permissions for {identifier}")
             dependencies = capability.get("dependencies", [])
-            if not isinstance(dependencies, list):
+            if not isinstance(dependencies, list) or any(
+                not isinstance(dep, str) or not re.fullmatch(
+                    r"[a-z0-9][a-z0-9._-]{2,127}@[~^]?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", dep
+                ) for dep in dependencies
+            ) or len(set(dependencies)) != len(dependencies):
                 raise ValueError(f"invalid dependencies for {identifier}")
-            graph[identifier] = [str(dep).split("@", 1)[0] for dep in dependencies]
+            timeout = capability.get("timeout_seconds", 30)
+            if type(timeout) is not int or not 1 <= timeout <= 300:
+                raise ValueError(f"invalid timeout for {identifier}")
+            graph[identifier] = [dep.split("@", 1)[0] for dep in dependencies]
         CapabilityRegistry._reject_cycles(graph)
+        versions = {item["id"]: item["version"] for item in capabilities}
+        for capability in capabilities:
+            for dependency in capability.get("dependencies", []):
+                target, constraint = dependency.split("@", 1)
+                if target not in versions:
+                    raise ValueError(f"missing dependency {target}")
+                if not satisfies(versions[target], constraint):
+                    raise ValueError(f"incompatible dependency {dependency}")
         return {
             "id": manifest["id"],
             "version": manifest["version"],
@@ -219,13 +236,18 @@ def satisfies(version, constraint):
     current = parts(version)
     if constraint == "*":
         return True
-    if constraint.startswith("^"):
-        target = parts(constraint[1:])
+    operator = constraint[:1] if constraint[:1] in ("^", "~") else ""
+    target = parts(constraint[1:] if operator else constraint)
+    # Validate the requirement before rejecting prerelease/stable combinations,
+    # preserving the endpoint's 422 semantics for invalid constraints.
+    if "-" in version and "-" not in constraint:
+        return False
+    if operator == "^":
         return current[0] == target[0] and current >= target
-    if constraint.startswith("~"):
-        target = parts(constraint[1:])
+    if operator == "~":
         return current[:2] == target[:2] and current >= target
-    return current == parts(constraint)
+    return version == constraint
+
 
 
 class CapabilityIncompatible(APIError):

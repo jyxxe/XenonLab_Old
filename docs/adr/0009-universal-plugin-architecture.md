@@ -145,7 +145,6 @@ interfaces for Tool Gateway/providers must be designed per contract before any
 business module moves, and service plugins remain blocked on the Phase 3
 security design and Deploy Gateway integration.
 
-
 ### Phase 2: first trusted LLM Provider migration (#322)
 
 `ChatProvider` / `PreparedChat` separate static provider configuration and canonical
@@ -165,4 +164,18 @@ service admission, identity, execution-policy and fenced lifecycle boundaries.
 Its offline declaration contract is not a runtime registry, deployment grant or
 security acceptance. Existing `runtime=service` metadata and Phase 2 trusted
 adapters must not enable third-party server code execution implicitly.
+
+
+### Phase 2: first trusted tool adapter migration (#320)
+
+`xeonolab/tool_adapters.py` introduces a static async tool binding and resolution
+contract. Tool Gateway search/query/get resolve declared tool/api capabilities,
+scopes, version requirements, live process-local enablement and dependencies on
+each invocation. This does not load executable code from plugin manifests or
+expose remote registration/lifecycle APIs. `TOOL_CAPABILITY_ADAPTERS` selects the
+registry path (default 1) or legacy rollback path (0). Async budgets bound trusted
+cooperative I/O only; service/CPU isolation still belongs to Phase 3. Detailed
+permissions, error semantics, lifecycle limits and rollback are recorded in
+`docs/issue320-trusted-tool-adapters.md`. Embedding/LLM Provider adaptation and
+XeLibrary parsing/index extensions remain subsequent Phase 2 work.
 

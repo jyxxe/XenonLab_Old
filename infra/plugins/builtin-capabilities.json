@@ -16,7 +16,7 @@
     {"id": "builtin.platform.provider.qwen-worker", "kind": "provider", "version": "1.0.0", "runtime": "service", "permissions": ["embedding:read"], "dependencies": [], "timeout_seconds": 120},
     {"id": "builtin.platform.worker.index", "kind": "worker", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:write"], "dependencies": []},
     {"id": "builtin.platform.worker.lean-verifier", "kind": "worker", "version": "1.0.0", "runtime": "service", "permissions": ["lean:verify"], "dependencies": []},
-    {"id": "builtin.platform.tool.xelibrary-query", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:query"], "dependencies": []},
+    {"id": "builtin.platform.tool.xelibrary-query", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:query"], "dependencies": [], "timeout_seconds": 30},
     {"id": "builtin.platform.app.chat", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.app.development", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.app.issues", "kind": "app", "version": "1.0.0", "runtime": "ui", "permissions": ["dev:read"], "dependencies": []},
@@ -27,6 +27,8 @@
     {"id": "builtin.platform.widget.work", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.widget.search", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
     {"id": "builtin.platform.widget.notes", "kind": "widget", "version": "1.0.0", "runtime": "ui", "permissions": ["desktop:read"], "dependencies": []},
-    {"id": "builtin.platform.provider.llm-chat", "kind": "provider", "version": "1.0.0", "runtime": "api", "permissions": ["llm:use"], "dependencies": []}
+{"id": "builtin.platform.provider.llm-chat", "kind": "provider", "version": "1.0.0", "runtime": "api", "permissions": ["llm:use"], "dependencies": []},
+{"id": "builtin.platform.tool.xelibrary-search", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:query"], "dependencies": [], "timeout_seconds": 30},
+    {"id": "builtin.platform.tool.xelibrary-get", "kind": "tool", "version": "1.0.0", "runtime": "api", "permissions": ["xelibrary:read"], "dependencies": [], "timeout_seconds": 30}
   ]
 }
