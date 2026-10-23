@@ -128,14 +128,9 @@ allowed without an ADR update and a deprecation window.
   namespace/version/duplicate/dependency rules;
 - follow-up Phase 1 issue with registry endpoint and builtin migration example.
 
-Phase 1 progress: `xeonolab/capabilities.py` aggregates builtin capabilities and
-account-scoped enabled plugin app/widget capabilities (#315), with exact/caret/
-tilde/wildcard version negotiation (#316). Detail resolution uses the same live
-account projection and denies disabled, uninstalled or permission-revoked
-capabilities before version negotiation (see
-`docs/issue305-capability-resolution.md`). This is metadata resolution, not a
-plugin execution runtime. Dock/LaunchPad/window discovery migration remains next;
-the declarative builtin migration example is tracked by PR #317.
+Phase 1 progress: `xeonolab/capabilities.py` implements the read-only registry MVP
+(`GET /api/v1/capabilities`, builtin manifest validation); app/widget migration and
+plugin records aggregation remain next.
 
 ## Consequences
 
