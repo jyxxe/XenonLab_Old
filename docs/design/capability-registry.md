@@ -24,3 +24,10 @@
 `GET /api/v1/capabilities/{id}?require=<constraint>` 支持精确版本、`^x.y.z`（同 major，>=）、
 `~x.y.z`（同 major.minor，>=）与 `*`；不满足返回 409 `CAPABILITY_INCOMPATIBLE`，约束语法非法返回
 422 `INVALID_VERSION_CONSTRAINT`，无 `require` 时行为不变。调用方应在按能力调用前先做该检查。
+
+## 内置模块迁移示例
+
+`infra/plugins/examples/knowledge-app.manifest.json` 给出把内置「知识库」app/widget 迁移为声明式
+能力清单的示例（`source=declared`，能力 id 位于 manifest 命名空间，widget 依赖 app 的 `^1.0.0`）。
+当前仅作为契约示例与测试夹具，不改变运行时注册方式；正式迁移会在 Dock/LaunchPad 改用统一发现后
+单独提交（保持 URL、权限与现有 app 行为不变）。

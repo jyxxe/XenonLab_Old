@@ -226,3 +226,17 @@ def test_plugin_resolution_rechecks_account_enablement_and_permissions(settings,
     settings.dev_tokens["alice"]["scope"] = original
     assert client.delete(install, headers=auth()).status_code == 200
     assert client.get(target, headers=auth()).status_code == 404
+
+
+def test_plugin_migration_example_manifest_is_valid_and_namespaced():
+    import json as jsonlib
+    from pathlib import Path as PathType
+
+    from xeonolab.capabilities import CapabilityRegistry
+
+    example = PathType(__file__).resolve().parents[1] / "infra/plugins/examples/knowledge-app.manifest.json"
+    registry = CapabilityRegistry(jsonlib.loads(example.read_text()))
+    manifest = registry.all()
+    assert manifest["source"] == "declared"
+    assert manifest["capabilities"][0]["id"].startswith(manifest["id"] + ".")
+    assert {item["kind"] for item in manifest["capabilities"]} == {"app", "widget"}
