@@ -81,7 +81,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const session = useTableSession(api, apiPage);
   const search = useSearch(apiPage);
   const query = useQueryConsole(apiPage, subject, identityLoaded && Boolean(subject), authEpoch);
-  const theorems = useTheorems(apiPage);
+  const theorems = useTheorems(apiPage, apiRaw);
   const prefs = useLibraryPrefs(subject, api, apiRaw);
   const uploadStore = useMemo(()=>createUploadStore(),[subject,authEpoch]);
   useEffect(()=>()=>uploadStore.dispose(),[uploadStore]);
@@ -125,6 +125,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const canWrite = scopes.includes('xelibrary:write');
   const canAdmin = scopes.includes('xelibrary:admin');
   const canReadTheorems = scopes.includes('xelibrary:theorem:read');
+  const canPromoteTheorems = scopes.includes('xelibrary:theorem:promote');
   const table = session.table;
   const inspectorDraft = useRef<InspectorDraftState | null>(null);
   const rowClickFocus = useRef<FieldFocus | null>(null);
@@ -679,6 +680,17 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
         {view === 'theorems' && (
           <TheoremView
             canRead={canReadTheorems}
+            canPromote={canPromoteTheorems}
+            queue={theorems.queue}
+            queueCursor={theorems.queueCursor}
+            queueLoading={theorems.queueLoading}
+            queueLoadingMore={theorems.queueLoadingMore}
+            queueError={theorems.queueError}
+            decisionBusy={theorems.decision.busy}
+            decisionMessage={theorems.decision.message}
+            onReviewQueue={() => void theorems.loadQueue(true)}
+            onLoadMoreQueue={() => void theorems.loadQueue(false, theorems.queueCursor)}
+            onReviewDecision={(theorem, action) => void theorems.review(theorem, action)}
             identityReady={identityLoaded}
             items={theorems.items}
             searchResults={theorems.searchResults}

@@ -44,7 +44,7 @@ const state = {
   subject: fixtureParams.get('subject') === '__none__' ? '' : (fixtureParams.get('subject') || 'fixture-user'),
   // Default fixture identity is fully authorized for every library feature;
   // `?noTheoremRead=1` simulates an account without xelibrary:theorem:read.
-  scopes: (['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'xelibrary:theorem:read', 'dev:read'] as string[]).filter(
+  scopes: (['xelibrary:read', 'xelibrary:write', 'xelibrary:attach', 'xelibrary:query', 'xelibrary:admin', 'xelibrary:theorem:read', 'xelibrary:theorem:propose', 'xelibrary:theorem:promote', 'dev:read'] as string[]).filter(
     scope => !(fixtureParams.get('noTheoremRead') === '1' && scope === 'xelibrary:theorem:read'),
   ),
   conflict: false,
@@ -262,7 +262,14 @@ const api = async (path: string, init?: RequestInit) => (await route(path, init)
 const apiPage = (path: string, init?: RequestInit) => route(path, init);
 const PREVIEW_PNG = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), ch => ch.charCodeAt(0));
 const apiRaw = async (path: string, init?: RequestInit) => {
-  calls.push({method: (init?.method || 'GET').toUpperCase(), path, body: undefined});
+  calls.push({method: (init?.method || 'GET').toUpperCase(), path, body: undefined, headers: (init?.headers || {}) as Record<string, string>});
+  const theoremMatch = path.match(/^\/theorems\/(thm-[0-9]+)$/);
+  if (theoremMatch) return new Response(JSON.stringify({data: {theorem_id: theoremMatch[1], title: '一致收敛定理', path: '/theorems/analysis', review_status: 'proposed', formal_status: 'none', revision: 2}, meta: {}}), {status: 200, headers: {'Content-Type': 'application/json', 'ETag': '"revision:2"'}});
+  const decisionMatch = path.match(/^\/theorems\/(thm-[0-9]+)\/(promote|reject)$/);
+  if (decisionMatch) {
+    const status = decisionMatch[2] === 'promote' ? 'promoted' : 'rejected';
+    return new Response(JSON.stringify({data: {theorem_id: decisionMatch[1], title: '一致收敛定理', path: '/theorems/analysis', review_status: status, formal_status: 'none', revision: 3}, meta: {}}), {status: 200, headers: {'Content-Type': 'application/json', 'ETag': '"revision:3"'}});
+  }
   if (path.includes('/preview')) {
     return new Response(PREVIEW_PNG, {status: 200, headers: {'Content-Type': 'image/png', 'X-Content-Type-Options': 'nosniff'}});
   }

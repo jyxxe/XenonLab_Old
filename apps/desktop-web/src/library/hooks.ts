@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import type {API, APIPage, APIRaw} from '../shell/types';
+import {readableErrorMessage} from '../api-error.js';
 import {libraryPrefsStorageKey, mergeRecent, mergeServerPrefs, mergeTombstones, retainRefreshedRow, parseFieldFilters, SEARCH_LIMIT_OPTIONS, toggleFavorite} from './logic.js';
 import {addQueryRecent, QUERY_EXPRESSION_LIMIT, queryDraftsStorageKey, readQueryDrafts, writeQueryDrafts} from './query-drafts.js';
 import type {IndexStatus, Job, QueryExplain, RecentEntry, Row, SearchHit, SearchMeta, SearchMode, Table, Theorem} from './types';
@@ -536,7 +537,7 @@ export function useQueryConsole(apiPage: APIPage, subject: string | null, identi
   return {expression, setExpression, rows: identityVerified ? rows : [], meta: identityVerified ? meta : {}, plan: identityVerified ? plan : null, error: identityVerified ? error : null, running: identityVerified && running, validating: identityVerified && validating, duration: identityVerified ? duration : null, run, validate, recent, draftStatus, draftMessage, loadRecent, deleteRecent, clearRecent, retryStorage};
 }
 
-export function useTheorems(apiPage: APIPage) {
+export function useTheorems(apiPage: APIPage, apiRaw?: APIRaw) {
   const [items, setItems] = useState<Theorem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -548,6 +549,13 @@ export function useTheorems(apiPage: APIPage) {
   const [relations, setRelations] = useState<{dependencies: any[]; dependents: any[]; evidence: any[]} | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<unknown>(null);
+  const [queue, setQueue] = useState<Theorem[] | null>(null);
+  const [queueCursor, setQueueCursor] = useState<string | null>(null);
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [queueLoadingMore, setQueueLoadingMore] = useState(false);
+  const [queueError, setQueueError] = useState<unknown>(null);
+  const [decision, setDecision] = useState<{busy: boolean; message: string}>({busy: false, message: ''});
+  const queueGeneration = useRef(0);
   const listGeneration = useRef(0);
   const detailGeneration = useRef(0);
 
@@ -636,6 +644,47 @@ export function useTheorems(apiPage: APIPage) {
     [apiPage, items],
   );
 
+  const loadQueue = useCallback(async (initial = true, next?: string | null) => {
+    const request = ++queueGeneration.current;
+    if (initial) { setQueueLoading(true); setQueue(null); } else setQueueLoadingMore(true);
+    setQueueError(null);
+    try {
+      const cursorParam = initial ? '' : `&cursor=${encodeURIComponent(next || '')}`;
+      const page = await apiPage(`/theorems?review_status=proposed&limit=50${cursorParam}`);
+      if (request !== queueGeneration.current) return;
+      setQueue(old => initial ? (page.data as Theorem[]) : [...(old || []), ...(page.data as Theorem[])]);
+      setQueueCursor((page.meta.next_cursor as string) || null);
+    } catch (cause) {
+      if (request === queueGeneration.current) setQueueError(cause);
+    } finally {
+      if (request === queueGeneration.current) { setQueueLoading(false); setQueueLoadingMore(false); }
+    }
+  }, [apiPage]);
+
+  const review = useCallback(async (theorem: Theorem, action: 'promote' | 'reject') => {
+    if (!apiRaw || decision.busy) return;
+    setDecision({busy: true, message: ''});
+    try {
+      const current = await apiRaw(`/theorems/${encodeURIComponent(theorem.theorem_id)}`);
+      if (!current.ok) throw new Error(`无法读取定理当前版本（HTTP ${current.status}）`);
+      const etag = current.headers.get('ETag');
+      if (!etag) throw new Error('服务端未返回定理版本 ETag，已取消操作');
+      const response = await apiRaw(`/theorems/${encodeURIComponent(theorem.theorem_id)}/${action}`, {method: 'POST', headers: {'If-Match': etag}});
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        const suffix = response.status === 412 ? '（定理已被他人修改，已刷新）' : response.status === 409 ? '（定理状态已变化，已刷新）' : '';
+        throw new Error(`${body?.error?.message || `操作失败（HTTP ${response.status}）`}${suffix}`);
+      }
+      setDecision({busy: false, message: action === 'promote' ? '已晋升该定理' : '已拒绝该定理'});
+      if (body?.data) setSelected(body.data as Theorem);
+      await loadQueue(true);
+      await open(theorem.theorem_id);
+    } catch (cause) {
+      setDecision({busy: false, message: readableErrorMessage(cause)});
+      try { await open(theorem.theorem_id); } catch { /* detail refresh is best effort */ }
+    }
+  }, [apiRaw, decision.busy, loadQueue, open, setSelected]);
+
   const clearSearch = useCallback(() => {
     ++listGeneration.current;
     setSearchResults(null);
@@ -665,6 +714,14 @@ export function useTheorems(apiPage: APIPage) {
     loading,
     loadingMore,
     error,
+    queue,
+    queueCursor,
+    queueLoading,
+    queueLoadingMore,
+    queueError,
+    decision,
+    loadQueue,
+    review,
     load,
     loadMore,
     search,
