@@ -187,3 +187,40 @@ Full-suite follow-up for the lifecycle hook update:
 - `docker --version` still exits 127 (`docker: command not found`). No image or
   runtime-isolation acceptance is implied. Protected CI and maintainer acceptance
   remain outstanding; no protected branch was merged or deployed.
+
+
+## Baseline refresh after desktop discovery (#319)
+
+Rebased onto `feature/platform-v1@acc52f3`. The manifest conflict was resolved
+field by field: every current builtin UI entry is unchanged, every prior backend
+entry is unchanged, and the id set is exactly the union, without duplicates.
+No provider/tool business implementation was changed by this refresh. Local
+pre-refresh backup refs were retained; only the Agent's own feature branch will
+be updated, never the protected base.
+
+Current validation: **52 focused tests pass; 761 full-suite tests pass /
+13 baseline Lean failures in 416.38s**. Exact failed names match the prior
+unmodified baseline (`/proc/1/ns/net`, `mnt` stat PermissionError 13). No checks
+were skipped or weakened. CI-scope Ruff, OpenAPI export (no extra generated
+diff) and `git diff --check` pass. Full suite command:
+
+```sh
+mkdir -p runtime
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest --basetemp runtime/rebase-test-tmp
+```
+
+Earlier validation counts above refer to their earlier source snapshots. This
+refresh is not production or visual acceptance, deployment, approval or merge.
+
+The #332 combination was reconstructed on `acc52f3` with the same documented
+services/ADR exclusions. Current combined focused tests: 99 pass; actual
+`TOOL_CAPABILITY_ADAPTERS=0` lifecycle tests: 26 pass. Ruff/OpenAPI have no
+additional drift; local staged tree `8ac64fe49a89e1438f8a6f74e363d0994731d5a0`.
+This refresh did not rerun a combined full suite; the earlier 784/13 result is
+for the explicitly recorded older tree, not this new baseline.
+
+Exact focused command for this refresh:
+
+```sh
+UV_PROJECT_ENVIRONMENT=../issue305/.venv312 ../tooling/bin/uv run --no-sync pytest tests/test_tool_adapters.py tests/test_capability_execution_contract.py tests/test_capabilities.py tests/test_plugin_manifest.py tests/test_services.py -q
+```
