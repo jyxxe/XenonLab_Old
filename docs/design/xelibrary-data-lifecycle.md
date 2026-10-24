@@ -67,3 +67,7 @@
 默认 `dry_run=true`，按 `older_than_days`（1–3650）与 `keep_recent`（默认 5 万）计算候选，批处理 `limit`，
 保留每行最新 revision；活动 bulk/index 作业或 deleting 表返回 409；真实删除写 audit。附件对象 GC、
 增长指标与系统面板接线仍待后续增量（本文件保持设计状态）。
+
+第二增量：`POST /api/v1/storage/attachment-gc`（xelibrary:admin，dry-run 默认）跨全部表引用差集、
+24h 宽限期、limit 有界、真实执行需 dry-run 的 confirm token、逐对象 audit；上传临时目录不参与回收。
+增长指标与系统面板接线仍待后续。

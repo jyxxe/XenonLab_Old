@@ -692,6 +692,42 @@
         }
       }
     },
+    "/api/v1/storage/attachment-gc": {
+      "post": {
+        "summary": "Attachment Gc",
+        "operationId": "attachment_gc_api_v1_storage_attachment_gc_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttachmentGcRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/maintenance/prune-changes": {
       "post": {
         "summary": "Prune Changes",
@@ -3591,6 +3627,44 @@
           "meta"
         ],
         "title": "AttachmentCandidatePage"
+      },
+      "AttachmentGcRequest": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": true
+          },
+          "grace_hours": {
+            "type": "integer",
+            "maximum": 720.0,
+            "minimum": 1.0,
+            "title": "Grace Hours",
+            "default": 24
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 1000
+          },
+          "confirm": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128,
+                "minLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirm"
+          }
+        },
+        "type": "object",
+        "title": "AttachmentGcRequest"
       },
       "Body_upload_api_v1_attachments_post": {
         "properties": {

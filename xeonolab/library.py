@@ -174,6 +174,13 @@ class BulkDelete(BaseModel):
     batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class AttachmentGcRequest(BaseModel):
+    dry_run: bool = True
+    grace_hours: int = Field(default=24, ge=1, le=720)
+    limit: int = Field(default=1000, ge=1, le=100000)
+    confirm: str | None = Field(default=None, min_length=16, max_length=128)
+
+
 class PruneChangesRequest(BaseModel):
     dry_run: bool = True
     older_than_days: int = Field(default=30, ge=1, le=3650)
@@ -1277,6 +1284,71 @@ def create_app(settings=None):
         return JSONResponse(response(request, {
             "mode": "job", "job_id": job_id, "status": "queued", "total": len(items),
         }), status_code=202)
+
+    @app.post("/api/v1/storage/attachment-gc")
+    def attachment_gc(body: AttachmentGcRequest, request: Request, actor=Depends(scope("xelibrary:admin"))):
+        objects = root / "objects" / "sha256"
+        referenced: set[str] = set()
+        for database in table_directory.glob("*.xl"):
+            try:
+                with connect(database) as db:
+                    referenced.update(
+                        row[0] for row in db.execute("SELECT DISTINCT object_hash FROM __xl_attachments WHERE object_hash IS NOT NULL")
+                    )
+            except (sqlite3.DatabaseError, OSError):
+                continue
+        cutoff = time.time() - body.grace_hours * 3600
+        candidates: list[tuple[str, object, int]] = []
+        if objects.is_dir():
+            for digest_dir in sorted(objects.iterdir()):
+                if not digest_dir.is_dir() or digest_dir.name.startswith("."):
+                    continue
+                for sub in sorted(digest_dir.iterdir()):
+                    if not sub.is_dir():
+                        continue
+                    for candidate in sorted(sub.iterdir()):
+                        if not candidate.is_file() or candidate.name.startswith("."):
+                            continue
+                        if candidate.name in referenced:
+                            continue
+                        try:
+                            stat = candidate.stat()
+                        except OSError:
+                            continue
+                        if stat.st_mtime >= cutoff:
+                            continue
+                        candidates.append((candidate.name, candidate, stat.st_size))
+                        if len(candidates) >= body.limit:
+                            break
+                    if len(candidates) >= body.limit:
+                        break
+                if len(candidates) >= body.limit:
+                    break
+        token = "gc-" + hashlib.sha256(
+            ("\n".join(sorted(digest for digest, _, _ in candidates)) + f":{body.grace_hours}:{body.limit}").encode()
+        ).hexdigest()[:40]
+        deleted, deleted_bytes = 0, 0
+        if not body.dry_run:
+            if not body.confirm or body.confirm != token:
+                raise APIError(409, "GC_CONFIRMATION_REQUIRED", "re-run dry_run and pass its confirm token")
+            for _, path, size in candidates:
+                try:
+                    path.unlink()
+                except OSError:
+                    continue
+                deleted += 1
+                deleted_bytes += size
+        audit(actor, "storage.attachment_gc", f"dry_run={body.dry_run} candidates={len(candidates)} deleted={deleted}")
+        return response(request, {
+            "dry_run": body.dry_run,
+            "candidates": [{"digest": digest, "bytes": size} for digest, _, size in candidates],
+            "candidate_count": len(candidates),
+            "candidate_bytes": sum(size for _, _, size in candidates),
+            "deleted": deleted,
+            "deleted_bytes": deleted_bytes,
+            "grace_hours": body.grace_hours,
+            "confirm": token,
+        })
 
     @app.post("/api/v1/tables/{tid}/maintenance/prune-changes")
     def prune_changes(tid: str, body: PruneChangesRequest, request: Request, actor=Depends(scope("xelibrary:admin"))):
