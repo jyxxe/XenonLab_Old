@@ -1,0 +1,42 @@
+{
+  "schema_version": "1",
+  "id": "lookup-policy",
+  "plugin_id": "example.service",
+  "issued_at": 0,
+  "expires_at": 1,
+  "isolation": {
+    "profile": "nonprivileged-private-namespaces",
+    "root_filesystem": "read-only",
+    "network": "gateway-ingress-no-egress",
+    "secrets": "none",
+    "host_mounts": "none"
+  },
+  "limits": {
+    "memory_bytes": 134217728,
+    "cpu_millis": 500,
+    "pids": 16,
+    "scratch_bytes": 1048576,
+    "concurrency": 2,
+    "queue": 0,
+    "input_bytes": 8192,
+    "output_bytes": 16384,
+    "startup_seconds": 10,
+    "invocation_seconds": 10,
+    "drain_seconds": 5
+  },
+  "capabilities": [
+    {
+      "id": "example.service.lookup",
+      "kind": "tool",
+      "version": "1.0.0",
+      "minimum_permissions": [
+        "xelibrary:read"
+      ],
+      "allowed_permissions": [
+        "xelibrary:read",
+        "xelibrary:query"
+      ],
+      "timeout_seconds": 5
+    }
+  ]
+}
