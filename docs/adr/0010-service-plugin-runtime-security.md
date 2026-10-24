@@ -265,7 +265,6 @@ choices are prerequisites with fail-closed defaults, not excuses to grant more
 rights to an ordinary development agent. Phase 3 remains incomplete until this
 matrix has authoritative evidence and maintainer acceptance.
 
-
 ## Signature component increment (#335)
 
 The [DSSE/Ed25519 component](../issue335-service-signatures.md) implements exact
@@ -294,6 +293,17 @@ platform releases retain their approval/lease/fixed inventory paths. This is a
 fail-closed compatibility guard, not the future resolved-plan approval binding,
 receiver generation attestation or permission to execute service workloads.
 
+### Global dependency evidence (#343)
+
+`capability_snapshot.py` constructs a bounded immutable graph from exact local
+manifest bytes and caller-supplied disabled capability IDs. It rejects global
+missing/incompatible dependencies, cycles and ambiguous namespaces, then resolves
+an enabled dependency-first closure with a content digest. This does not prove
+namespace ownership, current availability or any other authority; the caller must
+bind verified sources and current revisions into the future approved plan. It
+adds no registration or execution path. Limits, compatibility and evidence are
+recorded in `docs/issue343-capability-dependency-snapshot.md`.
+
 ## Execution policy increment (#339)
 
 The [execution policy authority](../issue339-service-execution-policy.md) binds
@@ -319,3 +329,4 @@ actual resource allocation/isolation, user scopes/grants, service identity, heal
 protected approved plan/lease and final generation/revision fences must all be
 verified by the future coordinator. File/clock custody and an external anti-rollback
 checkpoint remain operational requirements, not properties proven by local SQLite.
+

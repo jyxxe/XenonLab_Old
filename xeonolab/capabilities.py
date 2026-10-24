@@ -24,6 +24,9 @@ TIERS = {"ui", "api", "service"}
 PLUGIN_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{1,62}$")
 CAPABILITY_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
 PERMISSION = re.compile(r"^[a-z0-9-]+:[a-z0-9-]+$")
+DEPENDENCY = re.compile(
+    r"[a-z0-9][a-z0-9._-]{2,127}@[~^]?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+)
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[1] / "infra/plugins/builtin-capabilities.json"
 
 
@@ -67,9 +70,7 @@ class CapabilityRegistry:
                 raise ValueError(f"invalid permissions for {identifier}")
             dependencies = capability.get("dependencies", [])
             if not isinstance(dependencies, list) or any(
-                not isinstance(dep, str) or not re.fullmatch(
-                    r"[a-z0-9][a-z0-9._-]{2,127}@[~^]?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", dep
-                ) for dep in dependencies
+                not isinstance(dep, str) or not DEPENDENCY.fullmatch(dep) for dep in dependencies
             ) or len(set(dependencies)) != len(dependencies):
                 raise ValueError(f"invalid dependencies for {identifier}")
             timeout = capability.get("timeout_seconds", 30)
@@ -107,21 +108,22 @@ class CapabilityRegistry:
 
     @staticmethod
     def _reject_cycles(graph):
+        # Iterative DFS also supports bounded multi-manifest graphs without
+        # depending on the interpreter's recursion limit.
         visiting, done = set(), set()
-
-        def visit(node):
-            if node in done:
-                return
-            if node in visiting:
-                raise ValueError(f"dependency cycle at {node}")
-            visiting.add(node)
-            for dependency in graph.get(node, []):
-                visit(dependency)
-            visiting.discard(node)
-            done.add(node)
-
-        for node in graph:
-            visit(node)
+        for root in graph:
+            stack = [(root, False)]
+            while stack:
+                node, leaving = stack.pop()
+                if leaving:
+                    visiting.remove(node)
+                    done.add(node)
+                elif node not in done:
+                    if node in visiting:
+                        raise ValueError(f"dependency cycle at {node}")
+                    visiting.add(node)
+                    stack.append((node, True))
+                    stack.extend((dependency, False) for dependency in reversed(graph.get(node, [])))
 
     def all(self):
         return self.manifest
