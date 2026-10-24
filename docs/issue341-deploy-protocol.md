@@ -139,3 +139,16 @@ Local composition success is not protected CI approval or actual deployment.
 The development agent did not approve a real release, acquire a production lease,
 run a real executor/SSH target, merge or publish code, or close an unaccepted
 Issue. #305 remains in progress.
+
+## Signature-base synchronization
+
+After #336 merged at `f139973`, this branch is rebased onto the new base.
+ADR0010 preserves both the merged signature section and this protocol guard.
+Deployment Python, fixed executor, protocol tests and generated deploy OpenAPI
+are byte-identical to the previously tested `3a3d7b4` implementation.
+
+The current-base focus, including deployment, staging, signature, declaration and
+strict execution contracts, records **223 passed**. Ruff and repeated OpenAPI
+export pass without drift. Previous 879/13 individual and 1256-pass composed full
+results retain their recorded source scope; no new independent full rerun is
+claimed for this documentation-only reconciliation.
