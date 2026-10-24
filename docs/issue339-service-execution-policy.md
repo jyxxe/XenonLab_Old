@@ -204,3 +204,25 @@ The five policy sources remain identical to the complete full-run composition.
 Ruff and OpenAPI export pass without drift. The 908/13 standalone full result
 above remains scoped to the preceding base; it is not a separate new-base full.
 Complete full-run staged source tree: `81065c430d2341887c13a82e9d86d70840272a7c`.
+
+## Final merged-signature-base regression
+
+After #336 merged, this branch is synchronized onto `f139973`; ADR0010 retains
+both authority components. The three signature/policy integration cases are now
+committed normal CI tests because the signature implementation is in the base.
+They cover policy replacement/disable despite a valid signature, revoked signer
+despite valid execution policy, and digest-bound foreign dependencies remaining
+unregistered and unresolved without network/process side effects.
+
+Current-base focus: **312 passed**. Full unmodified branch: **1130 passed / the
+same 13 baseline Lean fixture failures**, 434.81 seconds. The failed identifier
+set comparison passes. The separate validation worktree changes only the exact
+PR #338 test file; its full result is **1150 passed**, exit 0, 437.97 seconds.
+Its staged source tree is `7d8736937d1985359cf54aa54da808fdb1694de2`.
+That result is explicitly a fixture-only overlay, not an unmodified-head claim.
+
+Policy module, CLI, original policy tests, schema and expired example are
+byte-identical to the earlier `6eb699f` implementation. Ruff, locked dependency
+consistency, repeated byte-identical OpenAPI export, all 11 service smokes and
+transaction/process/crash fault injection pass. No runtime/root/grant, flag,
+approval or production change was performed.
