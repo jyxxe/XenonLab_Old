@@ -692,6 +692,22 @@
         }
       }
     },
+    "/api/v1/storage/telemetry": {
+      "get": {
+        "summary": "Storage Telemetry",
+        "operationId": "storage_telemetry_api_v1_storage_telemetry_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/storage/attachment-gc": {
       "post": {
         "summary": "Attachment Gc",

@@ -71,3 +71,6 @@
 第二增量：`POST /api/v1/storage/attachment-gc`（xelibrary:admin，dry-run 默认）跨全部表引用差集、
 24h 宽限期、limit 有界、真实执行需 dry-run 的 confirm token、逐对象 audit；上传临时目录不参与回收。
 增长指标与系统面板接线仍待后续。
+
+第三增量：`GET /api/v1/storage/telemetry`（xelibrary:admin 只读）提供每表 changes/附件计数与
+内容寻址对象 referenced/unreferenced 字节数，供系统面板「存储」与运维监控消费；不做回收。
