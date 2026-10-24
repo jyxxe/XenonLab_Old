@@ -60,7 +60,9 @@ def _load(raw, limit):
     if not isinstance(raw, bytes) or len(raw) > limit:
         raise ServicePluginContractError("JSON input exceeds byte limit or is not bytes")
     try:
-        return json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
+        # Passing bytes lets json.loads autodetect UTF-16/32, even without BOM.
+        # Decode once and parse text so all service evidence uses UTF-8 only.
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     except (ValueError, UnicodeError, RecursionError):
         raise ServicePluginContractError("invalid JSON document") from None
 

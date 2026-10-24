@@ -57,45 +57,57 @@ class SignatureEvidence:
     valid_until: int
 
 
+def _verified_payload(envelope_bytes, snapshot, payload_type, maximum_payload):
+    """Shared bounded DSSE crypto only; callers enforce purpose and namespace.
+
+    No evidence is returned until the caller re-reads its current trust authority
+    and applies purpose-specific signer/namespace/builder eligibility.
+    """
+    if not isinstance(envelope_bytes, bytes) or len(envelope_bytes) > MAX_ENVELOPE_BYTES:
+        raise ValueError
+    envelope_bytes.decode("utf-8")
+    envelope = _load(envelope_bytes, MAX_ENVELOPE_BYTES)
+    allowed_types = (payload_type,) if isinstance(payload_type, str) else payload_type
+    if not isinstance(envelope, dict) or envelope.get("payloadType") not in allowed_types:
+        raise ValueError
+    payload_type = envelope["payloadType"]
+    payload = decode_base64(envelope.get("payload"), maximum_payload)
+    signatures = envelope.get("signatures")
+    if not isinstance(signatures, list) or not 1 <= len(signatures) <= 16:
+        raise ValueError
+    decoded = []
+    for entry in signatures:
+        if not isinstance(entry, dict):
+            raise ValueError
+        keyid = entry.get("keyid", "")
+        signature = decode_base64(entry.get("sig"), MAX_SIGNATURE_BYTES)
+        if not isinstance(keyid, str) or len(keyid) > 128:
+            raise ValueError
+        if len(signature) != 64:
+            continue  # Decoded but not an Ed25519 signature; cannot count.
+        decoded.append((keyid, signature))
+    # Unknown envelope/signature fields are ignored per DSSE, not executed
+    # or forwarded to the declaration parser. Decode each payload only once.
+    message, accepted = pae(payload_type, payload), set()
+    for keyid, signature in decoded:
+        for key in snapshot.policy.keys:
+            if keyid and keyid != key.fingerprint:
+                continue  # Unauthenticated candidate hint, never a grant.
+            if key.fingerprint in snapshot.revoked_keys:
+                continue
+            if not key.not_before <= snapshot.checked_at < key.expires_at:
+                continue
+            if _valid_signature(key.public_key, signature, message):
+                accepted.add(key.fingerprint)
+    if len(accepted) < snapshot.policy.threshold:
+        raise ServiceSignatureError("service signature not verified")
+    return payload, frozenset(accepted)
+
+
 def verify_service_signature(envelope_bytes, manifest_bytes, store: TrustPolicyStore, *, minimum_revision=0):
     snapshot = store.snapshot(minimum_revision=minimum_revision)
     try:
-        if not isinstance(envelope_bytes, bytes) or len(envelope_bytes) > MAX_ENVELOPE_BYTES:
-            raise ValueError
-        envelope_bytes.decode("utf-8")
-        envelope = _load(envelope_bytes, MAX_ENVELOPE_BYTES)
-        if not isinstance(envelope, dict) or envelope.get("payloadType") != PAYLOAD_TYPE:
-            raise ValueError
-        payload = decode_base64(envelope.get("payload"), MAX_DECLARATION_BYTES)
-        signatures = envelope.get("signatures")
-        if not isinstance(signatures, list) or not 1 <= len(signatures) <= 16:
-            raise ValueError
-        decoded = []
-        for entry in signatures:
-            if not isinstance(entry, dict):
-                raise ValueError
-            keyid = entry.get("keyid", "")
-            signature = decode_base64(entry.get("sig"), MAX_SIGNATURE_BYTES)
-            if not isinstance(keyid, str) or len(keyid) > 128:
-                raise ValueError
-            if len(signature) != 64:
-                continue  # Decoded but not an Ed25519 signature; cannot count.
-            decoded.append((keyid, signature))
-        # Unknown envelope/signature fields are ignored per DSSE, not executed
-        # or forwarded to the declaration parser. Decode each payload only once.
-        message, accepted = pae(PAYLOAD_TYPE, payload), set()
-        for keyid, signature in decoded:
-            for key in snapshot.policy.keys:
-                if keyid and keyid != key.fingerprint:
-                    continue  # Unauthenticated candidate hint, never a grant.
-                if key.fingerprint in snapshot.revoked_keys:
-                    continue
-                if not key.not_before <= snapshot.checked_at < key.expires_at:
-                    continue
-                if _valid_signature(key.public_key, signature, message):
-                    accepted.add(key.fingerprint)
-        if len(accepted) < snapshot.policy.threshold:
-            raise ServiceSignatureError("service signature not verified")
+        payload, accepted = _verified_payload(envelope_bytes, snapshot, PAYLOAD_TYPE, MAX_DECLARATION_BYTES)
         payload.decode("utf-8")
         declaration = validate_service_plugin(payload, manifest_bytes)
         # Re-read current authority before returning evidence. A change during
