@@ -6,34 +6,42 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .common import APIError, base_app, connect, response, scope, transaction
 
 
-class Artifact(BaseModel):
+class DeployInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class EmptyAction(DeployInput):
+    pass
+
+
+class Artifact(DeployInput):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
     digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
 
 
-class Release(BaseModel):
+class Release(DeployInput):
     commit: str = Field(pattern=r"^[a-f0-9]{40}$")
     artifacts: list[Artifact] = Field(min_length=1)
     migration_manifest: str
     test_report: str = Field(min_length=1)
 
 
-class Acquire(BaseModel):
+class Acquire(DeployInput):
     agent_id: str
     release_id: str
     ttl_seconds: int = Field(default=60, ge=15, le=300)
 
 
-class Renew(BaseModel):
+class Renew(DeployInput):
     ttl_seconds: int = Field(default=60, ge=15, le=300)
 
 
-class Deployment(BaseModel):
+class Deployment(DeployInput):
     release_id: str
     environment: str = Field(default="production", pattern="^production$")
     lease_id: str
@@ -68,6 +76,17 @@ def create_app(settings=None):
             "SELECT 1 FROM deployments WHERE state NOT IN ('completed','rolled_back','cancelled')"
         ).fetchone()
 
+    def supported_release(db, rid):
+        stored = db.execute("SELECT manifest FROM releases WHERE id=?", (rid,)).fetchone()
+        if stored is None:
+            raise APIError(404, "RELEASE_NOT_FOUND", "release not found")
+        try:
+            return Release.model_validate(json.loads(stored[0])).model_dump()
+        except (TypeError, ValueError):
+            raise APIError(
+                409, "RELEASE_CONTRACT_UNSUPPORTED", "release manifest is not supported by this deployment gateway"
+            ) from None
+
     @app.post("/api/v1/releases", status_code=201)
     def release(body: Release, request: Request, actor=Depends(scope("deploy:release"))):
         rid = str(uuid4())
@@ -77,12 +96,11 @@ def create_app(settings=None):
         return response(request, {"release_id": rid, "approved": False})
 
     @app.post("/api/v1/releases/{rid}/approve")
-    def approve(rid: str, request: Request, actor=Depends(scope("deploy:approve"))):
+    def approve(rid: str, request: Request, body: EmptyAction | None = None, actor=Depends(scope("deploy:approve"))):
         if actor.kind not in ("human", "policy"):
             raise APIError(403, "HUMAN_REQUIRED", "human or authorized policy approval required")
         with transaction(path) as db:
-            if not db.execute("SELECT 1 FROM releases WHERE id=?", (rid,)).fetchone():
-                raise APIError(404, "RELEASE_NOT_FOUND", "release not found")
+            supported_release(db, rid)
             db.execute("UPDATE releases SET approved=1 WHERE id=?", (rid,))
             audit(db, actor, "release.approved", rid)
         return response(request, {"approved": True})
@@ -110,6 +128,7 @@ def create_app(settings=None):
                 raise APIError(404, "RELEASE_NOT_FOUND", "release not found")
             if not release[0]:
                 raise APIError(403, "RELEASE_NOT_APPROVED", "release requires approval")
+            supported_release(db, body.release_id)
             current = db.execute("SELECT * FROM lease").fetchone()
             if unresolved(db):
                 raise APIError(
@@ -156,7 +175,7 @@ def create_app(settings=None):
         )
 
     @app.post("/api/v1/deploy/lease/{lid}/release")
-    def release_lease(lid: str, request: Request, actor=Depends(scope("deploy:execute"))):
+    def release_lease(lid: str, request: Request, body: EmptyAction | None = None, actor=Depends(scope("deploy:execute"))):
         codex(actor)
         with transaction(path) as db:
             check(db, lid, actor)
@@ -181,9 +200,7 @@ def create_app(settings=None):
                     503, "EXECUTOR_NOT_CONFIGURED", "production executor must be installed before deployments"
                 )
             did = str(uuid4())
-            manifest = json.loads(
-                db.execute("SELECT manifest FROM releases WHERE id=?", (body.release_id,)).fetchone()[0]
-            )
+            manifest = supported_release(db, body.release_id)
             db.execute(
                 "INSERT INTO deployments VALUES(?,?,?,?,?)",
                 (did, body.release_id, actor.sub, body.epoch, "deploying"),
