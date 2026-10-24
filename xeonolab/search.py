@@ -190,6 +190,9 @@ def install(
                 for ordinal, (column, chunk) in enumerate(
                     chunkers.chunks(chunker, tokenizer, row["values"], table["path"], table["name"])
                 ):
+                    # A trusted processor may span the refresh interval before
+                    # yielding; recheck before sending newly produced text.
+                    actor = chunkers.check_active(chunker) or actor
                     vectors, model_revision = embedding([chunk])
                     vector = vectors[0]
                     if use_qdrant and len(vector) != FAST_TEXT_DIMENSIONS:
@@ -261,9 +264,9 @@ def install(
             lock.release()
 
     @app.post("/api/v1/index/reindex", status_code=202, responses={
-        404: {"description": "Table or document chunker capability is unavailable."},
+        404: {"description": "Table, index or document chunker capability is unavailable."},
         409: {"description": "Document chunker capability version is incompatible."},
-        503: {"description": "Index dependencies or the chunker capability configuration are unavailable."},
+        503: {"description": "Index dependencies, chunker configuration or verified lifecycle state are unavailable."},
     })
     def reindex(
         body: IndexRequest,

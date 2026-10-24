@@ -2328,13 +2328,13 @@
             }
           },
           "404": {
-            "description": "Table or document chunker capability is unavailable."
+            "description": "Table, index or document chunker capability is unavailable."
           },
           "409": {
             "description": "Document chunker capability version is incompatible."
           },
           "503": {
-            "description": "Index dependencies or the chunker capability configuration are unavailable."
+            "description": "Index dependencies, chunker configuration or verified lifecycle state are unavailable."
           },
           "422": {
             "description": "Validation Error",

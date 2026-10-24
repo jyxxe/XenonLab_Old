@@ -222,10 +222,12 @@ and data intact for investigation; uninstall is not implicit data deletion.
 
 ## Acceptance and implementation sequence
 
-The original #330 supplied the proposal, offline declaration schema/validator
-and synthetic contracts. The #335 signature increment below adds a core public
-trust store and signature verifier; admission grants, runtime controller, service
-routes, deployment and real sandbox acceptance remain unimplemented. Local validation passing must never be a deployment check named
+The original #330 supplied the proposal and offline declaration contract.
+The #335 signature increment adds a core public trust store and verifier.
+The #339 increment adds a core-only versioned execution policy authority and
+constraint resolver. Full plan/provenance admission, grant issuer, runtime
+controller, routes, deployment and real sandbox acceptance remain unimplemented.
+Local validation passing must never be a deployment check named
 "service trusted" or turn an artifact into an enabled capability.
 
 Implementation can proceed in reviewable increments, each with its own Issue/PR:
@@ -262,7 +264,6 @@ backend and policy ceilings before the affected runtime step. These operational
 choices are prerequisites with fail-closed defaults, not excuses to grant more
 rights to an ordinary development agent. Phase 3 remains incomplete until this
 matrix has authoritative evidence and maintainer acceptance.
-
 
 ## Signature component increment (#335)
 
@@ -302,3 +303,41 @@ builder permission by default. Rules, current revocation and verification-time
 checks are independent of the declaration signature; neither proof grants
 admission or establishes a SLSA level. The producer profile and rollout limits
 are documented in `service-source-build-v1.md` and `issue346-service-provenance.md`.
+
+### Global dependency evidence (#343)
+
+`capability_snapshot.py` constructs a bounded immutable graph from exact local
+manifest bytes and caller-supplied disabled capability IDs. It rejects global
+missing/incompatible dependencies, cycles and ambiguous namespaces, then resolves
+an enabled dependency-first closure with a content digest. This does not prove
+namespace ownership, current availability or any other authority; the caller must
+bind verified sources and current revisions into the future approved plan. It
+adds no registration or execution path. Limits, compatibility and evidence are
+recorded in `docs/issue343-capability-dependency-snapshot.md`.
+
+## Execution policy increment (#339)
+
+The [execution policy authority](../issue339-service-execution-policy.md) binds
+an exact policy byte digest to a plugin and exact capability id/kind/stable version
+set. It enforces permission floors/ceilings and requested timeout constraints
+against a durable, enabled, unexpired policy revision. Human-only explicit
+management, CAS/idempotence and atomic audit provide reviewable publication and
+disable operations. No HTTP management route, production policy or account
+permission is installed; readers deny missing/disabled/expired state even with
+management off.
+
+The first profile requires nonprivileged private namespaces, read-only root,
+gateway-only ingress, no egress, secrets or host mounts, plus explicit resource,
+byte, concurrency/queue and deadline limits. These are required constraints,
+**not evidence that an executor enforces them**. Only existing XeLibrary,
+Embedding, LLM and Lean permission domains are accepted by this profile, with
+exact stable capability versions. Broader permissions, prerelease policy bindings
+and network/secret/storage profiles require reviewed extensions.
+
+Policy resolution returns immutable constraints and digests, never an invocation
+grant or enabled route. Current signature/provenance, all global dependencies,
+actual resource allocation/isolation, user scopes/grants, service identity, health,
+protected approved plan/lease and final generation/revision fences must all be
+verified by the future coordinator. File/clock custody and an external anti-rollback
+checkpoint remain operational requirements, not properties proven by local SQLite.
+
