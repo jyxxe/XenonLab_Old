@@ -60,3 +60,10 @@
 - 共享附件不被误删（多行/多表引用测试）；宽限期内对象不被回收；
 - 并发上传/绑定与 GC 竞争安全；维护中断可恢复；指标与审计可见；
 - 性能：10 万行表 dry-run 有界内存（分页/游标），不阻塞正常读写超过设定阈值。
+
+## 实现进展（2026-10-24）
+
+首个增量已落地：`POST /api/v1/tables/{tid}/maintenance/prune-changes`（`xelibrary:admin` + 表写权限）：
+默认 `dry_run=true`，按 `older_than_days`（1–3650）与 `keep_recent`（默认 5 万）计算候选，批处理 `limit`，
+保留每行最新 revision；活动 bulk/index 作业或 deleting 表返回 409；真实删除写 audit。附件对象 GC、
+增长指标与系统面板接线仍待后续增量（本文件保持设计状态）。

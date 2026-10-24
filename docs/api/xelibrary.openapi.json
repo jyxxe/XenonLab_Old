@@ -692,6 +692,53 @@
         }
       }
     },
+    "/api/v1/tables/{tid}/maintenance/prune-changes": {
+      "post": {
+        "summary": "Prune Changes",
+        "operationId": "prune_changes_api_v1_tables__tid__maintenance_prune_changes_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PruneChangesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/rows:bulkInsert": {
       "post": {
         "summary": "Bulk Insert",
@@ -3909,6 +3956,38 @@
           "path"
         ],
         "title": "Move"
+      },
+      "PruneChangesRequest": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": true
+          },
+          "older_than_days": {
+            "type": "integer",
+            "maximum": 3650.0,
+            "minimum": 1.0,
+            "title": "Older Than Days",
+            "default": 30
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 5000
+          },
+          "keep_recent": {
+            "type": "integer",
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Keep Recent",
+            "default": 50000
+          }
+        },
+        "type": "object",
+        "title": "PruneChangesRequest"
       },
       "QueryBody": {
         "properties": {
