@@ -44,10 +44,15 @@ export function Bars({data, height = 96, unit = ''}: {data: {label: string; valu
   </div>;
 }
 
-export function Legend({items}: {items: Segment[]}) {
-  return <ul className="mac-legend">{items.map((item, index) => <li key={item.label}>
-    <b style={{background: item.color || chartColor(index)}}/>
-    <span>{item.label}</span>
-    <em>{item.value}</em>
-  </li>)}</ul>;
+export function Legend({items, onSelect}: {items: Segment[]; onSelect?: (index: number) => void}) {
+  return <ul className="mac-legend">{items.map((item, index) => {
+    const body = <>
+      <b style={{background: item.color || chartColor(index)}}/>
+      <span>{item.label}</span>
+      <em>{item.value}</em>
+    </>;
+    return <li key={item.label}>{onSelect
+      ? <button type="button" className="mac-legend-button" aria-label={`查看${item.label}任务`} onClick={() => onSelect(index)}>{body}</button>
+      : body}</li>;
+  })}</ul>;
 }

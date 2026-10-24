@@ -28,7 +28,7 @@ function jobDuration(job:Job){
   if(Number.isNaN(start)||Number.isNaN(end)||end<start)return '';
   return end-start<1000?`${end-start} ms`:`${((end-start)/1000).toFixed(1)} s`;
 }
-export function Dashboard({apiPage,openApp,canOpenTasks=false}:{apiPage:APIPage;openApp:(id:string)=>void;canOpenTasks?:boolean}){
+export function Dashboard({apiPage,openApp,canOpenTasks=false}:{apiPage:APIPage;openApp:(id:string,intent?:{action:'workStatus';status:string})=>void;canOpenTasks?:boolean}){
   const [work,setWork]=useState<WorkItem[]>([]),[workTruncated,setWorkTruncated]=useState(false),[jobs,setJobs]=useState<Job[]>([]),[tables,setTables]=useState<Table[]>([]),[tablesTruncated,setTablesTruncated]=useState(false),[tablesLoading,setTablesLoading]=useState(true),[jobCounts,setJobCounts]=useState<Record<string,number>|null>(null);
   const [notes,setNotes]=useState<Record<string,string>>({}),[health,setHealth]=useState<{service:string;ready:boolean;latency:number}|null>(null);
   const [stamp,setStamp]=useState(0),[tick,setTick]=useState(0);
@@ -96,7 +96,7 @@ export function Dashboard({apiPage,openApp,canOpenTasks=false}:{apiPage:APIPage;
       <article className="mac-card"><header><h3>Harness 任务队列</h3><span className="mac-badge">{workTruncated?`${work.length}+ 项`:`共 ${work.length} 项`}</span></header>
         {notes.work?<ErrorState title="无法读取任务队列" message={notes.work} onRetry={retry}/>:<div className="card-split">
           <Ring segments={workSegments} center={{value: work.length, label: workTruncated?'已载入':'任务'}}/>
-          <Legend items={workSegments}/>
+          <Legend items={workSegments} onSelect={canOpenTasks ? index => openApp('issues', {action: 'workStatus', status: workOrder[index]}) : undefined}/>
         </div>}
         {!notes.work&&workTruncated&&<p className="muted">状态统计仅覆盖当前载入的前 1000 项。</p>}
         {!notes.work&&visibleWork.length>0&&<ul className="job-list">{visibleWork.slice(0,4).map(item=>{
