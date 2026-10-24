@@ -33,9 +33,12 @@ const filters = [
   {id: 'all', label: '全部'},
 ];
 
-export function Issues({apiPage, notify, windowId}: AppViewProps) {
+export function Issues({apiPage, notify, windowId, intent}: AppViewProps) {
   const [items, setItems] = useState<WorkItem[]>([]);
   const [filter, setFilter] = useState('active');
+  useEffect(() => {
+    if (intent?.action === 'workStatus' && intent.status) setFilter(intent.status);
+  }, [intent?.id, intent?.action, intent?.status]);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('status');
   const [message, setMessage] = useState('');
@@ -95,6 +98,7 @@ export function Issues({apiPage, notify, windowId}: AppViewProps) {
         if (filter === 'active') return isActiveWork(item);
         if (filter === 'expired') return isExpiredWorkClaim(item);
         if (filter === 'all') return true;
+        if (filter === 'claimed') return workDisplayStatus(item) === 'claimed';
         return item.status === filter;
       })
       .filter(item => !needle || `${item.issue_id} ${item.title} ${item.repository} ${item.holder || ''}`.toLowerCase().includes(needle))

@@ -314,6 +314,12 @@ export function DesktopShell({
       const app = apps.find(item => item.id === id);
       if (!app) return;
       if (intent) setAppIntents(current => ({...current, [id]: {...intent, id: crypto.randomUUID()}}));
+      else setAppIntents(current => {
+        if (!(id in current)) return current;
+        const next = {...current};
+        delete next[id];
+        return next;
+      });
       setLaunchpadOpen(false);
       setPaletteOpen(false);
       setRecent(current => {

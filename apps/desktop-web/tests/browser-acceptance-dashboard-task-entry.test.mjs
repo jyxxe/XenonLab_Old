@@ -48,6 +48,14 @@ test('System dashboard opens usable tasks by pointer and keyboard and respects a
 
     await closeTasks();
     await openSystem();
+    // Status legend entries are buttons that open the task center pre-filtered.
+    await system.getByRole('button', {name: '查看排队任务'}).click();
+    await expect(tasks).toBeVisible();
+    await expect(tasks.getByRole('tab', {name: /排队/})).toHaveAttribute('aria-selected', 'true');
+    await expect(tasks.getByText('Synthetic issue 71', {exact: true})).toBeVisible();
+    await expect(tasks.getByText('Synthetic issue 70', {exact: true})).toHaveCount(0);
+    await closeTasks();
+    await openSystem();
     await system.locator('.dashboard-actions button').focus();
     for (let i = 0; i < 20; i++) {
       await page.keyboard.press('Tab');
