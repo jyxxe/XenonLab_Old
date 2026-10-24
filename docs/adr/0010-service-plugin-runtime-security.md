@@ -222,10 +222,12 @@ and data intact for investigation; uninstall is not implicit data deletion.
 
 ## Acceptance and implementation sequence
 
-The original #330 supplied the proposal, offline declaration schema/validator
-and synthetic contracts. The #335 signature increment below adds a core public
-trust store and signature verifier; admission grants, runtime controller, service
-routes, deployment and real sandbox acceptance remain unimplemented. Local validation passing must never be a deployment check named
+The original #330 supplied the proposal and offline declaration contract.
+The #335 signature increment adds a core public trust store and verifier.
+The #339 increment adds a core-only versioned execution policy authority and
+constraint resolver. Full plan/provenance admission, grant issuer, runtime
+controller, routes, deployment and real sandbox acceptance remain unimplemented.
+Local validation passing must never be a deployment check named
 "service trusted" or turn an artifact into an enabled capability.
 
 Implementation can proceed in reviewable increments, each with its own Issue/PR:
@@ -291,3 +293,29 @@ discarding purported service-plan/policy/generation constraints. See the
 platform releases retain their approval/lease/fixed inventory paths. This is a
 fail-closed compatibility guard, not the future resolved-plan approval binding,
 receiver generation attestation or permission to execute service workloads.
+
+## Execution policy increment (#339)
+
+The [execution policy authority](../issue339-service-execution-policy.md) binds
+an exact policy byte digest to a plugin and exact capability id/kind/stable version
+set. It enforces permission floors/ceilings and requested timeout constraints
+against a durable, enabled, unexpired policy revision. Human-only explicit
+management, CAS/idempotence and atomic audit provide reviewable publication and
+disable operations. No HTTP management route, production policy or account
+permission is installed; readers deny missing/disabled/expired state even with
+management off.
+
+The first profile requires nonprivileged private namespaces, read-only root,
+gateway-only ingress, no egress, secrets or host mounts, plus explicit resource,
+byte, concurrency/queue and deadline limits. These are required constraints,
+**not evidence that an executor enforces them**. Only existing XeLibrary,
+Embedding, LLM and Lean permission domains are accepted by this profile, with
+exact stable capability versions. Broader permissions, prerelease policy bindings
+and network/secret/storage profiles require reviewed extensions.
+
+Policy resolution returns immutable constraints and digests, never an invocation
+grant or enabled route. Current signature/provenance, all global dependencies,
+actual resource allocation/isolation, user scopes/grants, service identity, health,
+protected approved plan/lease and final generation/revision fences must all be
+verified by the future coordinator. File/clock custody and an external anti-rollback
+checkpoint remain operational requirements, not properties proven by local SQLite.
