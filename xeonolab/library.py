@@ -1285,6 +1285,67 @@ def create_app(settings=None):
             "mode": "job", "job_id": job_id, "status": "queued", "total": len(items),
         }), status_code=202)
 
+    @app.get("/api/v1/storage/telemetry")
+    def storage_telemetry(request: Request, actor=Depends(scope("xelibrary:admin"))):
+        tables: list[dict] = []
+        referenced: set[str] = set()
+        for database in sorted(table_directory.glob("*.xl")):
+            try:
+                with connect(database) as db:
+                    changes = db.execute("SELECT COUNT(*) FROM __xl_changes").fetchone()[0]
+                    attachments = db.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM __xl_attachments"
+                    ).fetchone()
+                    referenced.update(
+                        row[0] for row in db.execute("SELECT DISTINCT object_hash FROM __xl_attachments WHERE object_hash IS NOT NULL")
+                    )
+            except (sqlite3.DatabaseError, OSError):
+                continue
+            tables.append({
+                "table_id": database.stem,
+                "changes_rows": changes,
+                "attachment_refs": attachments[0],
+                "attachment_bytes": attachments[1],
+            })
+        objects = root / "objects" / "sha256"
+        total_objects = total_bytes = unreferenced_bytes = 0
+        unreferenced = 0
+        if objects.is_dir():
+            for digest_dir in objects.iterdir():
+                if not digest_dir.is_dir() or digest_dir.name.startswith("."):
+                    continue
+                for sub in digest_dir.iterdir():
+                    if not sub.is_dir():
+                        continue
+                    for candidate in sub.iterdir():
+                        if not candidate.is_file() or candidate.name.startswith("."):
+                            continue
+                        try:
+                            size = candidate.stat().st_size
+                        except OSError:
+                            continue
+                        total_objects += 1
+                        total_bytes += size
+                        if candidate.name not in referenced:
+                            unreferenced += 1
+                            unreferenced_bytes += size
+        return response(request, {
+            "tables": tables,
+            "totals": {
+                "tables": len(tables),
+                "changes_rows": sum(item["changes_rows"] for item in tables),
+                "attachment_refs": sum(item["attachment_refs"] for item in tables),
+                "attachment_bytes": sum(item["attachment_bytes"] for item in tables),
+            },
+            "attachment_objects": {
+                "total": total_objects,
+                "referenced": total_objects - unreferenced,
+                "unreferenced": unreferenced,
+                "bytes_total": total_bytes,
+                "bytes_unreferenced": unreferenced_bytes,
+            },
+        })
+
     @app.post("/api/v1/storage/attachment-gc")
     def attachment_gc(body: AttachmentGcRequest, request: Request, actor=Depends(scope("xelibrary:admin"))):
         objects = root / "objects" / "sha256"
