@@ -165,7 +165,6 @@ Its offline declaration contract is not a runtime registry, deployment grant or
 security acceptance. Existing `runtime=service` metadata and Phase 2 trusted
 adapters must not enable third-party server code execution implicitly.
 
-
 ### Phase 2: first trusted tool adapter migration (#320)
 
 `xeonolab/tool_adapters.py` introduces a static async tool binding and resolution
@@ -179,7 +178,6 @@ permissions, error semantics, lifecycle limits and rollback are recorded in
 `docs/issue320-trusted-tool-adapters.md`. Embedding/LLM Provider adaptation and
 XeLibrary parsing/index extensions remain subsequent Phase 2 work.
 
-
 ### Phase 2: first XeLibrary indexing extension (#326)
 
 `ChunkerBinding` / `DocumentChunkers` wrap the existing tokenizer-aware text
@@ -191,3 +189,17 @@ processor output is not a public fact snippet. `XELIBRARY_CHUNKER_CAPABILITIES`
 controls gates (default 1); hard CPU/service isolation and persistent lifecycle
 coordination remain separate work. Contract, changed bounds, rollback and
 validation: `docs/issue326-document-chunker.md`.
+
+### Phase 2: trusted Embedding Provider migration (#324)
+
+`EmbeddingProvider` / `PreparedEmbedding` separate default D100M/Qwen workers from
+HTTP callers, queue/metrics and result serialization. Static bindings use separate
+describe/read and encode/write capabilities to preserve existing write-only
+clients. Startup-only replacement and process-local enablement do not load code
+from UI manifests or create a persistent cross-service lifecycle system.
+`EMBEDDING_CAPABILITY_ADAPTERS` selects manifest gates (default 1) or bypasses them
+(0); endpoint scopes remain. Qwen keeps process-backed deadlines; no hard D100M
+CPU deadline is claimed. Ownership, compatibility, fault handling, rollback and
+validation are described in `docs/issue324-embedding-providers.md`. #312's actual
+model replacement, lifecycle coordination and Phase 3 isolation remain separate.
+
