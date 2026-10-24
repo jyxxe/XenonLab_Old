@@ -68,20 +68,24 @@ FAKE_LEAN = textwrap.dedent(
 )
 
 
+def sandbox_stat(path, *, stat_file=os.stat):
+    """Model only the four namespace observations; inspect actual fixture files."""
+    text = str(path)
+    if text in {f"/proc/{pid}/ns/{kind}" for pid in ("self", "1") for kind in ("net", "mnt")}:
+        return SimpleNamespace(
+            st_uid=0, st_mode=0o100444,
+            st_ino=1 if text.startswith("/proc/self/") else 2, st_size=0,
+        )
+    info = stat_file(path)
+    return SimpleNamespace(st_uid=0, st_mode=info.st_mode, st_ino=info.st_ino, st_size=info.st_size)
+
+
 @pytest.fixture(autouse=True)
 def trusted_test_sandbox(monkeypatch, settings):
     """Simulate the reviewed deployment: root-owned files and active namespaces."""
     # Persisted rate limits would throttle polling across restarted app instances.
     settings.rate_limit_enabled = False
-    real_stat = os.stat
-
-    def fake_stat(path):
-        text = str(path)
-        info = real_stat(text)
-        inode = 1 if text.startswith("/proc/self/ns/") else 2 if text.startswith("/proc/1/ns/") else info.st_ino
-        return SimpleNamespace(st_uid=0, st_mode=info.st_mode, st_ino=inode, st_size=info.st_size)
-
-    monkeypatch.setattr(lean_verifier, "_stat", fake_stat)
+    monkeypatch.setattr(lean_verifier, "_stat", sandbox_stat)
 
 
 def write_toolchain(tmp_path, body=FAKE_LEAN):
@@ -422,13 +426,8 @@ def test_untrusted_manifest_and_sha_mismatch_fail_closed(settings, monkeypatch, 
     assert load_toolchains(str(manifest)) == {}
 
     monkeypatch.undo()
-    # restore the trusted/sandbox seam for the rest of the test
-    def trusted(path):
-        info = real_stat(str(path))
-        inode = 1 if str(path).startswith("/proc/self/ns/") else 2 if str(path).startswith("/proc/1/ns/") else info.st_ino
-        return SimpleNamespace(st_uid=0, st_mode=info.st_mode, st_ino=inode, st_size=info.st_size)
-
-    monkeypatch.setattr(lv, "_stat", trusted)
+    # Restore the same trusted file/namespace seam used by the fixture.
+    monkeypatch.setattr(lv, "_stat", sandbox_stat)
     tampered = json.loads(manifest.read_text())
     tampered["toolchains"][0]["sha256"] = "0" * 64
     manifest.write_text(json.dumps(tampered))
@@ -497,3 +496,62 @@ def test_output_is_bounded_while_the_process_runs(verifier):
     assert outcome["stdout_truncated"] is True
     assert len(outcome["stdout"]) <= 16 * 1024
     assert outcome["dependency_lock_checked"] is False
+
+
+def test_simulated_sandbox_never_reads_host_namespaces(settings, monkeypatch, tmp_path):
+    """A restricted /proc must not prevent tests of the simulated sandbox."""
+    settings.dev_tokens["alice"]["scope"] += " lean:verify"
+    manifest = write_toolchain(tmp_path)
+    monkeypatch.setenv("LEAN_TOOLCHAINS_FILE", str(manifest))
+    real_stat = os.stat
+    observed = []
+
+    def deny_namespace_reads(path):
+        observed.append(str(path))
+        if str(path).startswith("/proc/"):
+            raise PermissionError("synthetic proc restriction")
+        return real_stat(path)
+
+    monkeypatch.setattr(
+        lean_verifier, "_stat", lambda path: sandbox_stat(path, stat_file=deny_namespace_reads)
+    )
+    api = TestClient(create_app(settings))
+    assert api.get("/health/ready").status_code == 200
+    result = api.post("/api/v1/lean/verify", headers=auth(), json={"source": VERIFIED_SOURCE})
+    assert result.status_code == 200
+    assert result.json()["data"]["status"] == "verified"
+    assert str(manifest) in observed
+    assert not any(path.startswith("/proc/") for path in observed)
+    with pytest.raises(PermissionError):
+        deny_namespace_reads("/proc/1/ns/net")
+
+
+@pytest.mark.parametrize("kind", ["net", "mnt"])
+@pytest.mark.parametrize("failure", ["shared", "permission", "missing"])
+def test_namespace_observation_failure_denies_readiness_and_execution(
+    settings, monkeypatch, tmp_path, kind, failure,
+):
+    """Exercise the real detector, including its OSError handling; never skip it."""
+    settings.dev_tokens["alice"]["scope"] += " lean:verify"
+    manifest = write_toolchain(tmp_path)
+    monkeypatch.setenv("LEAN_TOOLCHAINS_FILE", str(manifest))
+    observed = []
+
+    def namespace_stat(path):
+        observed.append(str(path))
+        if str(path) == f"/proc/1/ns/{kind}":
+            if failure == "permission":
+                raise PermissionError("synthetic proc restriction")
+            if failure == "missing":
+                raise FileNotFoundError("synthetic missing namespace")
+            return SimpleNamespace(st_ino=1)  # same as this process, not isolated
+        return sandbox_stat(path)
+
+    monkeypatch.setattr(lean_verifier, "_stat", namespace_stat)
+    assert lean_verifier._namespace_isolated() is False
+    api = TestClient(create_app(settings))
+    assert api.get("/health/ready").status_code == 503
+    result = api.post("/api/v1/lean/verify", headers=auth(), json={"source": VERIFIED_SOURCE})
+    assert result.status_code == 503
+    assert result.json()["error"]["code"] == "VERIFIER_UNAVAILABLE"
+    assert f"/proc/1/ns/{kind}" in observed
