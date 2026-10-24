@@ -251,6 +251,10 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   if (clean === '/theorems/search') {
     return {data: [{theorem_id: 'thm-1', path: '/theorems/analysis', title: theoremTitle('一致收敛定理'), statement_natural: '一致收敛蕴含逐点收敛。', formal_status: 'none', review_status: 'proposed', revision: 2}], meta: {partial: false}};
   }
+  if (/^\/tables\/t1\/rows:bulkUpdate$/.test(clean)) {
+    calls.push({method: 'POST', path: clean, body});
+    return {data: {mode: 'sync', job_id: 'bulk-job-1', status: 'completed', total: (body?.rows ?? []).length, done: (body?.rows ?? []).length, failed: 0, results: (body?.rows ?? []).map((row: any) => ({row_id: row.row_id, revision: 4}))}, meta: {request_id: 'req-bulk'}};
+  }
   if (clean === '/index/reindex') {
     if (state.reindexFailure) throw new APIRequestError('embedding worker unreachable', 503, 'EMBEDDING_UNAVAILABLE', {requestId: state.reindexFailure === 'correlated' ? 'req-reindex-failed' : undefined});
     return {data: {job_id: 'job-10'}, meta: {}};

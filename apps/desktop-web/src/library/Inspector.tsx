@@ -26,6 +26,8 @@ export function Inspector({
   columns,
   row,
   selectionSize,
+  selectedRows = [],
+  onReloadRows,
   api,
   apiPage,
   apiRaw,
@@ -58,6 +60,8 @@ export function Inspector({
   columns: Column[];
   row: Row | null;
   selectionSize: number;
+  selectedRows?: Row[];
+  onReloadRows?: () => void;
   api: (path: string, init?: RequestInit) => Promise<any>;
   apiPage: (path: string, init?: RequestInit) => Promise<{data: any; meta: Record<string, any>}>;
   apiRaw: (path: string, init?: RequestInit) => Promise<Response>;
@@ -92,6 +96,10 @@ export function Inspector({
   const draftSource = useRef({row, columns});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [bulkField, setBulkField] = useState('');
+  const [bulkValue, setBulkValue] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [history, setHistory] = useState<Row[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -138,7 +146,8 @@ export function Inspector({
       .then(rows => active && setHistory(rows as Row[]))
       .catch(cause => active && setError(cause))
       .finally(() => active && setHistoryLoading(false));
-    return () => {
+  
+  return () => {
       active = false;
     };
   }, [tab, row?._row_id, api, table.id, row]);
@@ -235,6 +244,29 @@ export function Inspector({
     }
   }
 
+  async function applyBulkField(){
+    if(!bulkField||!selectedRows.length)return;
+    setBulkBusy(true);setBulkMessage('');
+    try{
+      const values=normalizeRowValues(columns,{[bulkField]:bulkValue});
+      const rows=selectedRows.map(item=>({row_id:item._row_id,revision:item._revision,values}));
+      const result=await apiPage(`/tables/${table.id}/rows:bulkUpdate`,{method:'POST',body:JSON.stringify({rows,batch_id:`ui-bulk-${Date.now().toString(36)}`})});
+      const jobId=result.data.job_id;
+      setBulkMessage(`已提交 ${rows.length} 行的「${bulkField}」更新（作业 ${String(jobId).slice(0,8)}…）`);
+      if(result.data.mode==='sync'){onReloadRows?.();setBulkMessage(`已更新 ${rows.length} 行「${bulkField}」`);}
+      else{
+        for(let attempt=0;attempt<20;attempt++){
+          await new Promise(resolve=>setTimeout(resolve,500));
+          const page=await apiPage(`/tables/${table.id}/rows:bulk/${jobId}`);
+          const status=page.data.status;
+          if(status==='completed'){onReloadRows?.();setBulkMessage(`已更新 ${page.data.done ?? rows.length} 行「${bulkField}」${page.data.failed?`，失败 ${page.data.failed}`:''}`);break;}
+          if(status==='failed'){setBulkMessage(`批量更新失败：${page.data.error||'未知错误'}`);break;}
+        }
+      }
+    }catch(cause){setBulkMessage(describeError(cause,'批量更新').message)}
+    finally{setBulkBusy(false)}
+  }
+
   const errorInfo = error ? describeError(error, row ? '保存记录' : '创建记录') : null;
 
   return (
@@ -266,10 +298,24 @@ export function Inspector({
 
         {tab === 'overview' && (
           <div className="inspector-overview">
+            {selectionSize > 1 && (<div className="inspector-bulk" aria-label="批量字段应用">
+                <p className="muted">已选择 {selectionSize} 行；把同一字段值应用到所选记录。</p>
+                {scopes.includes('xelibrary:write') ? (
+                  <>
+                    <label>字段<Select aria-label="批量字段" value={bulkField} onChange={event => setBulkField(event.target.value)}>
+                      <option value="">选择字段</option>
+                      {columns.map(column => <option key={column.name} value={column.name}>{column.name}（{column.type}）</option>)}
+                    </Select></label>
+                    <label>值<Input aria-label="批量值" value={bulkValue} onChange={event => setBulkValue(event.target.value)} placeholder="应用到所有已选记录的值" /></label>
+                    <Button size="sm" disabled={bulkBusy||!bulkField} onClick={() => void applyBulkField()}>{bulkBusy ? '应用中…' : '应用到已选'}</Button>
+                    {bulkMessage && <p role="status" className="muted">{bulkMessage}</p>}
+                  </>
+                ) : <p className="muted">需要 xelibrary:write 权限才能批量更新。</p>}
+              </div>)}
             {!row ? (
               <>
                 <p>未选择记录。填写字段后可创建一条新记录。</p>
-                <p className="muted">已选择 {selectionSize} 行；批量操作暂未实现。</p>
+                <p className="muted">选择多行后可在概览中批量应用字段值。</p>
               </>
             ) : (
               <dl className="inspector-meta">

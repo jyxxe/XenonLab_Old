@@ -811,6 +811,8 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
           columns={table.columns || []}
           row={selectedRow}
           selectionSize={selection.size}
+          selectedRows={selectedRows}
+          onReloadRows={() => void session.refresh()}
           api={api}
           apiPage={apiPage}
           apiRaw={apiRaw}
