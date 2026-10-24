@@ -136,6 +136,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EmptyAction"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -272,6 +289,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EmptyAction"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -404,6 +438,7 @@
             "default": 60
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "agent_id",
@@ -424,6 +459,7 @@
             "title": "Digest"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "name",
@@ -452,6 +488,7 @@
             "title": "Epoch"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "release_id",
@@ -459,6 +496,12 @@
           "epoch"
         ],
         "title": "Deployment"
+      },
+      "EmptyAction": {
+        "properties": {},
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EmptyAction"
       },
       "HTTPValidationError": {
         "properties": {
@@ -498,6 +541,7 @@
             "title": "Test Report"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "commit",
@@ -517,6 +561,7 @@
             "default": 60
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "title": "Renew"
       },

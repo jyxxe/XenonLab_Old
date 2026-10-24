@@ -281,3 +281,13 @@ existence, source build provenance or execution-policy enforcement. A receipt
 cannot authorize a runtime or replace current trust checks. Protected DB/clock
 custody, external rollback checkpoint, root distribution and all deployment,
 isolation, grant, routing and recovery gates above remain necessary.
+
+## Legacy deployment protocol rejection (#341)
+
+The current platform release protocol now rejects unsupported extra request,
+stored manifest and executor job/manifest/artifact fields rather than silently
+discarding purported service-plan/policy/generation constraints. See the
+[protocol regression evidence](../issue341-deploy-protocol.md). Existing valid
+platform releases retain their approval/lease/fixed inventory paths. This is a
+fail-closed compatibility guard, not the future resolved-plan approval binding,
+receiver generation attestation or permission to execute service workloads.
