@@ -118,7 +118,8 @@
       "permissions": [
         "lean:verify"
       ],
-      "dependencies": []
+      "dependencies": [],
+      "timeout_seconds": 120
     },
     {
       "id": "builtin.platform.tool.xelibrary-query",

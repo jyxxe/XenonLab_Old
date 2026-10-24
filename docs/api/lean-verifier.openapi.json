@@ -94,15 +94,26 @@
               }
             }
           },
+          "401": {
+            "description": "Caller credential is invalid or revoked"
+          },
+          "403": {
+            "description": "Caller lacks the current Lean worker permissions"
+          },
+          "404": {
+            "description": "Lean worker capability is missing, disabled or replaced"
+          },
+          "409": {
+            "description": "Lean worker capability version is incompatible"
+          },
           "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
+            "description": "Invalid input, forbidden network or unsupported worker timeout budget"
+          },
+          "429": {
+            "description": "Worker capacity, queue or current authorization authority is rate limited"
+          },
+          "503": {
+            "description": "Trusted worker, sandbox, live authorization or job storage is unavailable"
           }
         }
       }

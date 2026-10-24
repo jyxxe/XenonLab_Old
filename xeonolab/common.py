@@ -355,6 +355,7 @@ def _identity(request: Request, *, check_rate=True):
     resolver = getattr(request.app.state, "authorization_resolver", None)
     if resolver:
         actor = resolver(token)
+
         lifecycle = getattr(request.app.state, "capability_lifecycle", None)
         if lifecycle is not None:
             from .capability_lifecycle import parse_snapshot
@@ -362,6 +363,7 @@ def _identity(request: Request, *, check_rate=True):
             actor.lifecycle_revision, actor.disabled_capabilities = parse_snapshot(lifecycle.snapshot())
         elif request.app.state.capability_lifecycle_required:
             raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "capability lifecycle authority required")
+
         if check_rate:
             enforce_rate_limit(request, actor)
         return actor
@@ -387,6 +389,7 @@ def _identity(request: Request, *, check_rate=True):
             actor = Identity(
                 data["subject"], set(data["scopes"]), data["kind"], ancestors=tuple(data.get("ancestors", []))
             )
+
             snapshot = data.get("capability_lifecycle")
             if snapshot is not None:
                 from .capability_lifecycle import parse_snapshot
@@ -394,6 +397,7 @@ def _identity(request: Request, *, check_rate=True):
                 actor.lifecycle_revision, actor.disabled_capabilities = parse_snapshot(snapshot)
             elif request.app.state.capability_lifecycle_required:
                 raise ValueError("lifecycle snapshot required")
+
             if check_rate:
                 enforce_rate_limit(request, actor)
             return actor
