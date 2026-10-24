@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .capabilities import PLUGIN_ID, SEMVER, CapabilityRegistry
+from .capability_versions import MAX_VERSION_LENGTH
 
 DIGEST = r"^sha256:[a-f0-9]{64}$"
 MAX_DECLARATION_BYTES = 16 * 1024
@@ -28,7 +29,8 @@ class ServicePluginDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     schema_version: Literal["1"]
     plugin_id: str = Field(pattern=PLUGIN_ID.pattern)
-    version: str = Field(pattern=SEMVER.pattern)
+    version: str = Field(pattern=SEMVER.pattern, max_length=MAX_VERSION_LENGTH,
+                         json_schema_extra={"not": {"pattern": r"\s"}})
     artifact_format: Literal["oci"]
     artifact_digest: str = Field(pattern=DIGEST)
     capability_manifest_digest: str = Field(pattern=DIGEST)

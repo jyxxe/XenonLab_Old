@@ -13,6 +13,9 @@ from pathlib import Path
 
 from fastapi import Depends, Request
 
+from .capability_versions import SEMVER as SEMVER
+from .capability_versions import parse_version
+from .capability_versions import satisfies as satisfies
 from .common import APIError, connect, response, scope
 from .plugins import _installed_manifest
 
@@ -20,7 +23,6 @@ KINDS = {"app", "widget", "tool", "agent", "provider", "worker"}
 TIERS = {"ui", "api", "service"}
 PLUGIN_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{1,62}$")
 CAPABILITY_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
-SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$")
 PERMISSION = re.compile(r"^[a-z0-9-]+:[a-z0-9-]+$")
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[1] / "infra/plugins/builtin-capabilities.json"
 
@@ -37,8 +39,7 @@ class CapabilityRegistry:
             raise ValueError("unsupported api_version")
         if not PLUGIN_ID.fullmatch(str(manifest.get("id", ""))):
             raise ValueError("invalid manifest id")
-        if not SEMVER.fullmatch(str(manifest.get("version", ""))):
-            raise ValueError("invalid manifest version")
+        parse_version(manifest.get("version"))
         if manifest.get("source") not in ("builtin", "declared"):
             raise ValueError("invalid manifest source")
         capabilities = manifest.get("capabilities")
@@ -58,8 +59,7 @@ class CapabilityRegistry:
             seen.add(identifier)
             if capability.get("kind") not in KINDS:
                 raise ValueError(f"invalid kind for {identifier}")
-            if not SEMVER.fullmatch(str(capability.get("version", ""))):
-                raise ValueError(f"invalid version for {identifier}")
+            parse_version(capability.get("version"))
             if capability.get("runtime") not in TIERS:
                 raise ValueError(f"invalid runtime for {identifier}")
             permissions = capability.get("permissions")
@@ -216,37 +216,6 @@ def runtime_capabilities(registry, database, owner, scopes):
             "installed": True, "enabled": True,
         })
     return items
-
-
-
-def satisfies(version, constraint):
-    """Minimal semver constraint check for capability compatibility.
-
-    Supported: exact ("1.2.3"), caret ("^1.2.3" -> same major, >= version),
-    tilde ("~1.2.3" -> same major.minor, >= version) and wildcard "*".
-    Anything else raises ValueError so callers fail closed.
-    """
-    def parts(value):
-        core = value.split("-", 1)[0]
-        pieces = core.split(".")
-        if len(pieces) != 3 or not all(piece.isdigit() for piece in pieces):
-            raise ValueError(f"invalid semver: {value}")
-        return tuple(int(piece) for piece in pieces)
-
-    current = parts(version)
-    if constraint == "*":
-        return True
-    operator = constraint[:1] if constraint[:1] in ("^", "~") else ""
-    target = parts(constraint[1:] if operator else constraint)
-    # Validate the requirement before rejecting prerelease/stable combinations,
-    # preserving the endpoint's 422 semantics for invalid constraints.
-    if "-" in version and "-" not in constraint:
-        return False
-    if operator == "^":
-        return current[0] == target[0] and current >= target
-    if operator == "~":
-        return current[:2] == target[:2] and current >= target
-    return version == constraint
 
 
 
