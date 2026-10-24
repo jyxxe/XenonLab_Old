@@ -683,5 +683,8 @@ def create_app(settings=None):
         return response(request, body.model_dump())
 
     install_capabilities(app, path)
+    from .capability_lifecycle import install as install_lifecycle
+
+    install_lifecycle(app)
 
     return app

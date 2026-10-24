@@ -249,6 +249,7 @@ def install(app, plugin_database=None):
             if plugin_database is not None
             else registry.all()["capabilities"]
         )
+        capabilities = [item for item in capabilities if not actor.capability_disabled(item["id"])]
         return response(request, capabilities, **{"registry": registry.summary()})
 
     @app.get("/api/v1/capabilities/{capability_id}")
@@ -268,7 +269,8 @@ def install(app, plugin_database=None):
             ]
         )
         capability = next(
-            (item for item in capabilities if item["id"] == capability_id and item.get("enabled", True)),
+            (item for item in capabilities if item["id"] == capability_id and item.get("enabled", True)
+                and not actor.capability_disabled(item["id"])),
             None,
         )
         if capability is None:

@@ -20,6 +20,7 @@ from .oauth import service_token
 
 SCOPES = {
     "accounts:manage",
+    "capabilities:manage",
     "desktop:read",
     "desktop:admin",
     "dev:read",
@@ -321,6 +322,9 @@ def install(app):
                 "kind": actor.kind,
                 "scopes": sorted(actor.scopes),
                 "ancestors": actor.ancestors,
+                **({"capability_lifecycle": {"version": 1, "revision": actor.lifecycle_revision,
+                                           "disabled": sorted(actor.disabled_capabilities)}}
+                   if hasattr(request.app.state, "capability_lifecycle") else {}),
             },
         )
         return result
