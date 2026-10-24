@@ -15,7 +15,7 @@ import stat
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Literal
 from uuid import UUID, uuid4
@@ -172,6 +172,13 @@ class BulkDeleteItem(BaseModel):
 class BulkDelete(BaseModel):
     rows: list[BulkDeleteItem] = Field(min_length=1)
     batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class PruneChangesRequest(BaseModel):
+    dry_run: bool = True
+    older_than_days: int = Field(default=30, ge=1, le=3650)
+    limit: int = Field(default=5000, ge=1, le=100000)
+    keep_recent: int = Field(default=50000, ge=1, le=1000000)
 
 
 class ExportRequest(BaseModel):
@@ -1270,6 +1277,51 @@ def create_app(settings=None):
         return JSONResponse(response(request, {
             "mode": "job", "job_id": job_id, "status": "queued", "total": len(items),
         }), status_code=202)
+
+    @app.post("/api/v1/tables/{tid}/maintenance/prune-changes")
+    def prune_changes(tid: str, body: PruneChangesRequest, request: Request, actor=Depends(scope("xelibrary:admin"))):
+        authorize(actor, tid, "write")
+        if bulk_jobs.active_for_table(tid):
+            raise APIError(409, "TABLE_BULK_ACTIVE", "wait for the table's bulk row job to finish")
+        with connect(catalogue) as db:
+            jobs_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_jobs'"
+            ).fetchone()
+            jobs = [json.loads(row[0]) for row in db.execute("SELECT payload FROM index_jobs")] if jobs_exists else []
+        if any(job.get("table_id") == tid and job.get("status") in ("queued", "running") for job in jobs):
+            raise APIError(409, "TABLE_INDEX_ACTIVE", "wait for the table's index job to finish")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=body.older_than_days)).isoformat()
+        with table_transaction(tid) as db:
+            meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+            if "deleting" in meta_columns and db.execute("SELECT deleting FROM __xl_meta").fetchone()[0]:
+                raise APIError(409, "TABLE_DELETING", "table is being deleted")
+            max_sequence = db.execute("SELECT COALESCE(MAX(sequence), 0) FROM __xl_changes").fetchone()[0]
+            floor = max(1, max_sequence - body.keep_recent + 1)
+            candidates = [
+                row[0]
+                for row in db.execute(
+                    """
+                    SELECT c.sequence FROM __xl_changes c
+                    WHERE c.created_at < ? AND c.sequence < ?
+                      AND c.revision < (SELECT MAX(revision) FROM __xl_changes WHERE row_id = c.row_id)
+                    ORDER BY c.sequence LIMIT ?
+                    """,
+                    (cutoff, floor, body.limit),
+                )
+            ]
+            deleted = 0
+            if not body.dry_run and candidates:
+                db.executemany("DELETE FROM __xl_changes WHERE sequence = ?", [(sequence,) for sequence in candidates])
+                deleted = len(candidates)
+        audit(actor, "table.prune_changes", f"{tid} dry_run={body.dry_run} candidates={len(candidates)} deleted={deleted}")
+        return response(request, {
+            "dry_run": body.dry_run,
+            "candidates": len(candidates),
+            "deleted": deleted,
+            "older_than_days": body.older_than_days,
+            "keep_recent": body.keep_recent,
+            "limit": body.limit,
+        })
 
     @app.post("/api/v1/tables/{tid}/rows:bulkInsert")
     def bulk_insert(tid: str, body: BulkInsert, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
