@@ -154,7 +154,6 @@ def create_app(service=None, settings=None):
         return factory(settings)
 
     if service == "tool-gateway":
-
         destination = os.getenv("XELIBRARY_URL", "http://xelibrary:8000")
 
         async def forward(request, method, path, payload=None):

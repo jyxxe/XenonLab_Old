@@ -60,8 +60,10 @@ def png():
 
 
 @pytest.fixture
-def embedding_system(authority, monkeypatch):
+def embedding_system(authority, monkeypatch, request):
     client, _, settings = authority
+    if getattr(request, "param", None) is not None:
+        monkeypatch.setenv("EMBEDDING_CAPABILITY_ADAPTERS", request.param)
     settings.rate_limit_enabled = False
     settings.dev_tokens['reader'] = {'sub': 'reader', 'scope': 'embedding:read desktop:read', 'agent_kind': 'human'}
     settings.dev_tokens['writer'] = {'sub': 'writer', 'scope': 'embedding:write dev:read desktop:read', 'agent_kind': 'human'}
@@ -177,3 +179,47 @@ def test_authority_failure_and_missing_snapshot_cannot_start_encoders(embedding_
             assert response.status_code == 503 and 'PRIVATE' not in response.text
         mode[field] = False
     assert all(fast.calls == quality.calls == 0 for fast, quality in workers)
+
+
+@pytest.mark.parametrize("embedding_system", ["0", "1"], indirect=True)
+def test_replacement_provider_obeys_live_root_and_write_only_scope(embedding_system):
+    from .test_embedding_providers import SyntheticProvider, binding
+
+    manager, clients, _, _, _ = embedding_system
+
+    class Replacement(SyntheticProvider):
+        def __init__(self):
+            super().__init__()
+            self.prepared = self.encoded = 0
+
+        def prepare(self):
+            self.prepared += 1
+            return self
+
+        def encode(self, *args, **kwargs):
+            self.encoded += 1
+            return super().encode(*args, **kwargs)
+
+    provider = Replacement()
+    clients[0].app.state.providers.replace(binding(provider))
+    with clients[0] as client:
+        body = {"model": "fast", "input": ["alpha"]}
+        result = client.post("/v1/embeddings", headers=auth("writer"), json=body)
+        assert result.status_code == 200 and result.json()["model"] == "synthetic-fast"
+        history = client.get("/api/v1/embedding/requests", headers=auth("writer")).json()["data"]
+        assert history[0]["model"] == "syntheticfast"
+        assert client.get("/v1/models", headers=auth("writer")).status_code == 403
+        path = f"/api/v1/capabilities/{D100M_CAPABILITY}/lifecycle"
+        assert manager.patch(path, headers=auth("admin"), json=patch()).status_code == 200
+        client.app.state.providers.set_enabled("fast", True)
+        for endpoint in ("/v1/embeddings", "/api/v1/embed/text"):
+            result = client.post(endpoint, headers=auth("writer"), json=body)
+            assert result.status_code == 404
+        assert (provider.prepared, provider.encoded) == (1, 1)
+        assert client.get("/api/v1/embedding/requests", headers=auth("writer")).json()["data"] == history
+        models = client.get("/v1/models", headers=auth("reader"))
+        assert models.status_code == 200 and "synthetic-fast" not in {item["id"] for item in models.json()["data"]}
+        assert manager.patch(path, headers=auth("admin"), json=patch(True, 1)).status_code == 200
+        assert client.post("/api/v1/embed/text", headers=auth("writer"), json=body).status_code == 200
+        assert (provider.prepared, provider.encoded) == (2, 2)
+    assert provider.started == provider.closed == 1

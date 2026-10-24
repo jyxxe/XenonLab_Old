@@ -1,5 +1,21 @@
 # #331 / #305: durable authority controls for query, LLM, embedding and index
 
+## Current reconciliation target
+
+The current branch is reconciled onto `feature/platform-v1@b05fb767` after
+#325/#327/#334 merged. Current-base Embedding/Provider implementations, async
+Tool/Chat adapters, document chunker identity/ACL/revision semantics and the
+28-entry deduplicated manifest are preserved. This increment supplies the live
+identity/authority integration used by those already shipped hooks.
+
+One continuation fence is deliberately added after a trusted chunker yields and
+before downstream embedding. A processor can span the five-second authorization
+refresh interval; checking only before calling the processor is insufficient.
+The same cached checkpoint is reused, outside source transactions. The existing
+local-only binding check inside the publication transaction remains intact.
+Reindex errors retain the chunker 409 and describe index/lifecycle 404/503.
+
+
 This increment controls five existing builtin groups: the query tool, LLM
 Gateway, D100M provider, Qwen provider and the index worker. Query/LLM retain their specific
 admission paths. Each embedding provider root is an availability gate shared by
@@ -486,3 +502,42 @@ runs keep their recorded scope; no separate new-base full run is claimed.
 Shared services.py is byte-identical to the complete #305 composition that
 passed all 1225 tests; live lifecycle checks run through the trusted adapters,
 including the rollback paths. No native fixed-provider response is restored.
+
+
+## Semantic reconciliation after maintainer feedback
+
+The maintainer reported conflicts against `b05fb767` in embedding/search and
+their OpenAPI documents. The old native-only sides were not retained. The base
+already contains the trusted Provider/ResolvedChunker lifecycle call points;
+those now receive the verified identity snapshot and live refresh implementation
+from this PR.
+
+Embedding/Provider code, document_chunker.py, services.py and the full builtin
+manifest are byte-identical to the base. Embedding OpenAPI therefore has no
+change. Search preserves the selected chunker, derived point/row identities,
+current source revision and ACL revalidation, commit-time local binding fence,
+and all existing version/budget errors. Its only runtime addition relative to
+base is the post-yield/pre-embedding live check described above. Exported
+XeLibrary 404/503 descriptions include both index and chunker/lifecycle state;
+409 is retained.
+
+Six new tests cover a startup replacement Provider under a write-only caller,
+durable stop/re-enable, readiness and history/scopes, plus replacement chunkers
+stopped while queued or while yielding. Both adapter/rollback modes are covered.
+Before the post-yield fix, the two yielding cases emitted one downstream embedding
+request after the refresh interval expired; they now fail before that request or
+publication. The other four replacement cases also pass.
+
+The original and fresh locked environments both record **153 focused passes**,
+including all four lifecycle families, current provider/chunker replacements and
+trusted Tool/Chat/strict execution contract tests. CI-pinned uv 0.12.1 creates a
+new Python 3.12.14 environment directly from the current lock. Ruff, regenerated
+OpenAPI and diff checks pass. Full requested regression and explicit fixture-only
+overlay results are recorded after they terminate; no earlier composition result
+is substituted for the rebased branch.
+
+The known unprivileged-host Lean fixture issue is separately submitted in #338.
+A separate validation worktree may use only that exact test-file change; it is
+not silently folded into this PR or described as an unmodified-head full run.
+Production sandbox/identity/provider services and visual acceptance remain
+unverified here; management rollout flags and grants remain unchanged.

@@ -206,3 +206,54 @@ def test_index_availability_does_not_require_write_scope_from_admin(authority, t
     authority[2].dev_tokens['admin']['scope'] = 'xelibrary:admin'
     result = client.post('/api/v1/index/reindex', headers=auth('admin'), json={'table_id':table})
     assert job(client, result)['status'] == 'completed'
+
+
+@pytest.mark.parametrize("adapter_mode", ["0", "1"])
+@pytest.mark.parametrize("stop_at", ["queued", "yield"])
+def test_replacement_chunker_is_fenced_before_processor_or_embedding(
+    authority, tmp_path, monkeypatch, adapter_mode, stop_at,
+):
+    from fastapi.testclient import TestClient
+
+    from xeonolab.document_chunker import ChunkerBinding
+    from xeonolab.services import create_app
+
+    monkeypatch.setenv("XELIBRARY_CHUNKER_CAPABILITIES", adapter_mode)
+    manager, _, settings = authority
+    original, table, clock = library(authority, tmp_path, monkeypatch)
+    client = TestClient(create_app("xelibrary", settings))
+    client.app.state.authorization_resolver = original.app.state.authorization_resolver
+    client.app.state.capability_lifecycle = original.app.state.capability_lifecycle
+    processed, embeddings, queued = [], [], []
+    original_post = search.httpx.Client.post
+
+    def embedding(instance, *args, **kwargs):
+        embeddings.append(True)
+        return original_post(instance, *args, **kwargs)
+
+    monkeypatch.setattr(search.httpx.Client, "post", embedding)
+
+    def replacement(tokenizer, source, path, name):
+        processed.append(dict(source))
+        if stop_at == "yield":
+            assert manager.patch(PATH, headers=auth("admin"), json=patch()).status_code == 200
+            clock[0] += 6
+        yield "body", source["body"]
+
+    client.app.state.document_chunkers.replace(ChunkerBinding("lifecycle-replacement-v1", replacement))
+    if stop_at == "queued":
+        monkeypatch.setattr(BackgroundTasks, "add_task",
+                            lambda self, fn, *args, **kwargs: queued.append((fn, args, kwargs)))
+    result = client.post("/api/v1/index/reindex", headers=auth("admin"), json={"table_id": table})
+    assert result.status_code == 202
+    if stop_at == "queued":
+        assert manager.patch(PATH, headers=auth("admin"), json=patch()).status_code == 200
+        for fn, args, kwargs in queued:
+            fn(*args, **kwargs)
+        assert not processed
+    else:
+        assert processed == [{"body": "alpha beta"}]
+    assert job(client, result)["status"] == "failed"
+    assert not embeddings, "expired continuation must fail before downstream encoding"
+    state = client.get(f"/api/v1/tables/{table}/index-status", headers=auth()).json()["data"]
+    assert state["chunk_count"] == 0
