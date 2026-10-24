@@ -291,3 +291,14 @@ discarding purported service-plan/policy/generation constraints. See the
 platform releases retain their approval/lease/fixed inventory paths. This is a
 fail-closed compatibility guard, not the future resolved-plan approval binding,
 receiver generation attestation or permission to execute service workloads.
+
+### Global dependency evidence (#343)
+
+`capability_snapshot.py` constructs a bounded immutable graph from exact local
+manifest bytes and caller-supplied disabled capability IDs. It rejects global
+missing/incompatible dependencies, cycles and ambiguous namespaces, then resolves
+an enabled dependency-first closure with a content digest. This does not prove
+namespace ownership, current availability or any other authority; the caller must
+bind verified sources and current revisions into the future approved plan. It
+adds no registration or execution path. Limits, compatibility and evidence are
+recorded in `docs/issue343-capability-dependency-snapshot.md`.
