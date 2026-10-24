@@ -222,10 +222,12 @@ and data intact for investigation; uninstall is not implicit data deletion.
 
 ## Acceptance and implementation sequence
 
-This PR supplies only the proposal, offline declaration schema/validator and
-synthetic contracts. No signature provider, policy store, admission grant issuer,
-runtime controller, migration, service routes, deployment or real sandbox test is
-implemented. Local validation passing must never be a deployment check named
+The original #330 supplied the proposal and offline declaration contract.
+The #335 signature increment adds a core public trust store and verifier.
+The #339 increment adds a core-only versioned execution policy authority and
+constraint resolver. Full plan/provenance admission, grant issuer, runtime
+controller, routes, deployment and real sandbox acceptance remain unimplemented.
+Local validation passing must never be a deployment check named
 "service trusted" or turn an artifact into an enabled capability.
 
 Implementation can proceed in reviewable increments, each with its own Issue/PR:
@@ -262,3 +264,58 @@ backend and policy ceilings before the affected runtime step. These operational
 choices are prerequisites with fail-closed defaults, not excuses to grant more
 rights to an ordinary development agent. Phase 3 remains incomplete until this
 matrix has authoritative evidence and maintainer acceptance.
+
+
+## Signature component increment (#335)
+
+The [DSSE/Ed25519 component](../issue335-service-signatures.md) implements exact
+service-declaration byte/type signatures, explicit public-key namespace ownership,
+unique-key thresholds, current policy/expiry checks and permanent key/artifact
+revocation. The selected format is the standard DSSE v1.0.2 JSON envelope and PAE;
+cryptography supplies Ed25519. The core-only SQLite policy store has default-off
+management, dedicated human permission checks, CAS/idempotency and atomic audit.
+It is never selected or initialized by a plugin manifest or at API startup.
+No production root or grant is installed, and no management HTTP route is added.
+
+This profile/component is submitted for security review; it is not approval to
+execute a plugin. It authenticates a signing claim rather than proving OCI
+existence, source build provenance or execution-policy enforcement. A receipt
+cannot authorize a runtime or replace current trust checks. Protected DB/clock
+custody, external rollback checkpoint, root distribution and all deployment,
+isolation, grant, routing and recovery gates above remain necessary.
+
+## Legacy deployment protocol rejection (#341)
+
+The current platform release protocol now rejects unsupported extra request,
+stored manifest and executor job/manifest/artifact fields rather than silently
+discarding purported service-plan/policy/generation constraints. See the
+[protocol regression evidence](../issue341-deploy-protocol.md). Existing valid
+platform releases retain their approval/lease/fixed inventory paths. This is a
+fail-closed compatibility guard, not the future resolved-plan approval binding,
+receiver generation attestation or permission to execute service workloads.
+
+## Execution policy increment (#339)
+
+The [execution policy authority](../issue339-service-execution-policy.md) binds
+an exact policy byte digest to a plugin and exact capability id/kind/stable version
+set. It enforces permission floors/ceilings and requested timeout constraints
+against a durable, enabled, unexpired policy revision. Human-only explicit
+management, CAS/idempotence and atomic audit provide reviewable publication and
+disable operations. No HTTP management route, production policy or account
+permission is installed; readers deny missing/disabled/expired state even with
+management off.
+
+The first profile requires nonprivileged private namespaces, read-only root,
+gateway-only ingress, no egress, secrets or host mounts, plus explicit resource,
+byte, concurrency/queue and deadline limits. These are required constraints,
+**not evidence that an executor enforces them**. Only existing XeLibrary,
+Embedding, LLM and Lean permission domains are accepted by this profile, with
+exact stable capability versions. Broader permissions, prerelease policy bindings
+and network/secret/storage profiles require reviewed extensions.
+
+Policy resolution returns immutable constraints and digests, never an invocation
+grant or enabled route. Current signature/provenance, all global dependencies,
+actual resource allocation/isolation, user scopes/grants, service identity, health,
+protected approved plan/lease and final generation/revision fences must all be
+verified by the future coordinator. File/clock custody and an external anti-rollback
+checkpoint remain operational requirements, not properties proven by local SQLite.
