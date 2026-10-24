@@ -110,3 +110,11 @@ and no `docs/api` diff, all 11 `scripts/smoke_services.py` service checks, and
 passed. `git diff --check` passed. Frontend sources were not changed; npm gates
 were not rerun locally for this backend library. Protected remote CI remains
 an independent review requirement.
+
+### Deployment guard baseline synchronization
+
+Rebased onto maintainer merge `71a9c53` (#342), preserving both ADR sections.
+The component implementation/tests/schema are byte-identical to `4bce12b`.
+Current-base focused tests: **311 passed**; Ruff, OpenAPI export with no diff,
+and diff checks passed. Earlier full results retain their recorded baseline;
+this documentation conflict rebase is not described as a new full-suite run.
