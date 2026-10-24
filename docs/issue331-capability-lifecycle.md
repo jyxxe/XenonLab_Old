@@ -541,3 +541,28 @@ A separate validation worktree may use only that exact test-file change; it is
 not silently folded into this PR or described as an unmodified-head full run.
 Production sandbox/identity/provider services and visual acceptance remain
 unverified here; management rollout flags and grants remain unchanged.
+
+## Final current-base full regression
+
+On `b05fb767`, the rebased head with the semantic continuation fix records
+**1015 passed / 13 failed**, 482.91 seconds. The failed identifiers exactly match
+the 13 reproduced unprivileged Lean-fixture baseline cases. None was skipped,
+xfail-marked or changed in this branch.
+
+The separate validation worktree differs from that head in **only**
+tests/test_lean_verifier.py, copied byte-for-byte from PR #338's `0f26196`.
+It records **1035 passed**, exit 0, 491.32 seconds. Its staged source tree is
+`600711057d22206f194c1faa2f99492cbb2fd1c5`. This proves the current merged
+business implementation plus authority integration under the reviewed fixture
+repair; it is not represented as an unmodified-head all-green run.
+
+The fresh locked-environment focus is **153 passed**. With all four trusted
+adapter rollback flags set to 0 before startup, all **55 lifecycle cases pass**.
+CI-scope Ruff, repeated byte-identical OpenAPI export, all 11 service smokes,
+transaction/process/crash fault injection and diff review pass. No dependency
+or builtin-manifest changes are introduced by the reconciliation.
+
+The maintainer can now rerun exact-head CI/preflight against the pushed lifecycle
+branch. Production activation, rollout flags/grants, real provider services,
+hard sandbox/network isolation and visual acceptance were not performed here.
+No ordinary developer merge, approval or publication was made.
