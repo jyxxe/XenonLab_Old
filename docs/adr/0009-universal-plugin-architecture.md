@@ -165,7 +165,6 @@ Its offline declaration contract is not a runtime registry, deployment grant or
 security acceptance. Existing `runtime=service` metadata and Phase 2 trusted
 adapters must not enable third-party server code execution implicitly.
 
-
 ### Phase 2: first trusted tool adapter migration (#320)
 
 `xeonolab/tool_adapters.py` introduces a static async tool binding and resolution
@@ -179,6 +178,17 @@ permissions, error semantics, lifecycle limits and rollback are recorded in
 `docs/issue320-trusted-tool-adapters.md`. Embedding/LLM Provider adaptation and
 XeLibrary parsing/index extensions remain subsequent Phase 2 work.
 
+### Phase 2: first XeLibrary indexing extension (#326)
+
+`ChunkerBinding` / `DocumentChunkers` wrap the existing tokenizer-aware text
+processor with a static worker/api capability, admin gate, derivative identity
+and cooperative output/time budgets. Default `chunker-v2` remains compatible;
+replacement identities propagate through point ids, local/remote metadata and
+all read revalidation gates. The kernel keeps ACL/source/transaction authority;
+processor output is not a public fact snippet. `XELIBRARY_CHUNKER_CAPABILITIES`
+controls gates (default 1); hard CPU/service isolation and persistent lifecycle
+coordination remain separate work. Contract, changed bounds, rollback and
+validation: `docs/issue326-document-chunker.md`.
 
 ### Phase 2: trusted Embedding Provider migration (#324)
 
@@ -192,3 +202,4 @@ from UI manifests or create a persistent cross-service lifecycle system.
 CPU deadline is claimed. Ownership, compatibility, fault handling, rollback and
 validation are described in `docs/issue324-embedding-providers.md`. #312's actual
 model replacement, lifecycle coordination and Phase 3 isolation remain separate.
+
