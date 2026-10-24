@@ -1,6 +1,8 @@
 # #346 / #305: source-build provenance verification
 
-Baseline: `feature/platform-v1` at `f139973`. The existing declaration verifier
+Baseline: `feature/platform-v1` at `71a9c53` (maintainer merged #342).
+The implementation began at `f139973`; its own runtime/test files remain exact
+through the ADR-only baseline reconciliation. The existing declaration verifier
 checks a publisher's signed claim. It does not establish who built the OCI
 artifact from which source. This PR implements the separate source-build gate
 using real DSSE/Ed25519 and current core-owned trust policy, with no new database,
@@ -45,8 +47,8 @@ logic are shared with the existing declaration verifier.
 The common JSON loader previously passed raw bytes to `json.loads`, which
 silently autodetects UTF-16/32 even without a BOM. A baseline reproduction
 accepted a UTF-16LE declaration. The loader now decodes UTF-8 first and parses
-text, consistently enforcing the intended byte contract. No valid UTF-8 service
-input changes. Existing dependency/timeout/namespace and signature checks remain.
+text, consistently enforcing the intended byte contract. Standard UTF-8 JSON without a BOM retains its behavior; autodetected encodings
+and BOM-prefixed documents are now rejected consistently. Existing dependency/timeout/namespace and signature checks remain.
 
 Read-only command:
 
@@ -89,3 +91,48 @@ human/CAS/idempotence/audit; bounded inputs and unavailable authority; readonly
 CLI and blocked network/process operations. A manifest-substitution counterexample
 first failed, then passed when the profile required both subject digests.
 Final commands and full regression evidence follow below.
+
+### Final regression evidence
+
+Current functional commit: `11481e0` (own code/tests/schema/CLI byte-identical to
+initial `52950bb`). Python 3.12.14, CI-pinned uv 0.12.1, fresh environment prepared
+with `uv sync --locked`; dependency files unchanged. With that locked environment:
+
+- Current `71a9c53` base, original branch: `uv run --no-sync pytest -q
+  --basetemp runtime/pytest346-71a9-raw`: **1150 passed / 13 failed**, exit 1,
+  366.15 seconds. All 13 failed names equal the recorded baseline Lean fixture
+  failures exactly. No new exclusions, skip/xfail or sandbox weakening.
+- Earlier `f139973` original run completed, not interrupted: **1119 passed /
+  the same 13 baseline failures**, 337.79 seconds. This is historical evidence,
+  not substituted for the current-base run above.
+- Complete local pending-PR combination: **1383 passed**, exit 0, 471.30 seconds,
+  `uv run --no-sync pytest -q --basetemp runtime/pytest346-integration-final`.
+  Commit `38b51028fe6a93e10a1123e8d6ca123987c87f35`, source tree
+  `0f6afbb17bd7eeb52eb2497f8e7ac95d005bdc17`.
+- Current-base targeted declaration/provenance/signature/registry/version/deploy
+  tests: **332 passed**, including all **74** new provenance cases. The older
+  declaration/provenance focused set had 301 passes; it is not a full result.
+- Complete-combination focused set: **469 passed**, plus **3** real-crypto
+  cross-gate tests. Those 3 local integration-only tests import pending policy
+  and snapshot modules, and are not presented as tests shipped in this PR.
+
+The combination contains #332 lifecycle (`25df257`), #338 Lean fixture
+(`0f26196`), #340 policy (`e4b9a41`), #342 protocol guard (`d7af106`, now merged),
+#344 dependency graph (`4bce12b`), and this provenance implementation. All five
+component heads are all ancestors in that local tree; 22 non-doc files
+match their component bytes exactly, and the shared registry retains graph
+validation plus lifecycle visibility functions by AST comparison. New provenance,
+trust, crypto, contract, schema and test files match this branch exactly.
+Subsequent #340 `e635045` / #344 `68d4ad8` rebases contain the same component
+implementation/tests and only reconcile documentation/base history. This is a
+local validation tree, not a protected branch merge or an unmodified-PR result.
+
+The 3 integration-only cases bind the same declaration/manifest digests across
+publisher signature, build proof, execution policy and graph evidence. Disabled
+graph, disabled execution policy or revoked signer still independently deny.
+They do not test or claim a production admission coordinator, which is absent.
+Ruff and repeated OpenAPI exact-hash/no-diff checks pass in that combination;
+all 11 service smokes and transaction/SIGKILL/crash-recovery checks also pass
+there. Initial component Ruff/OpenAPI and current-base rebase checks pass.
+Frontend sources were not changed; local npm gates were not rerun for this
+backend library, and protected remote CI remains independently required.
