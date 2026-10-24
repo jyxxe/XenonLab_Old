@@ -226,3 +226,11 @@ byte-identical to the earlier `6eb699f` implementation. Ruff, locked dependency
 consistency, repeated byte-identical OpenAPI export, all 11 service smokes and
 transaction/process/crash fault injection pass. No runtime/root/grant, flag,
 approval or production change was performed.
+
+### Deployment guard baseline synchronization
+
+Rebased onto maintainer merge `71a9c53` (#342), preserving both ADR sections.
+The component implementation/tests/schema are byte-identical to `e4b9a41`.
+Current-base focused tests: **326 passed**; Ruff, OpenAPI export with no diff,
+and diff checks passed. Earlier full results retain their recorded baseline;
+this documentation conflict rebase is not described as a new full-suite run.
