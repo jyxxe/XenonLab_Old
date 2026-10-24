@@ -291,3 +291,14 @@ discarding purported service-plan/policy/generation constraints. See the
 platform releases retain their approval/lease/fixed inventory paths. This is a
 fail-closed compatibility guard, not the future resolved-plan approval binding,
 receiver generation attestation or permission to execute service workloads.
+
+### Source-build provenance gate (#346)
+
+`service_plugin_provenance.py` verifies a DSSE-signed in-toto/SLSA source-build
+claim against explicit signer/builder/namespace/source/config rules in the
+current core trust store. Its initial profile binds the requested OCI and exact
+capability-manifest hashes plus source commit. Existing publisher keys have no
+builder permission by default. Rules, current revocation and verification-time
+checks are independent of the declaration signature; neither proof grants
+admission or establishes a SLSA level. The producer profile and rollout limits
+are documented in `service-source-build-v1.md` and `issue346-service-provenance.md`.

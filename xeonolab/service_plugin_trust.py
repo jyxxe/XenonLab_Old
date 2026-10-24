@@ -16,6 +16,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -29,6 +30,7 @@ MAX_REVOCATIONS = 4096
 MAX_POLICY_LIFETIME = 86400
 Digest = Annotated[str, Field(pattern=DIGEST, min_length=71, max_length=71)]
 PluginId = Annotated[str, Field(pattern=PLUGIN_ID.pattern, min_length=2, max_length=63)]
+SOURCE_BUILD_TYPE = "https://xenon.jyxxe.com/buildtypes/oci-source/v1"
 
 
 class ServiceSignatureError(ValueError):
@@ -57,6 +59,14 @@ def decode_base64(value, maximum):
     return raw
 
 
+class _BuilderInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    builder_id: str = Field(min_length=1, max_length=512)
+    repository: str = Field(min_length=1, max_length=512)
+    build_config: str = Field(min_length=1, max_length=256)
+    plugin_ids: list[PluginId] = Field(min_length=1, max_length=32, json_schema_extra={"uniqueItems": True})
+
+
 class _KeyInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     algorithm: Literal["ed25519"]
@@ -69,6 +79,7 @@ class _KeyInput(BaseModel):
     plugin_ids: list[PluginId] = Field(min_length=1, max_length=32, json_schema_extra={"uniqueItems": True})
     not_before: int = Field(ge=0, le=MAX_REVISION)
     expires_at: int = Field(gt=0, le=MAX_REVISION)
+    provenance_builders: list[_BuilderInput] = Field(default_factory=list, max_length=8)
 
 
 class _PolicyInput(BaseModel):
@@ -87,12 +98,21 @@ class _PolicyInput(BaseModel):
 
 
 @dataclass(frozen=True)
+class ProvenanceBuilder:
+    builder_id: str
+    repository: str
+    build_config: str
+    plugin_ids: frozenset[str]
+
+
+@dataclass(frozen=True)
 class TrustedKey:
     fingerprint: str
     public_key: bytes = field(repr=False)
     plugin_ids: frozenset[str]
     not_before: int
     expires_at: int
+    provenance_builders: tuple[ProvenanceBuilder, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,9 +145,31 @@ def parse_policy(raw):
             ):
                 raise ValueError
             fingerprints.add(fingerprint)
+            builders, seen_builders = [], set()
+            for rule in entry.provenance_builders:
+                for value in (rule.builder_id, rule.repository):
+                    parsed = urlsplit(value)
+                    if (not value.startswith("https://") or not parsed.hostname or parsed.username is not None
+                            or parsed.password is not None or parsed.query or parsed.fragment
+                            or any(character.isspace() or ord(character) < 32 for character in value)):
+                        raise ValueError
+                    parsed.port  # Reject malformed/out-of-range ports, without resolving a host.
+                parts = rule.build_config.split("/")
+                if (not re.fullmatch(r"[A-Za-z0-9._/-]+", rule.build_config)
+                        or any(part in ("", ".", "..") for part in parts)
+                        or len(set(rule.plugin_ids)) != len(rule.plugin_ids)
+                        or not set(rule.plugin_ids) <= set(entry.plugin_ids)):
+                    raise ValueError
+                builder = ProvenanceBuilder(rule.builder_id, rule.repository, rule.build_config,
+                                            frozenset(rule.plugin_ids))
+                if builder in seen_builders:
+                    raise ValueError
+                seen_builders.add(builder)
+                builders.append(builder)
             keys.append(
                 TrustedKey(
-                    fingerprint, public, frozenset(entry.plugin_ids), entry.not_before, entry.expires_at
+                    fingerprint, public, frozenset(entry.plugin_ids), entry.not_before, entry.expires_at,
+                    tuple(builders),
                 )
             )
         if any(len(set(values)) != len(values) for values in (data.revoked_keys, data.revoked_artifacts)):

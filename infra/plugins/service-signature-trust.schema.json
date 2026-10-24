@@ -1,5 +1,49 @@
 {
   "$defs": {
+    "_BuilderInput": {
+      "additionalProperties": false,
+      "properties": {
+        "builder_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Builder Id",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Repository",
+          "type": "string"
+        },
+        "build_config": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Build Config",
+          "type": "string"
+        },
+        "plugin_ids": {
+          "items": {
+            "maxLength": 63,
+            "minLength": 2,
+            "pattern": "^[a-z0-9][a-z0-9.-]{1,62}$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Plugin Ids",
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "builder_id",
+        "repository",
+        "build_config",
+        "plugin_ids"
+      ],
+      "title": "_BuilderInput",
+      "type": "object"
+    },
     "_KeyInput": {
       "additionalProperties": false,
       "properties": {
@@ -42,6 +86,14 @@
           "maximum": 9223372036854775807,
           "title": "Expires At",
           "type": "integer"
+        },
+        "provenance_builders": {
+          "items": {
+            "$ref": "#/$defs/_BuilderInput"
+          },
+          "maxItems": 8,
+          "title": "Provenance Builders",
+          "type": "array"
         }
       },
       "required": [
