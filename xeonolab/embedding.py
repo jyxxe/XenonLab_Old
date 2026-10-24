@@ -8,10 +8,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, File, Form, Request, UploadFile
+from fastapi import Depends, File, Form, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from .common import APIError, base_app, response, scope
+from .embedding_providers import D100MProvider, EmbeddingProviders, ProviderBinding, QwenProvider
 from .embedding_requests import COMPLETED, FAILED, EmbeddingRequestStore
 from .qwen_encoder import IMAGE_MAX_BYTES, MODEL_ID, validate_image
 from .qwen_worker import QwenWorker
@@ -85,7 +86,7 @@ class EmbeddingErrorResponse(BaseModel):
 
 
 ERROR_RESPONSES = {
-    status: {"model": EmbeddingErrorResponse} for status in (400, 401, 403, 422, 429, 500, 503)
+    status: {"model": EmbeddingErrorResponse} for status in (400, 401, 403, 404, 409, 422, 429, 500, 503)
 }
 
 
@@ -165,7 +166,6 @@ def create_app(settings=None):
     app = base_app("embedding", settings)
     root = os.getenv("D100M_MODEL_PATH")
     app.state.model = D100M(root) if root else None
-    app.state.ready_check = lambda: app.state.model is not None
     store = EmbeddingRequestStore(app.state.settings.data_dir / "embedding-requests.sqlite3")
     app.state.store = store
 
@@ -183,17 +183,16 @@ def create_app(settings=None):
         """Caller-scoped unfinished requests plus totals for the desktop queue view
         (issue #74). History and counts only ever include the requesting principal;
         the worker block carries service-level state (configured/busy/revision)."""
-        model = app.state.model
-        lock = getattr(model, "lock", None)
+        state = app.state.providers.primary_state()
         return response(
             request,
             {
                 "active": store.active(caller=actor.sub),
                 "counts": store.counts(caller=actor.sub),
                 "worker": {
-                    "configured": model is not None,
-                    "busy": bool(lock is not None and lock.locked()),
-                    "revision": model.revision if model else None,
+                    "configured": state.configured,
+                    "busy": state.busy,
+                    "revision": state.revision,
                 },
             },
         )
@@ -220,15 +219,32 @@ def create_app(settings=None):
         return response(request, rows, next_cursor=next_cursor)
 
     app.state.quality = QwenWorker.environment()
+    provider_flag = os.getenv("EMBEDDING_CAPABILITY_ADAPTERS", "1")
+    if provider_flag not in {"0", "1"}:
+        raise ValueError("EMBEDDING_CAPABILITY_ADAPTERS must be 0 or 1")
+    app.state.providers = EmbeddingProviders([
+        ProviderBinding("fast", ("fast", "D100M-Embedding"), "D100M-Embedding", "d100m",
+                        "builtin.platform.provider.d100m", "api", D100MProvider(lambda: app.state.model)),
+        ProviderBinding("quality", ("quality", MODEL_ID), MODEL_ID, "qwen3vl2b",
+                        "builtin.platform.provider.qwen-worker", "service", QwenProvider(lambda: app.state.quality), True, queue_label="quality"),
+    ], enforce=provider_flag == "1")
+    app.state.ready_check = lambda: app.state.providers.ready()
 
+    def result_payload(result, count):
+        try:
+            payload = result.payload(count)
+            EmbeddingsResponse.model_validate(payload)
+            return payload
+        except Exception:
+            raise APIError(500, "INTERNAL_ERROR", "invalid embedding provider result") from None
 
     @asynccontextmanager
     async def lifespan(_app):
-        app.state.quality.start()
+        app.state.providers.start()
         try:
             yield
         finally:
-            app.state.quality.close()
+            app.state.providers.close()
 
     app.router.lifespan_context = lifespan
 
@@ -244,23 +260,9 @@ def create_app(settings=None):
         response_model_exclude_unset=True,
         responses=ERROR_RESPONSES,
     )
-    def models(actor=Depends(scope("embedding:read"))):
-        model = app.state.model
-        return {
-            "object": "list",
-            "data": [
-                {
-                    "id": "D100M-Embedding",
-                    "alias": "fast",
-                    "dimensions": 256,
-                    "max_tokens": 128,
-                    "normalized": True,
-                    "status": "ready" if model else "not_configured",
-                    "revision": model.revision if model else None,
-                },
-                app.state.quality.descriptor(),
-            ],
-        }
+    def models(response: Response, actor=Depends(scope("embedding:read"))):
+        response.headers["Cache-Control"] = "no-store"
+        return {"object": "list", "data": app.state.providers.models(actor, validate=ModelDescriptor.model_validate)}
 
     @app.post(
         "/v1/embeddings",
@@ -276,10 +278,8 @@ def create_app(settings=None):
     )
     def embed(body: EmbedRequest, request: Request, actor=Depends(scope("embedding:write"))):
         metrics = app.state.metrics
-        quality = body.model in ("quality", "Qwen/Qwen3-VL-Embedding-2B")
-        label = (
-            "qwen3vl2b" if quality else ("d100m" if body.model in ("fast", "D100M-Embedding") else "unknown")
-        )
+        providers = app.state.providers
+        label = providers.metric_label(body.model)
         started = time.monotonic()
         queue_id = None
 
@@ -298,34 +298,22 @@ def create_app(settings=None):
             )
 
         try:
-            if body.model not in ("fast", "D100M-Embedding", "quality", "Qwen/Qwen3-VL-Embedding-2B"):
-                raise APIError(422, "UNKNOWN_MODEL", "unsupported embedding model")
+            binding, call = providers.prepare(body.model, actor)
+            label = binding.metric_label
             texts = [body.input] if isinstance(body.input, str) else body.input
-            if not quality and app.state.model is None:
-                raise APIError(503, "MODEL_NOT_CONFIGURED", "D100M weights not configured")
             try:
                 queue_id = store.start(
-                    "quality" if quality else "d100m", len(texts), sum(map(len, texts)), body.truncation, actor.sub
+                    binding.history_label, len(texts), sum(map(len, texts)), body.truncation, actor.sub
                 )
             except Exception:
                 logger.exception("embedding queue bookkeeping failed")
                 queue_id = None
-            if quality:
-                vectors, tokens = app.state.quality.encode(
-                    texts,
-                    body.purpose,
-                    body.truncation,
-                    expected={
-                        "model_revision": body.model_revision,
-                        "dimensions": body.dimensions,
-                        "preprocessing_revision": body.preprocessing_revision,
-                    },
-                )
-            else:
-                if app.state.model is None:
-                    raise APIError(503, "MODEL_NOT_CONFIGURED", "D100M weights not configured")
-                vectors, tokens = app.state.model.encode(texts, body.truncation)
-            record(queue_id, COMPLETED, tokens=tokens)
+            result = providers.encode(call, texts, body.purpose, body.truncation, {
+                "model_revision": body.model_revision, "dimensions": body.dimensions,
+                "preprocessing_revision": body.preprocessing_revision,
+            })
+            payload = result_payload(result, len(texts))
+            record(queue_id, COMPLETED, tokens=result.tokens)
         except APIError as error:
             record(queue_id, FAILED, error_code=error.code)
             record_error(error.code)
@@ -348,21 +336,7 @@ def create_app(settings=None):
             result="ok",
         )
         metrics.observe("embedding_batch_size", len(texts), help="Texts per embedding request.", model=label)
-        space = app.state.quality.descriptor() if quality else {}
-        return {
-            "object": "list",
-            "model": MODEL_ID if quality else "D100M-Embedding",
-            "model_revision": space["model_revision"] if quality else app.state.model.revision,
-            **(
-                {key: space[key] for key in ("dimensions", "preprocessing_revision", "normalized")}
-                if quality
-                else {}
-            ),
-            "data": [
-                {"index": i, "object": "embedding", "embedding": vector} for i, vector in enumerate(vectors)
-            ],
-            "usage": {"input_tokens": tokens, "total_tokens": tokens},
-        }
+        return payload
 
     @app.post(
         "/api/v1/embed/image",
@@ -382,32 +356,29 @@ def create_app(settings=None):
     ):
         metrics = app.state.metrics
         started = time.monotonic()
+        providers = app.state.providers
+        label = providers.metric_label("quality")
         try:
-            if model not in ("quality", MODEL_ID):
-                raise APIError(422, "UNKNOWN_MODEL", "image encoding requires the quality model")
+            binding, call = providers.prepare(model, actor, image=True)
+            label = binding.metric_label
             content = upload.file.read(IMAGE_MAX_BYTES + 1)
             validate_image(content)
-            vectors, tokens = app.state.quality.encode(
-                [""],
-                purpose,
-                image=content,
-                expected={
-                    "model_revision": model_revision,
-                    "dimensions": dimensions,
-                    "preprocessing_revision": preprocessing_revision,
-                },
-            )
+            result = providers.encode(call, [""], purpose, "reject", {
+                "model_revision": model_revision, "dimensions": dimensions,
+                "preprocessing_revision": preprocessing_revision,
+            }, image=content)
+            payload = result_payload(result, 1)
         except APIError as error:
             metrics.counter(
                 "embedding_requests_total",
                 help="Embedding requests by model and outcome.",
-                model="qwen3vl2b",
+                model=label,
                 result="error",
             )
             metrics.counter(
                 "embedding_errors_total",
                 help="Embedding errors by model and error code.",
-                model="qwen3vl2b",
+                model=label,
                 code=error.code,
             )
             raise
@@ -417,51 +388,29 @@ def create_app(settings=None):
                 "embedding_latency_seconds",
                 time.monotonic() - started,
                 help="Embedding request duration by model.",
-                model="qwen3vl2b",
+                model=label,
             )
-        space = app.state.quality.descriptor()
         metrics.counter(
-            "embedding_requests_total",
-            help="Embedding requests by model and outcome.",
-            model="qwen3vl2b",
-            result="ok",
+            "embedding_requests_total", help="Embedding requests by model and outcome.", model=label, result="ok",
         )
-        metrics.observe("embedding_batch_size", 1, help="Texts per embedding request.", model="qwen3vl2b")
-        return {
-            "object": "list",
-            "model": MODEL_ID,
-            **{
-                key: space[key]
-                for key in ("model_revision", "dimensions", "preprocessing_revision", "normalized")
-            },
-            "data": [{"index": 0, "object": "embedding", "embedding": vectors[0]}],
-            "usage": {"input_tokens": tokens, "total_tokens": tokens},
-        }
+        metrics.observe("embedding_batch_size", 1, help="Texts per embedding request.", model=label)
+        return payload
 
     metrics = app.state.metrics
 
     def model_loaded():
-        model = app.state.model
-        return [
-            ({"model": "d100m"}, 1 if model is not None else 0),
-            ({"model": "qwen3vl2b"}, int(app.state.quality.status == "ready")),
-        ]
+        return [({"model": binding.metric_label}, int(state.configured)) for binding, state in app.state.providers.states()]
 
     def in_flight():
-        lock = getattr(app.state.model, "lock", None)
-        return [
-            ({"model": "d100m"}, 1 if lock is not None and lock.locked() else 0),
-            ({"model": "qwen3vl2b"}, int(app.state.quality.lock.locked())),
-        ]
+        return [({"model": binding.metric_label}, int(state.busy)) for binding, state in app.state.providers.states()]
 
     def queue_depth():
-        # V1 has no waiting queue: requests are rejected while the worker is busy.
-        return [({"model": "d100m"}, 0), ({"model": "qwen3vl2b"}, 0)]
+        return [({"model": binding.metric_label}, 0) for binding, _ in app.state.providers.states()]
 
     metrics.gauge_provider(
-        "embedding_worker_state",
-        "Quality worker lifecycle state (one active state).",
-        lambda: [({"model": "qwen3vl2b", "state": app.state.quality.status}, 1)],
+        "embedding_worker_state", "Quality worker lifecycle state (one active state).",
+        lambda: [({"model": binding.metric_label, "state": state.status}, 1)
+                 for binding, state in app.state.providers.states() if binding.slot == "quality"],
     )
     metrics.gauge_provider(
         "embedding_model_loaded", "Loaded embedding models (1 loaded, 0 unavailable).", model_loaded

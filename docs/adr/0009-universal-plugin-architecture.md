@@ -145,6 +145,18 @@ interfaces for Tool Gateway/providers must be designed per contract before any
 business module moves, and service plugins remain blocked on the Phase 3
 security design and Deploy Gateway integration.
 
+### Phase 2: first trusted LLM Provider migration (#322)
+
+`ChatProvider` / `PreparedChat` separate static provider configuration and canonical
+HTTP transport from the gateway's identity, input/SSE validation, deadlines and
+resource ownership. A trusted `ChatProviderRegistry` checks provider/api capability,
+llm:use, version and process-local enablement; it does not execute manifest code.
+`LLM_CAPABILITY_ADAPTERS` enables resolution (default 1) or selects the original
+HTTP binding (0). JSON now shares the gateway's absolute deadline/error boundary.
+Details, process-local lifecycle limits, rollback and validation are recorded in
+`docs/issue322-chat-provider.md`. Persistent cross-service lifecycle coordination,
+Embedding adaptation and service runtime security are still separate work.
+
 ## Phase 3 design proposal
 
 [ADR 0010](0010-service-plugin-runtime-security.md) proposes the independent
@@ -165,3 +177,29 @@ cooperative I/O only; service/CPU isolation still belongs to Phase 3. Detailed
 permissions, error semantics, lifecycle limits and rollback are recorded in
 `docs/issue320-trusted-tool-adapters.md`. Embedding/LLM Provider adaptation and
 XeLibrary parsing/index extensions remain subsequent Phase 2 work.
+
+### Phase 2: first XeLibrary indexing extension (#326)
+
+`ChunkerBinding` / `DocumentChunkers` wrap the existing tokenizer-aware text
+processor with a static worker/api capability, admin gate, derivative identity
+and cooperative output/time budgets. Default `chunker-v2` remains compatible;
+replacement identities propagate through point ids, local/remote metadata and
+all read revalidation gates. The kernel keeps ACL/source/transaction authority;
+processor output is not a public fact snippet. `XELIBRARY_CHUNKER_CAPABILITIES`
+controls gates (default 1); hard CPU/service isolation and persistent lifecycle
+coordination remain separate work. Contract, changed bounds, rollback and
+validation: `docs/issue326-document-chunker.md`.
+
+### Phase 2: trusted Embedding Provider migration (#324)
+
+`EmbeddingProvider` / `PreparedEmbedding` separate default D100M/Qwen workers from
+HTTP callers, queue/metrics and result serialization. Static bindings use separate
+describe/read and encode/write capabilities to preserve existing write-only
+clients. Startup-only replacement and process-local enablement do not load code
+from UI manifests or create a persistent cross-service lifecycle system.
+`EMBEDDING_CAPABILITY_ADAPTERS` selects manifest gates (default 1) or bypasses them
+(0); endpoint scopes remain. Qwen keeps process-backed deadlines; no hard D100M
+CPU deadline is claimed. Ownership, compatibility, fault handling, rollback and
+validation are described in `docs/issue324-embedding-providers.md`. #312's actual
+model replacement, lifecycle coordination and Phase 3 isolation remain separate.
+

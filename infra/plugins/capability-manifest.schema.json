@@ -7,7 +7,7 @@
   "required": ["id", "version", "api_version", "source", "capabilities"],
   "properties": {
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{1,62}$"},
-    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"},
+    "version": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$", "maxLength": 256, "not": {"pattern": "\\s"}},
     "api_version": {"const": "1"},
     "source": {"enum": ["builtin", "declared"]},
     "display": {
@@ -30,10 +30,10 @@
         "properties": {
           "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
           "kind": {"enum": ["app", "widget", "tool", "agent", "provider", "worker"]},
-          "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"},
+          "version": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$", "maxLength": 256, "not": {"pattern": "\\s"}},
           "runtime": {"enum": ["ui", "api", "service"]},
           "permissions": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9-]+:[a-z0-9-]+$"}, "uniqueItems": true},
-          "dependencies": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,159}$@[~^]?[0-9]+\\.[0-9]+\\.[0-9]+$"}, "uniqueItems": true},
+          "dependencies": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,159}@[~^]?(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$", "not": {"pattern": "\\s"}}, "uniqueItems": true},
           "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300}
         }
       }

@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import ssl
 from pathlib import Path
 
 import anyio
@@ -315,16 +314,34 @@ def create_app(service=None, settings=None):
         for _ in range(stream_capacity):
             app.state.llm_stream_slots.put_nowait(object())
 
-        def provider_key():
-            if os.getenv("LLM_API_KEY_FILE"):
-                return Path(os.environ["LLM_API_KEY_FILE"]).read_text().strip()
-            return os.getenv("LLM_API_KEY")
+        from .chat_provider import ChatProviderRegistry, HTTPChatProvider, ResolvedChatProvider, prepare_chat
 
-        app.state.ready_check = lambda: bool(provider_key())
+        default_provider = HTTPChatProvider()
+        app.state.chat_providers = ChatProviderRegistry(default_provider)
+        provider_flag = os.getenv("LLM_CAPABILITY_ADAPTERS", "1")
+        if provider_flag not in {"0", "1"}:
+            raise ValueError("LLM_CAPABILITY_ADAPTERS must be 0 or 1")
+        app.state.llm_capability_adapters = provider_flag == "1"
+
+        def resolved_provider(actor):
+            app.state.chat_providers.require_lifecycle(actor)
+            if app.state.llm_capability_adapters:
+                return app.state.chat_providers.resolve(actor)
+            return ResolvedChatProvider(default_provider)
+
+        app.state.ready_check = lambda: (
+            app.state.chat_providers.ready() if app.state.llm_capability_adapters else default_provider.configured()
+        )
 
         @app.get("/v1/models")
         def models(actor=Depends(scope("llm:use"))):
-            return {"object": "list", "data": [{"id": "deepseek-flash", "object": "model"}]}
+            provider = resolved_provider(actor).provider
+            try:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"object": "list", "data": provider.models()}, headers={"Cache-Control": "no-store"})
+            except Exception:
+                raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
 
         @app.post(
             "/v1/chat/completions",
@@ -336,12 +353,14 @@ def create_app(service=None, settings=None):
                 408: {"description": "The inbound request body exceeded its read deadline."},
                 413: {"description": "Request body exceeds the configured byte limit."},
                 429: {"description": "Per-process stream capacity reached; includes Retry-After."},
-                502: {"description": "Provider request failed before streaming began."},
-                504: {"description": "Provider response headers exceeded the request deadline before streaming began."},
+                502: {"description": "Provider request failed before streaming began, or JSON completion failed."},
+                504: {"description": "Provider request exceeded its deadline before streaming began or during JSON completion."},
             },
         )
         async def chat(request: Request, actor=Depends(scope("llm:use"))):
-            deadline = asyncio.get_running_loop().time() + app.state.llm_stream_timeout_seconds
+            app.state.chat_providers.require_lifecycle(actor)
+            started = asyncio.get_running_loop().time()
+            deadline = started + app.state.llm_stream_timeout_seconds
             try:
                 slot = app.state.llm_stream_slots.get_nowait()
             except asyncio.QueueEmpty:
@@ -379,16 +398,13 @@ def create_app(service=None, settings=None):
                         raw_body.extend(chunk)
                     try:
                         body = json.loads(raw_body)
-                    except (json.JSONDecodeError, UnicodeDecodeError):
+                    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
                         raise APIError(422, "INVALID_REQUEST", "request body must be valid JSON") from None
-                    if not isinstance(body, dict) or body.get("model") != "deepseek-flash":
-                        raise APIError(422, "UNSUPPORTED_REQUEST", "only deepseek-flash configured")
+                    if not isinstance(body, dict):
+                        raise APIError(422, "UNSUPPORTED_REQUEST", "chat request must be an object")
                     stream_requested = body.get("stream") is True
                     if body.get("stream") and not stream_requested:
                         raise APIError(422, "UNSUPPORTED_REQUEST", "stream must be a boolean")
-                    key = provider_key()
-                    if not key:
-                        raise APIError(503, "PROVIDER_NOT_CONFIGURED", "LLM provider credential required")
             except TimeoutError:
                 release_slot()
                 raise APIError(408, "REQUEST_TIMEOUT", "chat request body timed out") from None
@@ -396,10 +412,14 @@ def create_app(service=None, settings=None):
                 release_slot()
                 raise
 
-            body = {**body, "model": os.getenv("LLM_PROVIDER_MODEL", "deepseek-flash")}
-            context = ssl.create_default_context()
-            if os.getenv("LLM_TLS_MAX_VERSION") == "1.2":
-                context.maximum_version = ssl.TLSVersion.TLSv1_2
+            try:
+                resolved = resolved_provider(actor)
+                call = prepare_chat(resolved.provider, body)
+                if resolved.timeout_seconds is not None:
+                    deadline = min(deadline, started + resolved.timeout_seconds)
+            except BaseException:
+                release_slot()
+                raise
 
             if stream_requested:
                 client = None
@@ -465,20 +485,9 @@ def create_app(service=None, settings=None):
                         raise
 
                 try:
-                    timeout = httpx.Timeout(connect=10, read=120, write=30, pool=10)
-                    client = httpx.AsyncClient(timeout=timeout, trust_env=False, verify=context)
+                    client = call.stream_client()
                     async with asyncio.timeout_at(deadline):
-                        upstream_request = client.build_request(
-                            "POST",
-                            os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/")
-                            + "/v1/chat/completions",
-                            headers={
-                                "Authorization": "Bearer " + key,
-                                "Accept": "text/event-stream",
-                                "Accept-Encoding": "identity",
-                            },
-                            json=body,
-                        )
+                        upstream_request = call.stream_request(client)
                         send_task = asyncio.create_task(client.send(upstream_request, stream=True))
                         disconnect_task = asyncio.create_task(wait_for_disconnect())
                         done, _ = await asyncio.wait(
@@ -505,6 +514,8 @@ def create_app(service=None, settings=None):
                 except TimeoutError:
                     raise APIError(504, "PROVIDER_TIMEOUT", "LLM provider request timed out") from None
                 except httpx.HTTPError:
+                    raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
+                except Exception:
                     raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
                 finally:
                     if disconnect_task is not None:
@@ -568,6 +579,10 @@ def create_app(service=None, settings=None):
                         record_stream_error("stream_timeout")
                         yield _SAFE_STREAM_ERROR
                         return
+                    except Exception:
+                        record_stream_error("provider_adapter_failed")
+                        yield _SAFE_STREAM_ERROR
+                        return
                     finally:
                         await close_resources()
 
@@ -589,17 +604,15 @@ def create_app(service=None, settings=None):
                 return response_stream
 
             release_slot()
-            async with httpx.AsyncClient(timeout=120, trust_env=False, verify=context) as client:
-                result = await client.post(
-                    os.getenv("LLM_BASE_URL", "https://api.jyxxe.com").rstrip("/") + "/v1/chat/completions",
-                    headers={"Authorization": "Bearer " + key},
-                    json=body,
-                )
-            if result.status_code != 200:
-                raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed")
             from fastapi.responses import JSONResponse
 
-            return JSONResponse(result.json())
+            try:
+                async with asyncio.timeout_at(deadline):
+                    return JSONResponse(await call.complete())
+            except (TimeoutError, httpx.TimeoutException):
+                raise APIError(504, "PROVIDER_TIMEOUT", "LLM provider request timed out") from None
+            except Exception:
+                raise APIError(502, "PROVIDER_ERROR", "LLM provider request failed") from None
 
     if service in ("library-agent", "network-control"):
         app.state.ready_check = lambda: False

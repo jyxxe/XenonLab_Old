@@ -150,6 +150,7 @@ def test_cli_success_and_rejection_do_not_claim_trust_or_leak_inputs(tmp_path):
     assert 'Traceback' not in bad.stderr
 
 
+
 def test_offline_foreign_dependency_is_preserved_for_future_global_admission():
     manifest = json.loads(MANIFEST)
     manifest["capabilities"][0]["dependencies"] = ["other.service.provider@^1.0.0"]
@@ -190,3 +191,26 @@ def test_stable_local_dependency_rejects_a_prerelease_target():
     manifest['capabilities'].append(target)
     with pytest.raises(ServicePluginContractError):
         check_manifest(manifest)
+
+@pytest.mark.parametrize('version,allowed', [
+    ('1.0.0', True), ('1.0.0-rc.1', True), ('1.0.0-' + 'a'*250, True),
+    ('1.0.0-' + 'a'*251, False), ('01.0.0', False), ('1.0.0-01', False),
+    ('1.0.0-a..b', False), ('1.0.0-', False), ('1.0.0\n', False),
+    ('1.0.0\r\n', False), ('1.0.0+build', False),
+])
+def test_service_version_model_and_published_schema_agree(version, allowed):
+    from jsonschema import Draft202012Validator
+    from pydantic import ValidationError
+
+    from xeonolab.service_plugin_contract import ServicePluginDeclaration
+    data = json.loads(DECLARATION)
+    data['version'] = version
+    schema = declaration_schema()
+    Draft202012Validator.check_schema(schema)
+    assert Draft202012Validator(schema).is_valid(data) is allowed
+    if allowed:
+        assert ServicePluginDeclaration.model_validate(data).version == version
+    else:
+        with pytest.raises(ValidationError):
+            ServicePluginDeclaration.model_validate(data)
+

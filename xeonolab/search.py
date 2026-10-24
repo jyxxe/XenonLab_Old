@@ -13,7 +13,9 @@ import httpx
 from fastapi import BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
+from .capability_checkpoint import index_checkpoint
 from .common import APIError, connect, response, scope
+from .document_chunker import ChunkerBinding, DocumentChunkers
 from .jobs import JobStore
 from .qdrant import FAST_TEXT_COLLECTION, FAST_TEXT_DIMENSIONS, QdrantAdapter
 from .qdrant import configured as qdrant_configured
@@ -79,6 +81,12 @@ def install(
     logger = logging.getLogger(__name__)
     quality = QualityPipeline(app.state.metrics, str(catalogue))
     app.state.quality_pipeline = quality
+    chunker_flag = os.getenv("XELIBRARY_CHUNKER_CAPABILITIES", "1")
+    if chunker_flag not in {"0", "1"}:
+        raise ValueError("XELIBRARY_CHUNKER_CAPABILITIES must be 0 or 1")
+    app.state.document_chunkers = DocumentChunkers(
+        ChunkerBinding(CHUNKER_VERSION, chunk_documents), enforce=chunker_flag == "1",
+    )
 
     def configured():
         if not endpoint or not credential or not tokenizer_path:
@@ -144,11 +152,11 @@ def install(
 
     app.state.qdrant_remove_points = remove_points
 
-    def point_id(table_id, row_id, revision, model_revision, column, ordinal):
-        identity = f"{table_id}:{row_id}:{revision}:{model_revision}:{CHUNKER_VERSION}:{column}:{ordinal}"
+    def point_id(table_id, row_id, revision, model_revision, column, ordinal, chunker_identity):
+        identity = f"{table_id}:{row_id}:{revision}:{model_revision}:{chunker_identity}:{column}:{ordinal}"
         return str(uuid5(NAMESPACE_URL, identity))
 
-    def run(job_id, tid, actor):
+    def run(job_id, tid, actor, chunker):
         if not lock.acquire(blocking=False):
             jobs.update(job_id, status="failed", error="index worker busy")
             return
@@ -158,6 +166,10 @@ def install(
             from tokenizers import Tokenizer
 
             configured()
+            chunkers = app.state.document_chunkers
+            if chunker.checkpoint:
+                actor = chunker.checkpoint.start()
+            chunkers.check_active(chunker)
             table = authorize(actor, tid, "read")
             initialize(tid)
             use_qdrant = backend_configured()
@@ -168,6 +180,7 @@ def install(
             with table_connect(tid) as db:
                 ids = [r[0] for r in db.execute("SELECT _row_id FROM data WHERE _deleted_at IS NULL")]
             for rid in ids:
+                actor = chunkers.check_active(chunker) or actor
                 table = authorize(actor, tid, "read")
                 if not allowed(actor, table, "read", rid):
                     continue
@@ -175,7 +188,7 @@ def install(
                     row = load_row(db, rid)
                 encoded, points = [], []
                 for ordinal, (column, chunk) in enumerate(
-                    chunk_documents(tokenizer, row["values"], table["path"], table["name"])
+                    chunkers.chunks(chunker, tokenizer, row["values"], table["path"], table["name"])
                 ):
                     vectors, model_revision = embedding([chunk])
                     vector = vectors[0]
@@ -183,7 +196,7 @@ def install(
                         raise APIError(
                             503, "EMBEDDING_DIMENSION_MISMATCH", "fast_text requires 256D vectors"
                         )
-                    chunk_id = point_id(tid, rid, row["_revision"], model_revision, column, ordinal)
+                    chunk_id = point_id(tid, rid, row["_revision"], model_revision, column, ordinal, chunker.binding.identity)
                     encoded.append(
                         (
                             rid,
@@ -193,7 +206,7 @@ def install(
                             chunk,
                             json.dumps(vector),
                             model_revision,
-                            CHUNKER_VERSION,
+                            chunker.binding.identity,
                         )
                     )
                     points.append(
@@ -208,7 +221,7 @@ def install(
                                 "column": column,
                                 "path": table["path"],
                                 "model_revision": model_revision,
-                                "chunker_version": CHUNKER_VERSION,
+                                "chunker_version": chunker.binding.identity,
                             },
                         }
                     )
@@ -216,7 +229,9 @@ def install(
                 # Serialize the source revision check and remote upsert against
                 # row writes. Qdrant IDs are deterministic, so retries overwrite
                 # points from an interrupted run instead of duplicating them.
+                actor = chunkers.check_active(chunker) or actor
                 with table_transaction(tid) as db:
+                    chunkers.check_binding(chunker)
                     current = load_row(db, rid)
                     current_table = authorize(actor, tid, "read")
                     if current["_revision"] != row["_revision"] or not allowed(
@@ -245,15 +260,21 @@ def install(
                 client.close()
             lock.release()
 
-    @app.post("/api/v1/index/reindex", status_code=202)
+    @app.post("/api/v1/index/reindex", status_code=202, responses={
+        404: {"description": "Table or document chunker capability is unavailable."},
+        409: {"description": "Document chunker capability version is incompatible."},
+        503: {"description": "Index dependencies or the chunker capability configuration are unavailable."},
+    })
     def reindex(
         body: IndexRequest,
         request: Request,
         background: BackgroundTasks,
         actor=Depends(scope("xelibrary:admin")),
     ):
+        checkpoint = index_checkpoint(request, actor)
         configured()
         authorize(actor, body.table_id, "read")
+        chunker = app.state.document_chunkers.resolve(actor, checkpoint=checkpoint)
         if backend_configured():
             client = QdrantAdapter()
             try:
@@ -263,7 +284,7 @@ def install(
         job_id = str(uuid4())
         with table_transaction(body.table_id):
             jobs.create(job_id, actor.sub, body.table_id)
-        background.add_task(run, job_id, body.table_id, actor)
+        background.add_task(run, job_id, body.table_id, actor, chunker)
         return response(request, {"job_id": job_id})
 
     @app.get("/api/v1/jobs")
@@ -404,9 +425,10 @@ def install(
                     hits = db.execute(
                         "SELECT * FROM __xl_vectors WHERE row_id=? AND revision=? AND model_revision=?"
                         " AND chunker_version=?",
-                        (rid, row["_revision"], model_revision, CHUNKER_VERSION),
+                        (rid, row["_revision"], model_revision, app.state.document_chunkers.identity),
                     ).fetchall()
-                    compatible = [hit for hit in hits if len(json.loads(hit["vector"])) == len(query)]
+                    compatible = [hit for hit in hits if len(json.loads(hit["vector"])) == len(query)
+                                  and hit["column_name"] in row["values"]]
                     if not compatible:
                         missing += 1
                         continue
@@ -425,7 +447,7 @@ def install(
                             "path": table["path"],
                             "score": sum(x * y for x, y in zip(query, json.loads(best["vector"]))),
                             "score_type": "d100m_cosine",
-                            "snippet": best["body"][:240],
+                            "snippet": str(current["values"][best["column_name"]])[:240],
                             "matched_chunks": [{"chunk_id": best["chunk_id"], "column": best["column_name"]}],
                             "approximate": False,
                             "indexed_revision": best["revision"],
@@ -484,7 +506,7 @@ def install(
                             chunk["chunk_id"],
                             chunk["column_name"],
                             chunk["model_revision"],
-                            CHUNKER_VERSION,
+                            app.state.document_chunkers.identity,
                         )
                         if indexed.get(key) != chunk["body"]:
                             return False
@@ -560,7 +582,7 @@ def install(
                 or not isinstance(column, str)
                 or candidate.get("id") != chunk_id
                 or payload.get("model_revision") != model_revision
-                or payload.get("chunker_version") != CHUNKER_VERSION
+                or payload.get("chunker_version") != app.state.document_chunkers.identity
             ):
                 continue
             try:
@@ -579,7 +601,7 @@ def install(
                     indexed = db.execute(
                         "SELECT * FROM __xl_vectors WHERE row_id=? AND revision=? AND chunk_id=? "
                         "AND column_name=? AND model_revision=? AND chunker_version=?",
-                        (rid, row_revision, chunk_id, column, model_revision, CHUNKER_VERSION),
+                        (rid, row_revision, chunk_id, column, model_revision, app.state.document_chunkers.identity),
                     ).fetchone()
                     if not indexed or column not in row["values"]:
                         stale_rows.add((tid, rid))
