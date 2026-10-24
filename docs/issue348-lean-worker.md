@@ -1,6 +1,8 @@
 # #348 / #305: Lean worker resolution and live job authorization
 
-Baseline: `feature/platform-v1` at `71a9c53`. The builtin registry already
+Current baseline: `feature/platform-v1` at `a80c051` (maintainer merged #338).
+Implementation began at `71a9c53`; the rebase adds only the approved fixture
+and its documentation. Own runtime/new-test/OpenAPI bytes remain identical. The builtin registry already
 advertised `builtin.platform.worker.lean-verifier`, but synchronous requests and
 queued execution called the runner directly. Queued jobs did not reauthorize
 and restart resumed durable rows using only their stored owner. Four baseline
@@ -155,3 +157,49 @@ local stop/re-enable generations, queue/restart, result publication, strict
 lifecycle metadata, authority failure/429, immutable native limits, independent
 walltime during blocked authorization, resource-start/storage failures, atomic
 capacity, synthetic bearer non-persistence and unchanged sandbox rejection.
+
+### Final local evidence
+
+Current functional commit: `837e5f0` (runtime/new tests/OpenAPI byte-identical to
+initial `4342d5f`). CI uv 0.12.1, Python 3.12.14, fresh `uv sync --locked` environment;
+no dependency or lockfile changes.
+
+- Current `a80c051` original branch: `uv run --no-sync pytest -q --basetemp
+  runtime/pytest348-a80-raw`: **1151 passed**, exit 0, 293.64 seconds.
+- Earlier `71a9c53` original run: **1131 passed / 13 failed**, exit 1,
+  293.95 seconds; failed names exactly equal the recorded Lean fixture baseline.
+  This is historical evidence. The maintainer's #338 merge resolves that fixture;
+  it is not silently overlaid on the original branch's current result.
+- Complete local #305 combination: **1438 passed**, exit 0, 345.47 seconds,
+  `uv run --no-sync pytest -q --basetemp runtime/pytest348-integration-final`.
+  Commit `1cc669b1ee4ed9fdfa10d644440b69f80c764e01`, source tree
+  `42ace4fedf32b19a484f3b726c107c92b82c42d2`.
+- Own locked registry/version/auth/rate-limit/worker focused set: **142 passed**,
+  including **55** new Lean worker cases. Complete combination Lean/lifecycle/
+  index/provider/cross-evidence focused set: **143 passed**.
+- Baseline counterexamples: missing registry capability sync+queue and revoked
+  queued owner **3 failures before fix**; real barrier concurrency at capacity 1
+  **1 failure before fix** (both accepted), passing with atomic insertion.
+
+The complete combination extends the previous #305 tree `38b51028` (publisher
+signature, provenance, policy, dependency graph, durable lifecycle and deploy
+guard) with this worker. All new component non-doc files are exact; shared
+`common.py` deliberately retains #332's full lifecycle-aware implementation,
+whose `identity`/`refresh_identity` AST matches the helper extracted here.
+The original Lean test module preserves #338's fixture/tests exactly except
+for this PR's restart assertion, checked by AST comparison. Its final content
+matches the approved fixture plus our restart change exactly on `a80c051`.
+Both lifecycle and worker ADR sections are retained. This is a local validation
+tree, not a protected-branch merge or a substitute for the original run above.
+
+Own and combination Ruff pass. OpenAPI exact structural comparison shows only
+Lean verify error response descriptions changed; request/other schemas are
+unchanged. Repeated exports have stable byte hashes. Complete-combination
+`scripts/smoke_services.py` passes all 11 services; transaction/SIGKILL/XeLibrary
+recovery/claim-fence/webhook-dedup fault scenarios pass. `git diff --check` passes.
+No skip/xfail or weakening of namespace enforcement was introduced.
+
+Frontend code has no Lean API caller and was not changed; npm/browser gates
+were not rerun locally for this backend library. Protected remote backend/frontend
+CI remains a separate requirement. Actual Lean/production/visual/isolated-runtime
+acceptance and the #345 transport/deployment decision remain unperformed.
