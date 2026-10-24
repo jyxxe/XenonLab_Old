@@ -203,3 +203,14 @@ CPU deadline is claimed. Ownership, compatibility, fault handling, rollback and
 validation are described in `docs/issue324-embedding-providers.md`. #312's actual
 model replacement, lifecycle coordination and Phase 3 isolation remain separate.
 
+
+### Phase 2: trusted Lean worker invocation (#348)
+
+`LeanWorkers` resolves the existing worker/service declaration before synchronous
+or queued compilation. The kernel retains toolchain trust, namespace checks,
+limits, process supervision, live identity checkpoints and result annotations.
+Interrupted jobs without a live in-memory authorization cannot auto-resume;
+they retain history and require a fresh submission. This does not add untrusted
+service code loading or a global Lean lifecycle control. Contract, recovery
+change, local generation and production authority/transport limits are documented
+in `docs/issue348-lean-worker.md`; #345 still tracks actual isolated deployment.

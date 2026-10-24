@@ -340,11 +340,20 @@ def test_jobs_survive_restart_and_requeue(settings, monkeypatch, tmp_path):
         job_id = created.json()["data"]["id"]
         assert wait_terminal(api, job_id)["status"] == "verified"
 
-    # A crash between queue and execution leaves the job non-terminal; restart requeues it.
+    # A crash leaves history, not a renewable authorization. Restart refuses to
+    # execute the old job; a freshly authenticated submission can requeue it.
     with sqlite3.connect(settings.data_dir / "lean-verifier.sqlite") as db:
         db.execute("UPDATE lean_jobs SET status='running' WHERE id=?", (job_id,))
     with TestClient(create_app(settings)) as api:
-        assert wait_terminal(api, job_id)["status"] == "verified"
+        interrupted = wait_terminal(api, job_id)
+        assert interrupted["status"] == "failed"
+        assert interrupted["error"] == "LEAN_REAUTHORIZATION_REQUIRED"
+        assert interrupted["result"] is None
+        resubmitted = api.post("/api/v1/lean/verify", headers=auth(),
+                               json={"source": VERIFIED_SOURCE, "timeout_seconds": 10, "wait": False})
+        new_id = resubmitted.json()["data"]["id"]
+        assert new_id != job_id
+        assert wait_terminal(api, new_id)["status"] == "verified"
 
 
 def test_scope_enforced_for_tokens_without_lean_scope(settings, monkeypatch, tmp_path):
