@@ -150,6 +150,48 @@ def test_cli_success_and_rejection_do_not_claim_trust_or_leak_inputs(tmp_path):
     assert 'Traceback' not in bad.stderr
 
 
+
+def test_offline_foreign_dependency_is_preserved_for_future_global_admission():
+    manifest = json.loads(MANIFEST)
+    manifest["capabilities"][0]["dependencies"] = ["other.service.provider@^1.0.0"]
+    before = copy.deepcopy(manifest)
+    result = check_manifest(manifest)
+    assert manifest == before
+    assert result.capability_manifest_digest == "sha256:" + hashlib.sha256(encoded(manifest)).hexdigest()
+
+
+@pytest.mark.parametrize("dependency", ["example.service.missing@1.0.0", "example.service.provider@^2.0.0"])
+def test_local_dependency_must_resolve_compatibly_in_the_declared_plugin(dependency):
+    manifest = json.loads(MANIFEST)
+    owner = manifest["capabilities"][0]["id"]
+    # Choose a separate capability so the version test is not merely a cycle.
+    target = copy.deepcopy(manifest["capabilities"][0])
+    target["id"] = "example.service.provider"
+    target["dependencies"] = []
+    manifest["capabilities"][0]["id"] = owner + "-consumer"
+    manifest["capabilities"][0]["dependencies"] = [dependency]
+    manifest["capabilities"].append(target)
+    with pytest.raises(ServicePluginContractError):
+        check_manifest(manifest)
+
+
+def test_manifest_dependencies_keep_the_stable_requirement_subset():
+    manifest = json.loads(MANIFEST)
+    manifest['capabilities'][0]['dependencies'] = ['other.service.provider@^1.0.0-rc.1']
+    with pytest.raises(ServicePluginContractError):
+        check_manifest(manifest)
+
+
+def test_stable_local_dependency_rejects_a_prerelease_target():
+    manifest = json.loads(MANIFEST)
+    target = copy.deepcopy(manifest['capabilities'][0])
+    target.update(id='example.service.provider', version='1.0.0-rc.1', dependencies=[])
+    manifest['capabilities'][0]['id'] += '-consumer'
+    manifest['capabilities'][0]['dependencies'] = ['example.service.provider@^1.0.0']
+    manifest['capabilities'].append(target)
+    with pytest.raises(ServicePluginContractError):
+        check_manifest(manifest)
+
 @pytest.mark.parametrize('version,allowed', [
     ('1.0.0', True), ('1.0.0-rc.1', True), ('1.0.0-' + 'a'*250, True),
     ('1.0.0-' + 'a'*251, False), ('01.0.0', False), ('1.0.0-01', False),
@@ -171,3 +213,4 @@ def test_service_version_model_and_published_schema_agree(version, allowed):
     else:
         with pytest.raises(ValidationError):
             ServicePluginDeclaration.model_validate(data)
+
