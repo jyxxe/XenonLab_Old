@@ -7,6 +7,9 @@ http://xenon.jyxxe.com:8080, http://*.xenon.jyxxe.com:8080, http://chat.jyxxe.co
   header X-Content-Type-Options nosniff
   header Referrer-Policy no-referrer
   header Strict-Transport-Security "max-age=300"
+  # Public visitors keep the same frame-ancestor restriction as LAN; 'self' covers
+  # the desktop shell and any same-origin embedded app (issue #94 drift).
+  header Content-Security-Policy "frame-ancestors 'self' https://xenon.jyxxe.com"
   # Same static-asset policy as the LAN edge: hashed assets are immutable, the SPA
   # entry is always revalidated (issue #293).
   @immutable_assets path /assets/*
