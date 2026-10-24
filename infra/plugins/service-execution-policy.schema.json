@@ -1,0 +1,280 @@
+{
+  "$defs": {
+    "IsolationRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "const": "nonprivileged-private-namespaces",
+          "title": "Profile",
+          "type": "string"
+        },
+        "root_filesystem": {
+          "const": "read-only",
+          "title": "Root Filesystem",
+          "type": "string"
+        },
+        "network": {
+          "const": "gateway-ingress-no-egress",
+          "title": "Network",
+          "type": "string"
+        },
+        "secrets": {
+          "const": "none",
+          "title": "Secrets",
+          "type": "string"
+        },
+        "host_mounts": {
+          "const": "none",
+          "title": "Host Mounts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "root_filesystem",
+        "network",
+        "secrets",
+        "host_mounts"
+      ],
+      "title": "IsolationRequirements",
+      "type": "object"
+    },
+    "ResourceLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "memory_bytes": {
+          "maximum": 68719476736,
+          "minimum": 16777216,
+          "title": "Memory Bytes",
+          "type": "integer"
+        },
+        "cpu_millis": {
+          "maximum": 64000,
+          "minimum": 1,
+          "title": "Cpu Millis",
+          "type": "integer"
+        },
+        "pids": {
+          "maximum": 1024,
+          "minimum": 1,
+          "title": "Pids",
+          "type": "integer"
+        },
+        "scratch_bytes": {
+          "maximum": 1073741824,
+          "minimum": 0,
+          "title": "Scratch Bytes",
+          "type": "integer"
+        },
+        "concurrency": {
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "queue": {
+          "maximum": 1024,
+          "minimum": 0,
+          "title": "Queue",
+          "type": "integer"
+        },
+        "input_bytes": {
+          "maximum": 16777216,
+          "minimum": 1,
+          "title": "Input Bytes",
+          "type": "integer"
+        },
+        "output_bytes": {
+          "maximum": 16777216,
+          "minimum": 1,
+          "title": "Output Bytes",
+          "type": "integer"
+        },
+        "startup_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Startup Seconds",
+          "type": "integer"
+        },
+        "invocation_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Invocation Seconds",
+          "type": "integer"
+        },
+        "drain_seconds": {
+          "maximum": 300,
+          "minimum": 0,
+          "title": "Drain Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "memory_bytes",
+        "cpu_millis",
+        "pids",
+        "scratch_bytes",
+        "concurrency",
+        "queue",
+        "input_bytes",
+        "output_bytes",
+        "startup_seconds",
+        "invocation_seconds",
+        "drain_seconds"
+      ],
+      "title": "ResourceLimits",
+      "type": "object"
+    },
+    "_RuleInput": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 3,
+          "not": {
+            "pattern": "\\s"
+          },
+          "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "tool",
+            "agent",
+            "provider",
+            "worker"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "version": {
+          "maxLength": 256,
+          "minLength": 5,
+          "not": {
+            "pattern": "\\s"
+          },
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+          "title": "Version",
+          "type": "string"
+        },
+        "minimum_permissions": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 3,
+            "not": {
+              "pattern": "\\s"
+            },
+            "pattern": "^(embedding|lean|llm|xelibrary):[a-z0-9-]+$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Minimum Permissions",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "allowed_permissions": {
+          "items": {
+            "maxLength": 128,
+            "minLength": 3,
+            "not": {
+              "pattern": "\\s"
+            },
+            "pattern": "^(embedding|lean|llm|xelibrary):[a-z0-9-]+$",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "title": "Allowed Permissions",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "timeout_seconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "version",
+        "minimum_permissions",
+        "allowed_permissions",
+        "timeout_seconds"
+      ],
+      "title": "_RuleInput",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 64,
+      "minLength": 2,
+      "not": {
+        "pattern": "\\s"
+      },
+      "pattern": "^[a-z][a-z0-9-]{1,63}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "plugin_id": {
+      "maxLength": 63,
+      "minLength": 2,
+      "not": {
+        "pattern": "\\s"
+      },
+      "pattern": "^[a-z0-9][a-z0-9.-]{1,62}$",
+      "title": "Plugin Id",
+      "type": "string"
+    },
+    "issued_at": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "title": "Issued At",
+      "type": "integer"
+    },
+    "expires_at": {
+      "exclusiveMinimum": 0,
+      "maximum": 9223372036854775807,
+      "title": "Expires At",
+      "type": "integer"
+    },
+    "isolation": {
+      "$ref": "#/$defs/IsolationRequirements"
+    },
+    "limits": {
+      "$ref": "#/$defs/ResourceLimits"
+    },
+    "capabilities": {
+      "items": {
+        "$ref": "#/$defs/_RuleInput"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "title": "Capabilities",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "plugin_id",
+    "issued_at",
+    "expires_at",
+    "isolation",
+    "limits",
+    "capabilities"
+  ],
+  "title": "_PolicyInput",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xenon.jyxxe.com/schemas/service-execution-policy-v1.json",
+  "description": "Core execution constraints; parsing or resolution grants no admission or execution."
+}

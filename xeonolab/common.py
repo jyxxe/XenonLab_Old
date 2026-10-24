@@ -187,10 +187,21 @@ class Identity:
     credential_epoch: str = ""
     ancestors: tuple[str, ...] = ()
     token_scopes: set[str] | None = None
+    lifecycle_revision: int | None = None
+    disabled_capabilities: frozenset[str] = frozenset()
 
     def require(self, scope):
         if scope not in self.scopes:
             raise APIError(403, "FORBIDDEN", f"scope required: {scope}")
+
+    def capability_disabled(self, capability_id):
+        from .capability_lifecycle import capability_disabled
+
+        return capability_disabled(capability_id, self.disabled_capabilities)
+
+    def require_capability(self, capability_id):
+        if self.capability_disabled(capability_id):
+            raise APIError(404, "CAPABILITY_NOT_FOUND", "no such capability")
 
 
 @dataclass
@@ -344,6 +355,15 @@ def _identity(request: Request, *, check_rate=True):
     resolver = getattr(request.app.state, "authorization_resolver", None)
     if resolver:
         actor = resolver(token)
+
+        lifecycle = getattr(request.app.state, "capability_lifecycle", None)
+        if lifecycle is not None:
+            from .capability_lifecycle import parse_snapshot
+
+            actor.lifecycle_revision, actor.disabled_capabilities = parse_snapshot(lifecycle.snapshot())
+        elif request.app.state.capability_lifecycle_required:
+            raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "capability lifecycle authority required")
+
         if check_rate:
             enforce_rate_limit(request, actor)
         return actor
@@ -369,13 +389,24 @@ def _identity(request: Request, *, check_rate=True):
             actor = Identity(
                 data["subject"], set(data["scopes"]), data["kind"], ancestors=tuple(data.get("ancestors", []))
             )
+
+            snapshot = data.get("capability_lifecycle")
+            if snapshot is not None:
+                from .capability_lifecycle import parse_snapshot
+
+                actor.lifecycle_revision, actor.disabled_capabilities = parse_snapshot(snapshot)
+            elif request.app.state.capability_lifecycle_required:
+                raise ValueError("lifecycle snapshot required")
+
             if check_rate:
                 enforce_rate_limit(request, actor)
             return actor
-        except (httpx.HTTPError, ValueError, KeyError, OSError):
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, OSError):
             raise APIError(503, "AUTHORIZATION_UNAVAILABLE", "account authority unavailable") from None
     if token.startswith("xek_"):
         raise APIError(503, "AUTHORIZATION_NOT_CONFIGURED", "account authority required for API keys")
+    if request.app.state.capability_lifecycle_required:
+        raise APIError(503, "CAPABILITY_LIFECYCLE_UNAVAILABLE", "capability lifecycle authority required")
     actor = token_identity(token, settings)
     if check_rate:
         enforce_rate_limit(request, actor)
@@ -504,6 +535,10 @@ def response(request, data, **meta):
 def base_app(service, settings=None):
     app = FastAPI(title=f"XeonoLab {service}", version="0.1.0")
     app.state.settings = settings or Settings.environment(service)
+    lifecycle_mode = os.getenv("CAPABILITY_LIFECYCLE_ENABLED", "0")
+    if lifecycle_mode not in {"0", "1"}:
+        raise ValueError("CAPABILITY_LIFECYCLE_ENABLED must be 0 or 1")
+    app.state.capability_lifecycle_required = lifecycle_mode == "1"
     if app.state.settings.rate_limit_enabled:
         for group in DEFAULT_RATE_LIMITS:
             policy = app.state.settings.rate_limit_policies.get(group)
@@ -595,7 +630,7 @@ def base_app(service, settings=None):
 
         duration = time.monotonic() - started
         result.headers["X-Request-ID"] = request.state.request_id
-        if request.url.path.startswith("/api/v1/auth/"):
+        if request.url.path.startswith(("/api/v1/auth/", "/api/v1/capabilities")) or request.url.path in {"/api/v1/tools", "/v1/models", "/api/v1/embed/models"}:
             result.headers["Cache-Control"] = "no-store"
         record_request(result.status_code, duration)
         return result
