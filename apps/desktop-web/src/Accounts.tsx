@@ -78,6 +78,10 @@ export function Accounts({api,apiPage,authEpoch=0}:{api:API;apiPage:APIPage;auth
    setMessage('子账号已创建，可使用统一登录入口');
   });
  }
+ function chooseAccount(id:string){
+  if(secret&&id!==chosen){setMessage('当前 API key 尚未保存：请先复制并点击「已保存，关闭」后再切换账号');return}
+  setChosen(id);
+ }
  return <section className="account-manager"><h2>账号与 API key</h2><p>子账号的有效权限随父账号变化。API key 只显示一次，撤销后立即停止授权。</p><p role="status">{message}</p>
  {treeState==='loading'&&<p role="status">正在检查账号树状态…</p>}
  {treeState==='unregistered'&&<section className="account-setup" aria-labelledby="account-setup-title"><h3 id="account-setup-title">首次启用账号树</h3><p>当前登录身份尚未登记到受管账号树。初始化会将当前身份登记为根账号，并沿用已验证的现有权限；不会自动启用账号树或增加权限。</p>{me?.kind==='human'&&me?.scopes?.includes('desktop:admin')?<button disabled={busy} onClick={()=>act(async()=>{await api('/auth/accounts/bootstrap',{method:'POST',body:JSON.stringify({name:'管理员'})});await load();setMessage('账号树已启用')})}>初始化我的账号树</button>:<p>请联系具有桌面管理员权限的人工用户完成初始化。此页面不会自动执行此操作。</p>}</section>}
@@ -86,7 +90,7 @@ export function Accounts({api,apiPage,authEpoch=0}:{api:API;apiPage:APIPage;auth
   <button type="button" disabled={!treeFilter} onClick={()=>setTreeFilter('')}>清除筛选</button>
   <p className="muted" role="status">{visibleNodes.length} / {nodes.length} 个账号</p>
   {!visibleNodes.length&&<p role="status">没有匹配的账号</p>}
-  <div className="account-tree-list">{visibleNodes.map(n=><button key={n.id} className={n.id===chosen?'active':''} style={{paddingLeft:12+depth(n)*16}} onClick={()=>setChosen(n.id)}>{n.name}<small>{n.username} · {n.enabled?'启用':'停用'}</small></button>)}</div>
+  <div className="account-tree-list">{visibleNodes.map(n=><button key={n.id} className={n.id===chosen?'active':''} style={{paddingLeft:12+depth(n)*16}} onClick={()=>chooseAccount(n.id)}>{n.name}<small>{n.username} · {n.enabled?'启用':'停用'}</small></button>)}</div>
  </aside>
  <div className="account-detail">{selected&&<><h3>{selected.name}</h3><p className="muted">{selected.id}</p><label>显示名称<input value={name} onChange={e=>setName(e.target.value)}/></label>
  {canPolicy&&<><label><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/>启用账号</label>{selected.parent&&<label><input type="checkbox" checked={inherit} onChange={e=>setInherit(e.target.checked)}/>继承父账号全部权限</label>}{!inherit&&<>{isOwnRoot&&rootCandidates.length>0&&<p>以下权限已由当前登录角色授权，可由根账号显式加入；不会自动启用。</p>}{!isOwnRoot&&rootCandidates.length>0&&<p className="account-locked-hint">灰色的权限由登录角色持有，但根账号尚未采纳，暂时无法授予；请先用根账号登录，在根账号的权限列表勾选采纳后再回来授予。</p>}<Scopes available={editableScopes} locked={isOwnRoot?[]:rootCandidates} selected={grants} setSelected={setGrants}/></>}</>}
