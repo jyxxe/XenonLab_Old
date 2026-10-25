@@ -287,6 +287,9 @@ def create_app(settings=None):
         CREATE TABLE IF NOT EXISTS acl(resource_type TEXT, resource_id TEXT, grants TEXT,
           PRIMARY KEY(resource_type,resource_id));
         CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY, actor TEXT, event TEXT, resource TEXT, at TEXT);
+        CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, kind TEXT NOT NULL, table_id TEXT NOT NULL,
+          state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          error TEXT);
         """)
         acl_columns = {row[1] for row in db.execute("PRAGMA table_info(acl)")}
         if "revision" not in acl_columns:
@@ -350,6 +353,80 @@ def create_app(settings=None):
             db.execute(
                 "INSERT INTO audit VALUES(?,?,?,?,?)", (str(uuid4()), actor.sub, event, resource, now())
             )
+
+    # Durable multi-resource intent journal (Issue #81). The intent is committed
+    # before the filesystem/catalogue work so a crash leaves a reproducible
+    # operation record instead of a silent half-finished table lifecycle.
+    def begin_operation(kind, table_id, payload):
+        operation_id, stamp = str(uuid4()), now()
+        with transaction(catalogue) as db:
+            db.execute(
+                "INSERT INTO operations VALUES(?,?,?,?,?,?,?,NULL)",
+                (operation_id, kind, table_id, "pending", json.dumps(payload, ensure_ascii=False), stamp, stamp),
+            )
+        return operation_id
+
+    def finish_operation(operation_id):
+        with transaction(catalogue) as db:
+            db.execute(
+                "UPDATE operations SET state='completed',updated_at=? WHERE id=? AND state='pending'",
+                (now(), operation_id),
+            )
+
+    def abort_operation(operation_id, error):
+        with transaction(catalogue) as db:
+            db.execute(
+                "UPDATE operations SET state='aborted',error=?,updated_at=? WHERE id=? AND state='pending'",
+                (str(error)[:500], now(), operation_id),
+            )
+
+    def recover_lifecycle_operations():
+        """Finish or roll back interrupted table lifecycle intents before serving requests.
+
+        Existing file-level recovery (``recover_table_deletions``) runs first, so this
+        pass reconciles only the durable journal and removes files proven unpublished
+        by an interrupted ``table.create`` intent.
+        """
+        with connect(catalogue) as db:
+            pending = [dict(row) for row in db.execute(
+                "SELECT * FROM operations WHERE state='pending' ORDER BY created_at"
+            )]
+            table_ids = {row[0] for row in db.execute("SELECT id FROM tables")}
+        for operation in pending:
+            operation_id, kind, table_id = operation["id"], operation["kind"], operation["table_id"]
+            state, note = "completed", None
+            if kind == "table.create":
+                target = table_directory / f"{table_id}.xl"
+                if table_id not in table_ids and target.is_file():
+                    # The intent proves this file was never published to the catalogue.
+                    try:
+                        with connect(target) as db:
+                            meta = db.execute("SELECT table_id FROM __xl_meta").fetchone()
+                        if meta is None or meta[0] == table_id:
+                            target.unlink()
+                            note = "removed unpublished table file"
+                    except sqlite3.DatabaseError:
+                        target.unlink(missing_ok=True)
+                        note = "removed unpublished, unreadable table file"
+            elif kind == "table.delete":
+                if table_id in table_ids:
+                    state = "aborted"
+                    note = "table still in catalogue; deletion rolled back"
+            else:
+                state = "aborted"
+                note = f"unsupported operation kind {kind!r}"
+            with transaction(catalogue) as db:
+                db.execute(
+                    "UPDATE operations SET state=?,error=COALESCE(?,error),updated_at=? WHERE id=?",
+                    (state, note, now(), operation_id),
+                )
+                db.execute(
+                    "INSERT INTO audit VALUES(?,?,?,?,?)",
+                    (str(uuid4()), "system:recovery", "operation.recovered", operation_id, now()),
+                )
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat().replace("+00:00", "Z")
+        with transaction(catalogue) as db:
+            db.execute("DELETE FROM operations WHERE state!='pending' AND created_at<?", (cutoff,))
 
     def table_info(tid):
         with connect(catalogue) as db:
@@ -585,6 +662,7 @@ def create_app(settings=None):
             raise APIError(403, "XL_FORBIDDEN", "path permission denied")
         tid, stamp = str(uuid4()), now()
         target = root / "tables" / f"{tid}.xl"
+        operation_id = begin_operation("table.create", tid, {"path": path, "name": body.name})
         try:
             with transaction(catalogue) as catalog:
                 catalog.execute("INSERT INTO tables VALUES(?,?,?,?)", (tid, path, body.name, actor.sub))
@@ -615,11 +693,13 @@ def create_app(settings=None):
                         )
         except Exception as exc:
             target.unlink(missing_ok=True)
+            abort_operation(operation_id, exc)
             import sqlite3
 
             if isinstance(exc, sqlite3.IntegrityError):
                 raise APIError(409, "TABLE_EXISTS", "table name already exists in path") from None
             raise
+        finish_operation(operation_id)
         audit(actor, "table.created", tid)
         return JSONResponse(
             response(request, {"table_id": tid, "path": path, "name": body.name, "revision": 1}),
@@ -726,48 +806,54 @@ def create_app(settings=None):
 
             # The table lock prevents an index job from publishing new points
             # between cleanup and the canonical file/catalogue deletion.
-            remove_qdrant_points(tid)
+            operation_id = begin_operation("table.delete", tid, {"path": table_info(tid)["path"]})
+            try:
+                remove_qdrant_points(tid)
 
-            with connect(target) as db:
-                checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-                if checkpoint and checkpoint[0]:
-                    raise APIError(409, "TABLE_BUSY", "table has active readers or writers")
-            with transaction(target) as db:
-                db.execute("UPDATE __xl_meta SET deleting=1")
-            tombstone = table_directory / f".{tid}.xl.deleting"
-            try:
-                os.replace(target, tombstone)
-            except BaseException:
+                with connect(target) as db:
+                    checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                    if checkpoint and checkpoint[0]:
+                        raise APIError(409, "TABLE_BUSY", "table has active readers or writers")
                 with transaction(target) as db:
-                    db.execute("UPDATE __xl_meta SET deleting=0")
-                raise
-            try:
-                with transaction(catalogue) as db:
-                    current = db.execute("SELECT 1 FROM tables WHERE id=?", (tid,)).fetchone()
-                    if current is None:
-                        raise APIError(404, "XL_TABLE_NOT_FOUND", "table not found")
-                    db.execute("DELETE FROM acl WHERE resource_type='table' AND resource_id=?", (tid,))
-                    db.execute(
-                        "DELETE FROM acl WHERE resource_type='row' AND resource_id LIKE ?",
-                        (tid + ":%",),
-                    )
-                    db.execute("DELETE FROM tables WHERE id=?", (tid,))
-                    db.execute(
-                        "INSERT INTO audit VALUES(?,?,?,?,?)",
-                        (str(uuid4()), actor.sub, "table.deleted", tid, now()),
-                    )
-            except BaseException:
-                if tombstone.exists() and not target.exists():
-                    os.replace(tombstone, target)
+                    db.execute("UPDATE __xl_meta SET deleting=1")
+                tombstone = table_directory / f".{tid}.xl.deleting"
+                try:
+                    os.replace(target, tombstone)
+                except BaseException:
                     with transaction(target) as db:
                         db.execute("UPDATE __xl_meta SET deleting=0")
-                raise
+                    raise
+                try:
+                    with transaction(catalogue) as db:
+                        current = db.execute("SELECT 1 FROM tables WHERE id=?", (tid,)).fetchone()
+                        if current is None:
+                            raise APIError(404, "XL_TABLE_NOT_FOUND", "table not found")
+                        db.execute("DELETE FROM acl WHERE resource_type='table' AND resource_id=?", (tid,))
+                        db.execute(
+                            "DELETE FROM acl WHERE resource_type='row' AND resource_id LIKE ?",
+                            (tid + ":%",),
+                        )
+                        db.execute("DELETE FROM tables WHERE id=?", (tid,))
+                        db.execute(
+                            "INSERT INTO audit VALUES(?,?,?,?,?)",
+                            (str(uuid4()), actor.sub, "table.deleted", tid, now()),
+                        )
+                except BaseException:
+                    if tombstone.exists() and not target.exists():
+                        os.replace(tombstone, target)
+                        with transaction(target) as db:
+                            db.execute("UPDATE __xl_meta SET deleting=0")
+                    raise
 
-            cleanup_table_uploads(tid)
-            try:
-                tombstone.unlink(missing_ok=True)
-            except OSError:
-                logging.getLogger(__name__).exception("unable to remove deleted table tombstone")
+                cleanup_table_uploads(tid)
+                try:
+                    tombstone.unlink(missing_ok=True)
+                except OSError:
+                    logging.getLogger(__name__).exception("unable to remove deleted table tombstone")
+                finish_operation(operation_id)
+            except BaseException as exc:
+                abort_operation(operation_id, exc)
+                raise
             return response(request, {"table_id": tid, "deleted": True})
 
     @app.patch("/api/v1/tables/{tid}/schema")
@@ -1994,6 +2080,7 @@ def create_app(settings=None):
         table_connect=table_connect,
     )
     recover_table_deletions()
+    recover_lifecycle_operations()
 
     @app.get("/api/v1/tables/{tid}/attachments", response_model=AttachmentCandidatePage, description=(
         "List same-table attachment metadata for currently readable, live source rows. "

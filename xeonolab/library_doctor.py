@@ -75,6 +75,7 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
         "table_tombstones": 0,
         "attachment_references": 0,
         "uploads": 0,
+        "pending_operations": 0,
     }
     object_store = {
         "count": 0,
@@ -140,6 +141,40 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
             catalogue[table_id] = row
     known_ids = set(catalogue)
     known_ids.update(row["id"] for row in catalogue_before if isinstance(row.get("id"), str))
+
+    try:
+        operation_db = _read_connect(catalogue_path)
+        try:
+            journal = operation_db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operations'"
+            ).fetchone()
+            pending_operations = (
+                [
+                    dict(row)
+                    for row in operation_db.execute(
+                        "SELECT id,kind,table_id,created_at FROM operations "
+                        "WHERE state='pending' ORDER BY created_at"
+                    )
+                ]
+                if journal
+                else []
+            )
+        finally:
+            operation_db.close()
+    except (sqlite3.DatabaseError, OSError):
+        pending_operations = []
+        add("operation_journal_unreadable", "warning", detail="operation journal could not be read")
+    counts["pending_operations"] = len(pending_operations)
+    for operation in pending_operations:
+        add(
+            "incomplete_lifecycle_operation",
+            "warning",
+            table_id=operation.get("table_id"),
+            detail=(
+                f"{operation.get('kind')} intent {operation.get('id')} has been pending since "
+                f"{operation.get('created_at')}"
+            ),
+        )
 
     for table_id in sorted(table_file_ids - known_ids):
         add(
