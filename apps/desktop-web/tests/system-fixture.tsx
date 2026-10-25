@@ -9,7 +9,15 @@ const mode = new URLSearchParams(location.search).get('storageCase') || 'ok';
 const api = async (path: string) => {
   await new Promise(resolve => setTimeout(resolve, 60));
   if (path === '/users/me') {
-    return {subject: 'fixture-user', scopes: mode === 'forbidden' ? ['desktop:read'] : ['desktop:read', 'hf-cache:read']};
+    return {subject: 'fixture-user', scopes: mode === 'forbidden' ? ['desktop:read'] : ['desktop:read', 'hf-cache:read', 'xelibrary:admin']};
+  }
+  if (path === '/storage/telemetry') {
+    if (mode === 'forbidden') throw Object.assign(new Error('forbidden'), {code: 'FORBIDDEN', status: 403});
+    return {
+      tables: [{table_id: 'fixture-table', changes_rows: 42, attachment_refs: 3, attachment_bytes: 2048}],
+      totals: {tables: 1, changes_rows: 42, attachment_refs: 3, attachment_bytes: 2048},
+      attachment_objects: {total: 5, referenced: 3, unreferenced: 2, bytes_total: 8192, bytes_unreferenced: 4096},
+    };
   }
   if (path === '/cache/storage') {
     if (mode === 'unavailable') {
