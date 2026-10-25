@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from .bulk_jobs import BulkJobStore, payload_digest
 from .common import APIError, base_app, connect, etag, precondition, response, scope, transaction
+from .library_doctor import scan_library
 from .quality_pipeline import ranked_fusion
 from .query import evaluate, json_ast, parse, path_matches, sort_key
 from .search_models import SEARCH_ERRORS, SearchResponse
@@ -1284,6 +1285,11 @@ def create_app(settings=None):
         return JSONResponse(response(request, {
             "mode": "job", "job_id": job_id, "status": "queued", "total": len(items),
         }), status_code=202)
+
+    @app.get("/api/v1/maintenance/consistency")
+    def maintenance_consistency(request: Request, actor=Depends(scope("xelibrary:admin"))):
+        """Read-only catalogue/file/attachment/object consistency scan (Issue #81)."""
+        return response(request, scan_library(root))
 
     @app.get("/api/v1/storage/telemetry")
     def storage_telemetry(request: Request, actor=Depends(scope("xelibrary:admin"))):
