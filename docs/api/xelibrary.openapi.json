@@ -692,6 +692,23 @@
         }
       }
     },
+    "/api/v1/maintenance/consistency": {
+      "get": {
+        "summary": "Maintenance Consistency",
+        "description": "Read-only catalogue/file/attachment/object consistency scan (Issue #81).",
+        "operationId": "maintenance_consistency_api_v1_maintenance_consistency_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/storage/telemetry": {
       "get": {
         "summary": "Storage Telemetry",

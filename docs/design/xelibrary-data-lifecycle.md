@@ -77,3 +77,9 @@
 
 第四增量：桌面系统面板「存储」新增只读「XeLibrary 存储增长」区（`xelibrary:admin`），
 消费 `/api/v1/storage/telemetry`；不提供自动维护操作。HF-cache 池水位仍依赖 #66 服务路由。
+
+第五增量（Issue #81 第一增量，2026-10-25）：新增只读一致性扫描
+`GET /api/v1/maintenance/consistency`（`xelibrary:admin`）。扫描 catalogue ↔ `.xl` 文件、
+附件引用 ↔ 内容寻址对象、上传会话/暂存目录、删除墓碑与表元数据；默认最多 200 项问题，
+对象孤儿统计在存在不可读表文件时 fail closed（`orphan_check_complete=false`）。
+不执行修复、不写用户数据；持久化操作 journal/outbox 与显式修复动作仍待后续增量。
