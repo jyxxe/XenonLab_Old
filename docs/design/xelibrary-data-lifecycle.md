@@ -90,3 +90,7 @@
 未发布的建表文件仅在意图与 `__xl_meta.table_id` 一致（或文件不可读）时删除，删除意图按
 catalogue 最终状态标记 completed/aborted；已结束记录保留 30 天。移动、导入/恢复意图、
 显式修复端点与真实故障注入仍待后续增量。
+
+第七增量（Issue #81 第三增量，2026-10-25）：`table.move` 纳入 `operations` 意图日志。启动对账以
+catalogue 为权威：catalogue 尚未提交的移动标记 aborted；catalogue 已提交而 `__xl_meta.logical_path`
+滞后时，在表锁内补齐路径并 `table_revision+1`，标记 completed；表删除中/文件缺失不自动改动。

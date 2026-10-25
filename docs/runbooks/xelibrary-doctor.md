@@ -33,13 +33,14 @@ Authorization: Bearer <token>
 
 ## 操作日志与自动恢复
 
-- 建表/删表会在 catalogue `operations` 表留下持久意图。扫描报告中的
+- 建表/删表/移动会在 catalogue `operations` 表留下持久意图。扫描报告中的
   `incomplete_lifecycle_operation` 表示恢复后仍有 pending 意图；对照 `kind`/`table_id`/`created_at`
   与 `docs/acceptance/issue-81-lifecycle-journal-2026-10-25.md` 处理。
 - 进程重启时 `recover_table_deletions()` 会收尾 `.<tid>.xl.deleting` 墓碑并清除 catalogue 内表的
   `deleting` 标记；随后 `recover_lifecycle_operations()` 对账日志：
   已发布表的建表意图直接完成，未发布且 `__xl_meta.table_id` 匹配的半成品 `.xl` 会被删除并写审计
-  `operation.recovered`；删除意图按 catalogue 最终状态标记完成或回滚。
+  `operation.recovered`；删除意图按 catalogue 最终状态标记完成或回滚；移动意图以 catalogue 路径为准，
+  已提交但元数据滞后的移动会补齐 `__xl_meta.logical_path` 并增加一次 `table_revision`，未提交的移动标记回滚。
 - 因此墓碑/`deleting`/pending 操作类 warning 通常在下次服务重启后消失。若持续存在，说明恢复
   自身失败，应检查服务日志与文件权限，先备份现场再人工处理。
 - 已结束的操作记录保留 30 天，只用于对账和审计，不会无限增长。
