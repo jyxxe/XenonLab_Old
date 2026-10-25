@@ -83,3 +83,10 @@
 附件引用 ↔ 内容寻址对象、上传会话/暂存目录、删除墓碑与表元数据；默认最多 200 项问题，
 对象孤儿统计在存在不可读表文件时 fail closed（`orphan_check_complete=false`）。
 不执行修复、不写用户数据；持久化操作 journal/outbox 与显式修复动作仍待后续增量。
+
+第六增量（Issue #81 第二增量，2026-10-25）：catalogue 新增 `operations` 意图日志，覆盖
+`table.create` / `table.delete`。意图在文件/目录/上传清理前独立提交；启动时
+`recover_lifecycle_operations()` 在既有墓碑恢复之后对账日志：已发布的建表保留并完成，
+未发布的建表文件仅在意图与 `__xl_meta.table_id` 一致（或文件不可读）时删除，删除意图按
+catalogue 最终状态标记 completed/aborted；已结束记录保留 30 天。移动、导入/恢复意图、
+显式修复端点与真实故障注入仍待后续增量。
