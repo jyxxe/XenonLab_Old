@@ -13,6 +13,7 @@ This is the first #81 increment: detection only. The durable operation
 journal/outbox and explicit repair actions are separate increments.
 """
 
+import json
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -76,6 +77,8 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
         "attachment_references": 0,
         "uploads": 0,
         "pending_operations": 0,
+        "stale_vector_references": 0,
+        "index_jobs": 0,
     }
     object_store = {
         "count": 0,
@@ -260,6 +263,61 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
                         table_id=table_id,
                         detail="table is marked as deleting; startup recovery clears the marker for catalogue tables",
                     )
+                table_revision = meta.get("table_revision")
+                row_revision = db.execute("SELECT COALESCE(MAX(_revision), 0) FROM data").fetchone()[0]
+                change_revision = db.execute(
+                    "SELECT COALESCE(MAX(revision), 0) FROM __xl_changes"
+                ).fetchone()[0]
+                if isinstance(table_revision, int):
+                    if row_revision > table_revision:
+                        add(
+                            "table_revision_lagging",
+                            "critical",
+                            table_id=table_id,
+                            detail=f"max row revision {row_revision} exceeds table_revision {table_revision}",
+                        )
+                    if change_revision > table_revision:
+                        add(
+                            "change_revision_ahead",
+                            "critical",
+                            table_id=table_id,
+                            detail=f"max change revision {change_revision} exceeds table_revision {table_revision}",
+                        )
+                if db.execute("SELECT COUNT(*) FROM __xl_schema").fetchone()[0] == 0:
+                    add(
+                        "table_schema_empty",
+                        "critical",
+                        table_id=table_id,
+                        detail="table has no schema columns",
+                    )
+                if db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='__xl_vectors'"
+                ).fetchone():
+                    stale_vectors = db.execute(
+                        "SELECT COUNT(*) FROM __xl_vectors v LEFT JOIN data d ON d._row_id=v.row_id "
+                        "WHERE d._row_id IS NULL OR d._deleted_at IS NOT NULL OR v.revision != d._revision"
+                    ).fetchone()[0]
+                    counts["stale_vector_references"] += stale_vectors
+                    if stale_vectors:
+                        add(
+                            "stale_vector_reference",
+                            "warning",
+                            table_id=table_id,
+                            detail=(
+                                f"{stale_vectors} derived vector rows do not match a live row revision; "
+                                "reindexing rebuilds them"
+                            ),
+                        )
+                    invalid_indexed = db.execute(
+                        "SELECT COUNT(*) FROM __xl_changes WHERE indexed_revision > revision"
+                    ).fetchone()[0]
+                    if invalid_indexed:
+                        add(
+                            "invalid_indexed_revision",
+                            "warning",
+                            table_id=table_id,
+                            detail=f"{invalid_indexed} change rows have indexed_revision ahead of revision",
+                        )
                 for attachment in db.execute("SELECT attachment_id,row_id,object_hash FROM __xl_attachments"):
                     counts["attachment_references"] += 1
                     digest = attachment["object_hash"]
@@ -324,6 +382,37 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
                 db.close()
         except (sqlite3.DatabaseError, OSError):
             add("upload_state_unreadable", "warning", detail="upload state database could not be read")
+
+    index_jobs = 0
+    try:
+        db = _read_connect(catalogue_path)
+        try:
+            if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_jobs'"
+            ).fetchone():
+                for row in db.execute("SELECT payload FROM index_jobs"):
+                    index_jobs += 1
+                    try:
+                        payload = json.loads(row[0])
+                    except (TypeError, ValueError):
+                        add("invalid_index_job", "warning", detail="index job payload is not valid JSON")
+                        continue
+                    if not isinstance(payload, dict):
+                        add("invalid_index_job", "warning", detail="index job payload is not an object")
+                        continue
+                    table_id = payload.get("table_id")
+                    if isinstance(table_id, str) and table_id not in catalogue:
+                        add(
+                            "index_job_table_missing",
+                            "warning",
+                            table_id=table_id,
+                            detail="index job references a table that is not in the catalogue",
+                        )
+        finally:
+            db.close()
+    except (sqlite3.DatabaseError, OSError):
+        add("index_job_state_unreadable", "warning", detail="index job state could not be read")
+    counts["index_jobs"] = index_jobs
 
     staging = root / "objects" / ".uploads"
     if staging.is_dir():

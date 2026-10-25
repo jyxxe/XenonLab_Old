@@ -212,3 +212,63 @@ def test_scan_reports_unreadable_catalogue(library, tmp_path):
     report = scan_library(tmp_path)
     assert report["ok"] is False
     assert [issue["kind"] for issue in report["issues"]] == ["catalogue_unreadable"]
+
+
+def test_scan_detects_revision_metadata_drift(library, tmp_path):
+    table_id, _ = make_table(library)
+    with sqlite3.connect(tmp_path / "tables" / f"{table_id}.xl") as db:
+        db.execute("UPDATE __xl_meta SET table_revision=0")
+
+    data = scan(library).json()["data"]
+    kinds = {issue["kind"] for issue in data["issues"]}
+    assert "table_revision_lagging" in kinds
+    assert "change_revision_ahead" in kinds
+    assert data["ok"] is False
+
+
+def test_scan_detects_empty_schema(library, tmp_path):
+    table_id, _ = make_table(library)
+    with sqlite3.connect(tmp_path / "tables" / f"{table_id}.xl") as db:
+        db.execute("DELETE FROM __xl_schema")
+
+    data = scan(library).json()["data"]
+    issue = next(item for item in data["issues"] if item["kind"] == "table_schema_empty")
+    assert issue["severity"] == "critical"
+    assert issue["table_id"] == table_id
+
+
+def test_scan_detects_derived_index_drift(library, tmp_path):
+    table_id, row_id = make_table(library)
+    with sqlite3.connect(tmp_path / "tables" / f"{table_id}.xl") as db:
+        db.execute(
+            "CREATE TABLE __xl_vectors(row_id TEXT,revision INTEGER,chunk_id TEXT PRIMARY KEY,"
+            "column_name TEXT,body TEXT,vector TEXT,model_revision TEXT,chunker_version TEXT)"
+        )
+        db.execute(
+            "INSERT INTO __xl_vectors VALUES(?,?,?,?,?,?,?,?)",
+            (row_id, 1, "chunk-current", "title", "v1", "[]", "model", "v1"),
+        )
+        db.execute(
+            "INSERT INTO __xl_vectors VALUES(?,?,?,?,?,?,?,?)",
+            (row_id, 2, "chunk-stale", "title", "v1", "[]", "model", "v1"),
+        )
+        db.execute("UPDATE __xl_changes SET indexed_revision=5")
+
+    data = scan(library).json()["data"]
+    kinds = {issue["kind"] for issue in data["issues"]}
+    assert "stale_vector_reference" in kinds
+    assert "invalid_indexed_revision" in kinds
+    assert data["counts"]["stale_vector_references"] == 1
+
+
+def test_scan_detects_index_job_for_unknown_table(library, tmp_path):
+    unknown = str(uuid4())
+    with sqlite3.connect(tmp_path / "catalogue.sqlite") as db:
+        db.execute("INSERT INTO index_jobs VALUES(?,?)", ("job-1", '{"table_id": "%s", "status": "queued"}' % unknown))
+        db.execute("INSERT INTO index_jobs VALUES(?,?)", ("job-2", "not-json"))
+
+    data = scan(library).json()["data"]
+    kinds = {issue["kind"] for issue in data["issues"]}
+    assert "index_job_table_missing" in kinds
+    assert "invalid_index_job" in kinds
+    assert data["counts"]["index_jobs"] == 2
