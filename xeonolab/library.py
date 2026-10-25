@@ -471,7 +471,9 @@ def create_app(settings=None):
     # a long-running service does not have to restart, and every applied action is audited.
     repair_plan_ttl_seconds = 600
     repair_max_actions = 500
-    repairable_kinds = ("interrupted_table_delete", "table_path_mismatch", "table_deletion_marker")
+    repairable_kinds = (
+        "interrupted_table_delete", "table_path_mismatch", "table_deletion_marker", "orphan_table_file"
+    )
 
     def repair_candidates():
         actions = []
@@ -525,6 +527,25 @@ def create_app(settings=None):
                     "table_id": table_id,
                     "action": "clear_deleting_marker",
                 })
+        for entry in sorted(table_directory.glob("*.xl")):
+            table_id = entry.stem
+            try:
+                if str(UUID(table_id)) != table_id:
+                    continue
+            except (ValueError, AttributeError):
+                continue
+            if table_id in tables:
+                continue
+            try:
+                if time.time() - entry.stat().st_mtime < 300:
+                    continue  # grace window for an in-flight table create
+            except OSError:
+                continue
+            actions.append({
+                "kind": "orphan_table_file",
+                "table_id": table_id,
+                "action": "quarantine",
+            })
         actions.sort(key=lambda item: (item["kind"], item["table_id"], item["action"]))
         return actions
 
@@ -580,6 +601,18 @@ def create_app(settings=None):
                                 (action["to"], now()),
                             )
                             result = "reconciled"
+            elif kind == "orphan_table_file":
+                source = table_directory / f"{table_id}.xl"
+                quarantine = table_directory / ".quarantine"
+                if not source.is_file():
+                    result = "skipped-missing-file"
+                else:
+                    quarantine.mkdir(mode=0o700, exist_ok=True)
+                    destination = quarantine / f"{table_id}.xl"
+                    if destination.exists():
+                        destination = quarantine / f"{table_id}.{uuid4().hex}.xl"
+                    os.replace(source, destination)
+                    result = "quarantined"
             elif kind == "table_deletion_marker":
                 database = table_directory / f"{table_id}.xl"
                 if not database.is_file():

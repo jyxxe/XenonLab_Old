@@ -74,6 +74,7 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
         "catalogue_tables": 0,
         "table_files": 0,
         "table_tombstones": 0,
+        "quarantined_table_files": 0,
         "attachment_references": 0,
         "uploads": 0,
         "pending_operations": 0,
@@ -131,6 +132,19 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
             add("unexpected_table_entry", "warning", detail=f"unexpected table directory entry {name!r}")
     counts["table_files"] = len(table_file_ids)
     counts["table_tombstones"] = len(tombstones)
+    quarantine = tables_dir / ".quarantine"
+    if quarantine.is_dir():
+        for entry in sorted(quarantine.iterdir(), key=lambda item: item.name):
+            if entry.is_file() and not entry.name.startswith("."):
+                counts["quarantined_table_files"] += 1
+                add(
+                    "quarantined_table_file",
+                    "warning",
+                    detail=(
+                        f"quarantined table file {entry.name!r} is not visible to the catalogue; "
+                        "restore it manually after review"
+                    ),
+                )
 
     try:
         catalogue_now = _catalogue_rows(catalogue_path)

@@ -1,6 +1,8 @@
 """Issue #81 fourth increment: explicit dry-run-first repair plans."""
 
+import os
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -165,3 +167,57 @@ def test_too_many_actions_are_refused(library, tmp_path):
     response = repair(library)
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "REPAIR_TOO_LARGE"
+
+
+def make_orphan_file(root, age_seconds=3600):
+    table_id = str(uuid4())
+    path = root / "tables" / f"{table_id}.xl"
+    path.write_bytes(b"orphan table bytes")
+    old = time.time() - age_seconds
+    os.utime(path, (old, old))
+    return table_id, path
+
+
+def test_dry_run_lists_only_aged_orphan_table_files(library, tmp_path):
+    old_id, old_path = make_orphan_file(tmp_path, age_seconds=3600)
+    young_id, _ = make_orphan_file(tmp_path, age_seconds=10)
+
+    plan = repair(library).json()["data"]
+    orphans = [action for action in plan["actions"] if action["kind"] == "orphan_table_file"]
+    assert {action["table_id"] for action in orphans} == {old_id}
+    assert orphans[0]["action"] == "quarantine"
+    assert old_path.exists()
+    assert plan["counts"]["by_kind"]["orphan_table_file"] == 1
+
+
+def test_apply_quarantines_orphan_without_deleting(library, tmp_path):
+    table_id, orphan = make_orphan_file(tmp_path)
+    plan = repair(library).json()["data"]
+    applied = apply_plan(library, plan["plan_id"])
+    assert applied.status_code == 200, applied.text
+    result = next(item for item in applied.json()["data"]["applied"] if item["kind"] == "orphan_table_file")
+    assert result["result"] == "quarantined"
+    assert not orphan.exists()
+    quarantined = list((tmp_path / "tables" / ".quarantine").glob("*.xl"))
+    assert [path.name for path in quarantined] == [f"{table_id}.xl"]
+    assert quarantined[0].read_bytes() == b"orphan table bytes"
+    with sqlite3.connect(tmp_path / "catalogue.sqlite") as db:
+        assert db.execute(
+            "SELECT 1 FROM audit WHERE event='maintenance.repaired' AND resource LIKE 'orphan_table_file:%'"
+        ).fetchone() is not None
+
+    data = consistency(library)
+    kinds = {issue["kind"] for issue in data["issues"]}
+    assert "quarantined_table_file" in kinds
+    assert "orphan_table_file" not in kinds
+    assert data["counts"]["quarantined_table_files"] == 1
+
+
+def test_orphan_quarantine_plan_goes_stale_when_file_disappears(library, tmp_path):
+    _, orphan = make_orphan_file(tmp_path)
+    plan = repair(library).json()["data"]
+    orphan.unlink()
+
+    stale = apply_plan(library, plan["plan_id"])
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "REPAIR_PLAN_STALE"
