@@ -94,3 +94,8 @@ catalogue 最终状态标记 completed/aborted；已结束记录保留 30 天。
 第七增量（Issue #81 第三增量，2026-10-25）：`table.move` 纳入 `operations` 意图日志。启动对账以
 catalogue 为权威：catalogue 尚未提交的移动标记 aborted；catalogue 已提交而 `__xl_meta.logical_path`
 滞后时，在表锁内补齐路径并 `table_revision+1`，标记 completed；表删除中/文件缺失不自动改动。
+
+第八增量（Issue #81 第四增量，2026-10-25）：新增 `POST /api/v1/maintenance/consistency/repairs`
+（xelibrary:admin，dry-run 默认）。dry-run 生成 `repair_plans` 计划（≤500 项，1 天清理）；执行需
+plan_id，校验未使用/未过期/候选未变化，逐项写 `maintenance.repaired` 审计。仅覆盖墓碑收尾/回滚、
+catalogue/元数据路径对账与 deleting 标记清除；孤儿 `.xl` 回收、导入/恢复意图与真实故障注入仍待后续。

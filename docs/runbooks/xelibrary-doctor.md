@@ -44,3 +44,17 @@ Authorization: Bearer <token>
 - 因此墓碑/`deleting`/pending 操作类 warning 通常在下次服务重启后消失。若持续存在，说明恢复
   自身失败，应检查服务日志与文件权限，先备份现场再人工处理。
 - 已结束的操作记录保留 30 天，只用于对账和审计，不会无限增长。
+
+## 显式修复计划
+
+扫描发现 `interrupted_table_delete` / `table_path_mismatch` / `table_deletion_marker` 时，
+可在不重启服务的情况下用 dry-run 计划修复：
+
+1. `POST /api/v1/maintenance/consistency/repairs` body `{"dry_run": true}`，检查返回的
+   `actions` 与 `counts`；此时不会改动任何数据。
+2. 确认后用同一 `plan_id` 调用 `{"dry_run": false, "plan_id": "..."}`；计划 10 分钟内有效、
+   只能使用一次，若扫描状态已变化会返回 `REPAIR_PLAN_STALE` 且不执行。
+3. 每项动作写 `maintenance.repaired` 审计；完成后重新扫描复查。
+
+该端点只处理与启动恢复一致的墓碑/路径/标记三类问题，不会删除孤儿 `.xl`，也不替代备份；
+计划生成前请先确认 catalogue 是期望的权威状态。

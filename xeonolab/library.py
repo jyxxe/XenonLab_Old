@@ -189,6 +189,11 @@ class PruneChangesRequest(BaseModel):
     keep_recent: int = Field(default=50000, ge=1, le=1000000)
 
 
+class RepairRequest(BaseModel):
+    dry_run: bool = True
+    plan_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class ExportRequest(BaseModel):
     table_id: str
     format: Literal["jsonl", "csv"] = "jsonl"
@@ -290,6 +295,8 @@ def create_app(settings=None):
         CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, kind TEXT NOT NULL, table_id TEXT NOT NULL,
           state TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
           error TEXT);
+        CREATE TABLE IF NOT EXISTS repair_plans(id TEXT PRIMARY KEY, created_at TEXT NOT NULL,
+          plan TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0);
         """)
         acl_columns = {row[1] for row in db.execute("PRAGMA table_info(acl)")}
         if "revision" not in acl_columns:
@@ -458,6 +465,136 @@ def create_app(settings=None):
         cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat().replace("+00:00", "Z")
         with transaction(catalogue) as db:
             db.execute("DELETE FROM operations WHERE state!='pending' AND created_at<?", (cutoff,))
+
+    # Explicit, dry-run-first repair plans for the safe subset of consistency findings
+    # (Issue #81). Startup recovery already handles these at boot; the endpoint exists so
+    # a long-running service does not have to restart, and every applied action is audited.
+    repair_plan_ttl_seconds = 600
+    repair_max_actions = 500
+    repairable_kinds = ("interrupted_table_delete", "table_path_mismatch", "table_deletion_marker")
+
+    def repair_candidates():
+        actions = []
+        with connect(catalogue) as db:
+            tables = {row["id"]: dict(row) for row in db.execute("SELECT id,path FROM tables")}
+        for tombstone in sorted(table_directory.glob(".*.xl.deleting")):
+            table_id = tombstone.name[1 : -len(".xl.deleting")]
+            try:
+                if str(UUID(table_id)) != table_id:
+                    continue
+            except ValueError:
+                continue
+            actions.append({
+                "kind": "interrupted_table_delete",
+                "table_id": table_id,
+                "action": "restore" if table_id in tables else "finish",
+            })
+        for table_id, table in sorted(tables.items()):
+            try:
+                if str(UUID(table_id)) != table_id:
+                    continue
+            except ValueError:
+                continue
+            database = table_directory / f"{table_id}.xl"
+            if not database.is_file():
+                continue
+            try:
+                with connect(database) as db:
+                    meta = db.execute("SELECT logical_path FROM __xl_meta").fetchone()
+                    meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+                    deleting = (
+                        db.execute("SELECT deleting FROM __xl_meta").fetchone()[0]
+                        if "deleting" in meta_columns
+                        else 0
+                    )
+            except sqlite3.DatabaseError:
+                continue
+            if meta is None:
+                continue
+            if meta[0] != table["path"]:
+                actions.append({
+                    "kind": "table_path_mismatch",
+                    "table_id": table_id,
+                    "action": "reconcile_path",
+                    "from": meta[0],
+                    "to": table["path"],
+                })
+            if deleting:
+                actions.append({
+                    "kind": "table_deletion_marker",
+                    "table_id": table_id,
+                    "action": "clear_deleting_marker",
+                })
+        actions.sort(key=lambda item: (item["kind"], item["table_id"], item["action"]))
+        return actions
+
+    def repair_counts(actions):
+        by_kind = {kind: 0 for kind in repairable_kinds}
+        for action in actions:
+            by_kind[action["kind"]] += 1
+        return {"actions": len(actions), "by_kind": by_kind}
+
+    def apply_repair_actions(actor, actions):
+        applied = []
+        for action in actions:
+            kind, table_id = action["kind"], action["table_id"]
+            result = "skipped"
+            if kind == "interrupted_table_delete":
+                with table_lock(table_id):
+                    tombstone = table_directory / f".{table_id}.xl.deleting"
+                    target = table_directory / f"{table_id}.xl"
+                    if not tombstone.exists():
+                        result = "skipped-missing-tombstone"
+                    else:
+                        with connect(catalogue) as db:
+                            in_catalogue = (
+                                db.execute("SELECT 1 FROM tables WHERE id=?", (table_id,)).fetchone() is not None
+                            )
+                        if in_catalogue:
+                            if not target.exists():
+                                os.replace(tombstone, target)
+                            else:
+                                tombstone.unlink(missing_ok=True)
+                            if target.is_file():
+                                with transaction(target) as db:
+                                    columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+                                    if "deleting" in columns:
+                                        db.execute("UPDATE __xl_meta SET deleting=0")
+                            result = "restored"
+                        else:
+                            cleanup_table_uploads(table_id)
+                            tombstone.unlink(missing_ok=True)
+                            result = "finished"
+            elif kind == "table_path_mismatch":
+                database = table_directory / f"{table_id}.xl"
+                if not database.is_file():
+                    result = "skipped-missing-file"
+                else:
+                    with table_lock(table_id), transaction(database) as db:
+                        meta = db.execute("SELECT logical_path FROM __xl_meta").fetchone()
+                        if meta is not None and meta[0] == action["to"]:
+                            result = "already-reconciled"
+                        else:
+                            db.execute(
+                                "UPDATE __xl_meta SET logical_path=?,table_revision=table_revision+1,updated_at=?",
+                                (action["to"], now()),
+                            )
+                            result = "reconciled"
+            elif kind == "table_deletion_marker":
+                database = table_directory / f"{table_id}.xl"
+                if not database.is_file():
+                    result = "skipped-missing-file"
+                else:
+                    with table_lock(table_id), transaction(database) as db:
+                        columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+                        if "deleting" not in columns:
+                            result = "no-marker"
+                        else:
+                            db.execute("UPDATE __xl_meta SET deleting=0")
+                            result = "cleared"
+            applied.append({**action, "result": result})
+            audit(actor, "maintenance.repaired", f"{kind}:{table_id}:{result}")
+        return applied
 
     def table_info(tid):
         with connect(catalogue) as db:
@@ -1413,6 +1550,59 @@ def create_app(settings=None):
     def maintenance_consistency(request: Request, actor=Depends(scope("xelibrary:admin"))):
         """Read-only catalogue/file/attachment/object consistency scan (Issue #81)."""
         return response(request, scan_library(root))
+
+    @app.post("/api/v1/maintenance/consistency/repairs")
+    def maintenance_repairs(body: RepairRequest, request: Request, actor=Depends(scope("xelibrary:admin"))):
+        """Dry-run-first repair plans for tombstones and catalogue/metadata path drift (Issue #81)."""
+        actions = repair_candidates()
+        if len(actions) > repair_max_actions:
+            raise APIError(
+                413,
+                "REPAIR_TOO_LARGE",
+                f"more than {repair_max_actions} repair actions; resolve in smaller batches",
+            )
+        if body.dry_run:
+            plan_id = str(uuid4())
+            plan_cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+            with transaction(catalogue) as db:
+                db.execute("DELETE FROM repair_plans WHERE used=1 OR created_at<?", (plan_cutoff,))
+                db.execute(
+                    "INSERT INTO repair_plans VALUES(?,?,?,0)",
+                    (plan_id, now(), json.dumps(actions, ensure_ascii=False)),
+                )
+            return response(request, {
+                "dry_run": True,
+                "plan_id": plan_id,
+                "actions": actions,
+                "counts": repair_counts(actions),
+                "repairable_kinds": list(repairable_kinds),
+            })
+        if not body.plan_id:
+            raise APIError(422, "REPAIR_PLAN_REQUIRED", "plan_id from a dry-run is required")
+        with connect(catalogue) as db:
+            plan = db.execute("SELECT * FROM repair_plans WHERE id=?", (body.plan_id,)).fetchone()
+        if plan is None:
+            raise APIError(404, "REPAIR_PLAN_NOT_FOUND", "repair plan not found")
+        if plan["used"]:
+            raise APIError(409, "REPAIR_PLAN_USED", "repair plan was already applied")
+        created = datetime.fromisoformat(plan["created_at"].replace("Z", "+00:00"))
+        if (datetime.now(timezone.utc) - created).total_seconds() > repair_plan_ttl_seconds:
+            raise APIError(409, "REPAIR_PLAN_EXPIRED", "repair plan expired; run a new dry-run")
+        if json.loads(plan["plan"]) != actions:
+            raise APIError(
+                409,
+                "REPAIR_PLAN_STALE",
+                "library state changed since the dry-run; run a new dry-run",
+            )
+        applied = apply_repair_actions(actor, actions)
+        with transaction(catalogue) as db:
+            db.execute("UPDATE repair_plans SET used=1 WHERE id=?", (body.plan_id,))
+        return response(request, {
+            "dry_run": False,
+            "plan_id": body.plan_id,
+            "applied": applied,
+            "counts": repair_counts(actions),
+        })
 
     @app.get("/api/v1/storage/telemetry")
     def storage_telemetry(request: Request, actor=Depends(scope("xelibrary:admin"))):

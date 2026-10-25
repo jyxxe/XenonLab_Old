@@ -709,6 +709,43 @@
         }
       }
     },
+    "/api/v1/maintenance/consistency/repairs": {
+      "post": {
+        "summary": "Maintenance Repairs",
+        "description": "Dry-run-first repair plans for tombstones and catalogue/metadata path drift (Issue #81).",
+        "operationId": "maintenance_repairs_api_v1_maintenance_consistency_repairs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepairRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/storage/telemetry": {
       "get": {
         "summary": "Storage Telemetry",
@@ -4108,6 +4145,30 @@
           "expression"
         ],
         "title": "QueryBody"
+      },
+      "RepairRequest": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": true
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          }
+        },
+        "type": "object",
+        "title": "RepairRequest"
       },
       "Restore": {
         "properties": {
