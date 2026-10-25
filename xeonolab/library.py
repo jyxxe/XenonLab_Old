@@ -391,7 +391,10 @@ def create_app(settings=None):
             pending = [dict(row) for row in db.execute(
                 "SELECT * FROM operations WHERE state='pending' ORDER BY created_at"
             )]
-            table_ids = {row[0] for row in db.execute("SELECT id FROM tables")}
+            catalogue_paths = {
+                row["id"]: row["path"] for row in db.execute("SELECT id,path FROM tables")
+            }
+        table_ids = set(catalogue_paths)
         for operation in pending:
             operation_id, kind, table_id = operation["id"], operation["kind"], operation["table_id"]
             state, note = "completed", None
@@ -412,6 +415,34 @@ def create_app(settings=None):
                 if table_id in table_ids:
                     state = "aborted"
                     note = "table still in catalogue; deletion rolled back"
+            elif kind == "table.move":
+                if table_id not in catalogue_paths:
+                    state, note = "aborted", "table is no longer in the catalogue"
+                else:
+                    try:
+                        payload = json.loads(operation["payload"])
+                    except (TypeError, ValueError):
+                        payload = {}
+                    target_path = catalogue_paths[table_id]
+                    source_path = payload.get("from")
+                    table_file = table_directory / f"{table_id}.xl"
+                    if not table_file.is_file():
+                        state, note = "aborted", "table file is missing; consistency scan reports the gap"
+                    elif target_path == source_path:
+                        # The catalogue commit never happened, so the move rolled back.
+                        state, note = "aborted", "move did not commit; catalogue path is unchanged"
+                    else:
+                        with table_lock(table_id), transaction(table_file) as db:
+                            meta = dict(db.execute("SELECT * FROM __xl_meta").fetchone() or {})
+                            if meta.get("deleting"):
+                                state, note = "aborted", "table is being deleted"
+                            elif meta.get("logical_path") != target_path:
+                                db.execute(
+                                    "UPDATE __xl_meta SET logical_path=?,table_revision=table_revision+1,"
+                                    "updated_at=?",
+                                    (target_path, now()),
+                                )
+                                note = f"reconciled table metadata path to catalogue path {target_path!r}"
             else:
                 state = "aborted"
                 note = f"unsupported operation kind {kind!r}"
@@ -917,18 +948,24 @@ def create_app(settings=None):
         path = clean_path(body.path)
         if not allowed(actor, {**table, "path": path, "id": ""}, "write"):
             raise APIError(403, "XL_FORBIDDEN", "destination path permission denied")
-        with table_transaction(tid) as db, transaction(catalogue) as catalog:
-            meta = metadata(db)
-            precondition(request, meta["table_revision"])
-            remove_qdrant_points(tid)
-            try:
-                catalog.execute("UPDATE tables SET path=? WHERE id=?", (path, tid))
-            except Exception:
-                raise APIError(409, "TABLE_EXISTS", "destination table already exists") from None
-            db.execute(
-                "UPDATE __xl_meta SET logical_path=?,table_revision=table_revision+1,updated_at=?",
-                (path, now()),
-            )
+        operation_id = begin_operation("table.move", tid, {"from": table["path"], "to": path})
+        try:
+            with table_transaction(tid) as db, transaction(catalogue) as catalog:
+                meta = metadata(db)
+                precondition(request, meta["table_revision"])
+                remove_qdrant_points(tid)
+                try:
+                    catalog.execute("UPDATE tables SET path=? WHERE id=?", (path, tid))
+                except Exception:
+                    raise APIError(409, "TABLE_EXISTS", "destination table already exists") from None
+                db.execute(
+                    "UPDATE __xl_meta SET logical_path=?,table_revision=table_revision+1,updated_at=?",
+                    (path, now()),
+                )
+            finish_operation(operation_id)
+        except BaseException as exc:
+            abort_operation(operation_id, exc)
+            raise
         audit(actor, "table.moved", tid)
         return response(request, {"table_id": tid, "path": path})
 
