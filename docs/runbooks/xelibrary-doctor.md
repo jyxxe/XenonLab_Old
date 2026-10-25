@@ -67,6 +67,8 @@ Authorization: Bearer <token>
 
 该端点处理与启动恢复一致的墓碑/路径/标记问题，并可**隔离**孤儿 `.xl`：孤儿文件必须已超过
 300 秒宽限期且 catalogue 无记录；执行只是移动到 `tables/.quarantine/`（0700），不删除内容，
-扫描会以 `quarantined_table_file` 提示复核。恢复需人工核对 `__xl_meta.table_id` 与备份后移回
-`tables/<uuid>.xl`；当前没有自动恢复端点。计划生成前请先确认 catalogue 是期望的权威状态；
+扫描会以 `quarantined_table_file` 提示复核。当 catalogue 表仍存在、规范 `.xl` 缺失且隔离副本的
+`__xl_meta.table_id` 完全匹配时，修复计划提供 `restore_from_quarantine`，执行会在表锁内复核并移回
+文件（连同 sidecar）；其余隔离文件需人工核对 `__xl_meta.table_id` 与备份后移回 `tables/<uuid>.xl`，
+没有"丢弃隔离文件"的自动动作。计划生成前请先确认 catalogue 是期望的权威状态；
 该端点不替代备份。

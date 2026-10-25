@@ -108,3 +108,8 @@ catalogue/元数据路径对账与 deleting 标记清除；孤儿 `.xl` 回收�
 第十增量（Issue #81 第六增量，2026-10-25）：修复计划新增孤儿 `.xl` 的**非破坏性隔离**。扫描候选要求
 catalogue 无记录且 mtime 超过 300 秒宽限期；执行仅把文件移动到 `tables/.quarantine/`（0700），写审计，
 不删除内容。扫描器把隔离文件报告为 `quarantined_table_file` warning 而非孤儿；恢复需人工核对后移回。
+
+第十一增量（Issue #81 第七增量，2026-10-25）：隔离恢复。当 catalogue 表存在但规范 `.xl` 缺失、
+且隔离目录中存在 `__xl_meta.table_id` 匹配的副本时，修复计划可 `restore_from_quarantine`：表锁内复核
+catalogue/目标/identity 后移回主文件并带走 sidecar。identity 不匹配或状态变化一律跳过/stale；
+不提供丢弃隔离文件的动作，恢复后仍需按 runbook 抽查。

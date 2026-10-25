@@ -472,7 +472,8 @@ def create_app(settings=None):
     repair_plan_ttl_seconds = 600
     repair_max_actions = 500
     repairable_kinds = (
-        "interrupted_table_delete", "table_path_mismatch", "table_deletion_marker", "orphan_table_file"
+        "interrupted_table_delete", "table_path_mismatch", "table_deletion_marker", "orphan_table_file",
+        "catalogue_table_file_missing",
     )
 
     def repair_candidates():
@@ -546,6 +547,38 @@ def create_app(settings=None):
                 "table_id": table_id,
                 "action": "quarantine",
             })
+        quarantine_dir = table_directory / ".quarantine"
+        if quarantine_dir.is_dir():
+            quarantined = {}
+            for entry in sorted(quarantine_dir.iterdir(), key=lambda item: item.name):
+                if not entry.is_file() or entry.name.startswith("."):
+                    continue
+                queued_table_id = entry.name.split(".", 1)[0]
+                try:
+                    if str(UUID(queued_table_id)) != queued_table_id:
+                        continue
+                except (ValueError, AttributeError):
+                    continue
+                quarantined.setdefault(queued_table_id, []).append(entry)
+            for queued_table_id, entries in sorted(quarantined.items()):
+                database = table_directory / f"{queued_table_id}.xl"
+                if queued_table_id not in tables or database.is_file():
+                    continue
+                for entry in entries:
+                    try:
+                        with sqlite3.connect(f"file:{entry}?mode=ro", uri=True) as check:
+                            identity = check.execute("SELECT table_id FROM __xl_meta").fetchone()
+                    except sqlite3.DatabaseError:
+                        continue
+                    if identity is None or identity[0] != queued_table_id:
+                        continue
+                    actions.append({
+                        "kind": "catalogue_table_file_missing",
+                        "table_id": queued_table_id,
+                        "action": "restore_from_quarantine",
+                        "file": entry.name,
+                    })
+                    break
         actions.sort(key=lambda item: (item["kind"], item["table_id"], item["action"]))
         return actions
 
@@ -612,7 +645,43 @@ def create_app(settings=None):
                     if destination.exists():
                         destination = quarantine / f"{table_id}.{uuid4().hex}.xl"
                     os.replace(source, destination)
+                    for suffix in ("-wal", "-shm", "-journal"):
+                        sidecar = source.with_name(source.name + suffix)
+                        if sidecar.exists():
+                            os.replace(sidecar, destination.with_name(destination.name + suffix))
                     result = "quarantined"
+            elif kind == "catalogue_table_file_missing":
+                database = table_directory / f"{table_id}.xl"
+                quarantine_dir = table_directory / ".quarantine"
+                source = quarantine_dir / action["file"]
+                with table_lock(table_id):
+                    with connect(catalogue) as db:
+                        in_catalogue = (
+                            db.execute("SELECT 1 FROM tables WHERE id=?", (table_id,)).fetchone() is not None
+                        )
+                    if not in_catalogue:
+                        result = "skipped-no-catalogue-row"
+                    elif database.exists():
+                        result = "skipped-file-present"
+                    elif not source.is_file():
+                        result = "skipped-missing-quarantine"
+                    else:
+                        try:
+                            with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as check:
+                                identity = check.execute("SELECT table_id FROM __xl_meta").fetchone()
+                        except sqlite3.DatabaseError:
+                            identity = None
+                        if identity is None or identity[0] != table_id:
+                            result = "skipped-identity-mismatch"
+                        else:
+                            os.replace(source, database)
+                            for suffix in ("-wal", "-shm", "-journal"):
+                                sidecar_source = source.with_name(source.name + suffix)
+                                if sidecar_source.exists():
+                                    os.replace(
+                                        sidecar_source, database.with_name(database.name + suffix)
+                                    )
+                            result = "restored-from-quarantine"
             elif kind == "table_deletion_marker":
                 database = table_directory / f"{table_id}.xl"
                 if not database.is_file():
