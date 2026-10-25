@@ -65,5 +65,8 @@ Authorization: Bearer <token>
    只能使用一次，若扫描状态已变化会返回 `REPAIR_PLAN_STALE` 且不执行。
 3. 每项动作写 `maintenance.repaired` 审计；完成后重新扫描复查。
 
-该端点只处理与启动恢复一致的墓碑/路径/标记三类问题，不会删除孤儿 `.xl`，也不替代备份；
-计划生成前请先确认 catalogue 是期望的权威状态。
+该端点处理与启动恢复一致的墓碑/路径/标记问题，并可**隔离**孤儿 `.xl`：孤儿文件必须已超过
+300 秒宽限期且 catalogue 无记录；执行只是移动到 `tables/.quarantine/`（0700），不删除内容，
+扫描会以 `quarantined_table_file` 提示复核。恢复需人工核对 `__xl_meta.table_id` 与备份后移回
+`tables/<uuid>.xl`；当前没有自动恢复端点。计划生成前请先确认 catalogue 是期望的权威状态；
+该端点不替代备份。

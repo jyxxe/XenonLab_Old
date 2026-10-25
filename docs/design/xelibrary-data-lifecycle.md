@@ -104,3 +104,7 @@ catalogue/元数据路径对账与 deleting 标记清除；孤儿 `.xl` 回收�
 `table_revision_lagging`、`change_revision_ahead`、`table_schema_empty`、`stale_vector_reference`、
 `invalid_indexed_revision`，以及 catalogue `index_jobs` 的无效 payload/未知表引用。均为只读检测，
 不自动删除或重建向量；revision 元数据 critical 项需先备份现场再由维护者处理。
+
+第十增量（Issue #81 第六增量，2026-10-25）：修复计划新增孤儿 `.xl` 的**非破坏性隔离**。扫描候选要求
+catalogue 无记录且 mtime 超过 300 秒宽限期；执行仅把文件移动到 `tables/.quarantine/`（0700），写审计，
+不删除内容。扫描器把隔离文件报告为 `quarantined_table_file` warning 而非孤儿；恢复需人工核对后移回。
