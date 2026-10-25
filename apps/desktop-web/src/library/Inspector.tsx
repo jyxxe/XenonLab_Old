@@ -37,6 +37,7 @@ export function Inspector({
   indexStatus,
   indexStatusError,
   canAdmin,
+  canWrite: canWriteProp,
   onReloadJobs,
   onReloadIndexStatus,
   onReindex,
@@ -71,6 +72,7 @@ export function Inspector({
   indexStatus: IndexStatus | null;
   indexStatusError: unknown;
   canAdmin: boolean;
+  canWrite?: boolean;
   onReloadJobs: () => void;
   onReloadIndexStatus: () => void;
   onReindex: () => void;
@@ -127,7 +129,7 @@ export function Inspector({
   }, [context]);
   useEffect(() => () => { mutation.current.generation += 1; }, []);
 
-  const canWrite = scopes.includes('xelibrary:write');
+  const canWrite = canWriteProp ?? scopes.includes('xelibrary:write');
   const canAttach = scopes.includes('xelibrary:attach');
 
   useEffect(() => {
@@ -300,7 +302,7 @@ export function Inspector({
           <div className="inspector-overview">
             {selectionSize > 1 && (<div className="inspector-bulk" aria-label="批量字段应用">
                 <p className="muted">已选择 {selectionSize} 行；把同一字段值应用到所选记录。</p>
-                {scopes.includes('xelibrary:write') ? (
+                {canWrite ? (
                   <>
                     <label>字段<Select aria-label="批量字段" value={bulkField} onChange={event => setBulkField(event.target.value)}>
                       <option value="">选择字段</option>
@@ -388,7 +390,7 @@ export function Inspector({
                 <Button disabled={busy} onClick={() => void restore(row._revision)}>恢复为有效</Button>
               )}
             </div>
-            {!canWrite && <p className="muted">当前身份没有 xelibrary:write，字段为只读。</p>}
+            {!canWrite && <p className="muted">当前身份或当前表 ACL 不允许写入，字段为只读。</p>}
           </div>
         )}
 

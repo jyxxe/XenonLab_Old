@@ -12,6 +12,7 @@ export type Table = {
   updated_at?: string;
   created_by?: string;
   columns?: Column[];
+  permissions?: {read?: boolean; write?: boolean; attach?: boolean};
 };
 
 export type Row = {

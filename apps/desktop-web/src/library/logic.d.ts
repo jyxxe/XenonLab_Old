@@ -109,3 +109,4 @@ export function orderedColumns(columns: Column[], preference: unknown): Column[]
 export function moveColumn(columns: Column[], preference: unknown, name: string, direction: number): string[];
 export function clampColumnWidth(width: number): number;
 export function keyboardColumnWidth(width: number, key: string, shift?: boolean): number | null;
+export function tableWriteAllowed(scopes: string[] | undefined, table: {permissions?: {write?: boolean}} | null | undefined): boolean;

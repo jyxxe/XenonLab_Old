@@ -756,29 +756,37 @@ def create_app(settings=None):
         if cleanup:
             cleanup(tid, row_id)
 
-    def allowed(actor, table, action, row_id=None):
+    def allowed(actor, table, action, row_id=None, db=None):
         if "xelibrary:admin" in actor.scopes:
             return True
-        with connect(catalogue) as db:
-            resources = [("row", f"{table['id']}:{row_id}")] if row_id else []
-            resources += [("table", table["id"])]
-            path = table["path"]
-            while True:
-                resources.append(("path", path))
-                if path == "/":
-                    break
-                path = str(PurePosixPath(path).parent)
-            for kind, rid in resources:
-                acl = db.execute(
-                    "SELECT grants,explicit FROM acl WHERE resource_type=? AND resource_id=?", (kind, rid)
-                ).fetchone()
-                if acl and acl["explicit"]:
-                    grants = json.loads(acl[0])
-                    for principal in (actor.sub, *actor.ancestors):
-                        if principal in grants:
-                            return action in grants[principal] or action in grants.get("*", [])
-                    return action in grants.get("*", [])
+        if db is None:
+            with connect(catalogue) as connection:
+                return allowed(actor, table, action, row_id, connection)
+        resources = [("row", f"{table['id']}:{row_id}")] if row_id else []
+        resources += [("table", table["id"])]
+        path = table["path"]
+        while True:
+            resources.append(("path", path))
+            if path == "/":
+                break
+            path = str(PurePosixPath(path).parent)
+        for kind, rid in resources:
+            acl = db.execute(
+                "SELECT grants,explicit FROM acl WHERE resource_type=? AND resource_id=?", (kind, rid)
+            ).fetchone()
+            if acl and acl["explicit"]:
+                grants = json.loads(acl[0])
+                for principal in (actor.sub, *actor.ancestors):
+                    if principal in grants:
+                        return action in grants[principal] or action in grants.get("*", [])
+                return action in grants.get("*", [])
         return table["owner"] in (actor.sub, *actor.ancestors)
+
+    def table_permissions(actor, table, db=None):
+        """Caller-visible table permissions; the account tree and ACL are evaluated server-side."""
+        return {
+            action: allowed(actor, table, action, db=db) for action in ("read", "write", "attach")
+        }
 
     def request_acl(actor, table):
         """Load a table's ACL policies once and reuse them for this request's rows."""
@@ -985,7 +993,13 @@ def create_app(settings=None):
             raise APIError(422, "INVALID_LIMIT", "limit outside range")
         with connect(catalogue) as db:
             tables = [dict(t) for t in db.execute("SELECT * FROM tables WHERE id>? ORDER BY id", (cursor,))]
-        visible = [t for t in tables if allowed(actor, t, "read")][: limit + 1]
+            visible = []
+            for table in tables:
+                if not allowed(actor, table, "read", db=db):
+                    continue
+                visible.append({**table, "permissions": table_permissions(actor, table, db)})
+                if len(visible) > limit:
+                    break
         return response(
             request, visible[:limit], next_cursor=visible[limit - 1]["id"] if len(visible) > limit else None
         )
@@ -995,7 +1009,12 @@ def create_app(settings=None):
     def get_table(tid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
         table = authorize(actor, tid, "read")
         with table_connect(tid) as db:
-            data = {**table, **metadata(db), "columns": columns(db)}
+            data = {
+                **table,
+                **metadata(db),
+                "columns": columns(db),
+                "permissions": table_permissions(actor, table),
+            }
         return JSONResponse(response(request, data), headers={"ETag": etag(data["table_revision"])})
 
     @app.delete(
