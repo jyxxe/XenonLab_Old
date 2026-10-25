@@ -105,8 +105,12 @@ test('System storage tab shows the verified HF-cache pool watermark or honest un
     // Success: pool and guest usage, watermark, cached bytes and the verified sampling time.
     await openStorage('?storageCase=ok');
     await waitFor(()=>cdp.evaluate("!!document.querySelector('.dev-meta')"),'storage water level');
+    await waitFor(()=>cdp.evaluate("document.body.innerText.includes('changes 42 行')"),'library storage telemetry');
     const ok=await cdp.evaluate(`(() => ({text:document.querySelector('.system-content').innerText,sampled:document.querySelector('.dev-meta')?.innerText.includes('采样时间'),path:document.body.innerText.includes('/srv/hf-cache')}))()`);
     assert.match(ok.text,/aux-10t/);
+    assert.match(ok.text,/XeLibrary 存储增长/);
+    assert.match(ok.text,/changes 42 行/);
+    assert.match(ok.text,/未被引用/);
     assert.match(ok.text,/池用量 72\.8%/);
     assert.match(ok.text,/正常/);
     assert.match(ok.text,/TiB/);

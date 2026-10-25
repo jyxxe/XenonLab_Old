@@ -39,6 +39,8 @@ export function System(props: AppViewProps) {
   const [ready,setReady] = useState<{service:string;ready:boolean}|null>(null);
   const [storage,setStorage] = useState<any|null>(null);
   const [storageUnavailable,setStorageUnavailable] = useState(false);
+  const [libraryStorage,setLibraryStorage] = useState<any|null>(null);
+  const [libraryStorageUnavailable,setLibraryStorageUnavailable] = useState(false);
   const generation=useRef(0);
   const [online,setOnline] = useState(navigator.onLine);
   const [lanMessage,setLanMessage] = useState('');
@@ -55,7 +57,7 @@ export function System(props: AppViewProps) {
   useEffect(() => {
     let active = true;
     generation.current += 1;
-    setError('');setRows([]);setCursor(null);setReady(null);setLoadingMore(false);setStorage(null);setStorageUnavailable(false);
+    setError('');setRows([]);setCursor(null);setReady(null);setLoadingMore(false);setStorage(null);setStorageUnavailable(false);setLibraryStorage(null);setLibraryStorageUnavailable(false);
     const path = tab === 'embedding' ? '/jobs?limit=50' : tab === 'agents' ? '/work?limit=100' : tab === 'audit' ? '/audit?limit=100' : '';
     if (!path && tab !== 'services' && tab !== 'storage') {setLoading(false);return () => {generation.current += 1}}
     setLoading(true);
@@ -67,6 +69,16 @@ export function System(props: AppViewProps) {
           if (active) setReady({service:body.service || 'desktop-web',ready:response.ok});
         } else if (tab === 'storage') {
           const me = await api('/users/me');
+          if (me.scopes?.includes('xelibrary:admin')) {
+            try {
+              const telemetry = await api('/storage/telemetry');
+              if (active) setLibraryStorage(telemetry);
+            } catch (cause) {
+              if (active) setLibraryStorageUnavailable(true);
+            }
+          } else if (active) {
+            setLibraryStorageUnavailable(true);
+          }
           if (!me.scopes?.includes('hf-cache:read')) throw new Error('当前身份需要 hf-cache:read 权限才能查看缓存池水位。');
           try {
             const status = await api('/cache/storage');
@@ -149,7 +161,8 @@ export function System(props: AppViewProps) {
             } catch(cause) {if(generation.current===currentGeneration)setError(String(cause))}
             finally {if(generation.current===currentGeneration)setLoadingMore(false)}
           }}>{loadingMore ? '读取中…' : '加载更多'}</Button>}
-        </> : tab==='storage' ? storage ? <>
+        </> : tab==='storage' ? <>
+          {storage ? <>
           <dl className="dev-meta">
             <div><dt>共享物理池</dt><dd><Badge tone={watermarkTone(storage.watermark)}>{watermarkLabels[storage.watermark]||storage.watermark||'未知'}</Badge> {storage.pool||'未知池'} · 池用量 {storage.used_percent}%</dd></div>
             <div><dt>物理池用量</dt><dd>{formatBytes(storage.pool_used_bytes)} / {formatBytes(storage.pool_total_bytes)}</dd></div>
@@ -158,7 +171,18 @@ export function System(props: AppViewProps) {
             <div><dt>采样时间</dt><dd>{storage.sampled_at ? new Date(storage.sampled_at).toLocaleString() : '—'}</dd></div>
           </dl>
           <p className="muted">物理池与 guest 文件系统是同一共享池的两个视图，不能相加；空余空间取两者较小值。上游遥测缺失或过期时此处保持不可用，不展示缓存数字。</p>
-        </> : <EmptyState title="缓存池水位暂不可用" description="受信遥测缺失、过期或上游不可达；为避免误导，此处不展示任何缓存数字。可点击刷新重试。"/> : null}
+          </> : <EmptyState title="缓存池水位暂不可用" description="受信遥测缺失、过期或上游不可达；为避免误导，此处不展示任何缓存数字。可点击刷新重试。"/>}
+          {libraryStorage ? <>
+            <h3>XeLibrary 存储增长（只读）</h3>
+            <dl className="dev-meta">
+              <div><dt>知识表</dt><dd>{libraryStorage.totals?.tables ?? 0} 张 · changes {libraryStorage.totals?.changes_rows ?? 0} 行</dd></div>
+              <div><dt>附件引用</dt><dd>{libraryStorage.totals?.attachment_refs ?? 0} 个 · {formatBytes(libraryStorage.totals?.attachment_bytes ?? 0)}</dd></div>
+              <div><dt>内容寻址对象</dt><dd>{libraryStorage.attachment_objects?.total ?? 0} 个 · {formatBytes(libraryStorage.attachment_objects?.bytes_total ?? 0)}</dd></div>
+              <div><dt>未被引用</dt><dd>{libraryStorage.attachment_objects?.unreferenced ?? 0} 个 · {formatBytes(libraryStorage.attachment_objects?.bytes_unreferenced ?? 0)}</dd></div>
+            </dl>
+            <p className="muted">维护与回收需管理员通过显式维护端点执行（默认 dry-run）；此处仅展示只读指标，不自动删除数据。</p>
+          </> : libraryStorageUnavailable ? <p className="muted">需要 xelibrary:admin 权限查看 XeLibrary 存储增长指标。</p> : <p className="muted" role="status">正在读取 XeLibrary 存储增长指标…</p>}
+        </> : null}
       </>}
     </section>
   </div>;

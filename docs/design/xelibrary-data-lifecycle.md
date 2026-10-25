@@ -74,3 +74,6 @@
 
 第三增量：`GET /api/v1/storage/telemetry`（xelibrary:admin 只读）提供每表 changes/附件计数与
 内容寻址对象 referenced/unreferenced 字节数，供系统面板「存储」与运维监控消费；不做回收。
+
+第四增量：桌面系统面板「存储」新增只读「XeLibrary 存储增长」区（`xelibrary:admin`），
+消费 `/api/v1/storage/telemetry`；不提供自动维护操作。HF-cache 池水位仍依赖 #66 服务路由。
