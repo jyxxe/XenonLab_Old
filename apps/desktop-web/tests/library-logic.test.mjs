@@ -33,6 +33,7 @@ import {
   virtualWindow,
   withOffset,
   withQueryPagination,
+  tableWriteAllowed,
 } from '../src/library/logic.js';
 
 const tables = [
@@ -432,4 +433,14 @@ test('column resize shares limits and keyboard steps without treating grid keys 
   assert.equal(keyboardColumnWidth(137, 'Home'), 80);
   assert.equal(keyboardColumnWidth(137, 'End'), 520);
   for (const key of ['ArrowDown', 'Enter', 'Escape', 'Tab']) assert.equal(keyboardColumnWidth(137, key), null);
+});
+
+
+test('table write gating prefers server ACL permission over identity scope', () => {
+  assert.equal(tableWriteAllowed(['xelibrary:read', 'xelibrary:write'], {permissions: {write: false}}), false);
+  assert.equal(tableWriteAllowed(['xelibrary:read'], {permissions: {write: true}}), true);
+  assert.equal(tableWriteAllowed(['xelibrary:read', 'xelibrary:write'], {permissions: {read: true, write: true}}), true);
+  assert.equal(tableWriteAllowed(['xelibrary:read', 'xelibrary:write'], {}), true, 'legacy responses fall back to scope');
+  assert.equal(tableWriteAllowed(['xelibrary:read'], {}), false);
+  assert.equal(tableWriteAllowed(undefined, {}), false);
 });

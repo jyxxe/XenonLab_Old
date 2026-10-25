@@ -17,6 +17,7 @@ import {NewTableDialog} from './NewTableDialog';
 import {useCatalogue, useIndexStatus, useJobs, useLibraryPrefs, useQueryConsole, useScopes, useSearch, useTableSession, useTheorems} from './hooks';
 import {AskAIDialog} from './AskAIDialog';
 import {createRequestLifetime} from './request-lifetime.js';
+import {tableWriteAllowed} from './logic.js';
 import {ancestorPaths, changedFields, classifySchemaChange, describeError, filterRows, loadedDeletedRow, rowSelectionRange, sortRows} from './logic.js';
 import type {RecentEntry, Row, SearchHit, SelectionAIAction, Table} from './types';
 
@@ -127,6 +128,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const canReadTheorems = scopes.includes('xelibrary:theorem:read');
   const canPromoteTheorems = scopes.includes('xelibrary:theorem:promote');
   const table = session.table;
+  const tableWritable = tableWriteAllowed(scopes, table);
   const inspectorDraft = useRef<InspectorDraftState | null>(null);
   const rowClickFocus = useRef<FieldFocus | null>(null);
   const [pendingRowSwitch, setPendingRowSwitch] = useState<PendingRowSwitch | null>(null);
@@ -751,8 +753,8 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
                 </p>
               </div>
               <div className="library-table-actions">
-                <Button size="sm" disabled={!canWrite} onClick={() => { setInspectorOpen(true); setInspectorTab('fields'); setActiveRowId(null); setSelection(new Set()); }}>新增记录</Button>
-                <Button size="sm" onClick={() => setDialog('move')} disabled={!canWrite}>移动</Button>
+                <Button size="sm" disabled={!tableWritable} onClick={() => { setInspectorOpen(true); setInspectorTab('fields'); setActiveRowId(null); setSelection(new Set()); }}>新增记录</Button>
+                <Button size="sm" onClick={() => setDialog('move')} disabled={!tableWritable}>移动</Button>
                 <Button size="sm" onClick={() => { setSchemaDraft((table.columns || []).map(column => ({...column}))); setDestructiveConfirmed(false); setDialog('schema'); }} disabled={!canAdmin}>字段定义</Button>
                 <Button size="sm" variant="danger" onClick={() => setDialog('delete')} disabled={!canAdmin}>删除表</Button>
                 <Button size="sm" variant="ghost" onClick={() => setInspectorOpen(value => !value)}>{inspectorOpen ? '隐藏 Inspector' : '显示 Inspector'}</Button>
@@ -794,7 +796,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
                 if (rows.length === 1) setActiveRowId(rows[0]._row_id);
                 setAskAI('ask');
               }}
-              canWrite={canWrite}
+              canWrite={tableWritable}
             />
           </>
         )}
@@ -822,6 +824,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
           indexStatus={indexStatus}
           indexStatusError={indexStatusError}
           canAdmin={canAdmin}
+          canWrite={tableWritable}
           onReloadJobs={() => void reloadJobs()}
           onReloadIndexStatus={() => void reloadIndexStatus()}
           onReindex={() => void reindex()}

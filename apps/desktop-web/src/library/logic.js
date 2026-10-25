@@ -694,3 +694,11 @@ export function keyboardColumnWidth(width, key, shift = false) {
   if (key === 'ArrowRight') return clampColumnWidth(width + step);
   return null;
 }
+
+
+/** Table write gate: prefer the caller's server-computed table ACL permission over the identity scope. */
+export function tableWriteAllowed(scopes, table) {
+  const permission = table?.permissions;
+  if (permission && typeof permission.write === 'boolean') return permission.write;
+  return Array.isArray(scopes) && scopes.includes('xelibrary:write');
+}
