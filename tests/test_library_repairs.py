@@ -192,6 +192,8 @@ def test_dry_run_lists_only_aged_orphan_table_files(library, tmp_path):
 
 def test_apply_quarantines_orphan_without_deleting(library, tmp_path):
     table_id, orphan = make_orphan_file(tmp_path)
+    sidecar = orphan.with_name(orphan.name + "-wal")
+    sidecar.write_bytes(b"wal bytes")
     plan = repair(library).json()["data"]
     applied = apply_plan(library, plan["plan_id"])
     assert applied.status_code == 200, applied.text
@@ -201,6 +203,8 @@ def test_apply_quarantines_orphan_without_deleting(library, tmp_path):
     quarantined = list((tmp_path / "tables" / ".quarantine").glob("*.xl"))
     assert [path.name for path in quarantined] == [f"{table_id}.xl"]
     assert quarantined[0].read_bytes() == b"orphan table bytes"
+    assert (tmp_path / "tables" / ".quarantine" / f"{table_id}.xl-wal").read_bytes() == b"wal bytes"
+    assert not sidecar.exists()
     with sqlite3.connect(tmp_path / "catalogue.sqlite") as db:
         assert db.execute(
             "SELECT 1 FROM audit WHERE event='maintenance.repaired' AND resource LIKE 'orphan_table_file:%'"
@@ -217,6 +221,66 @@ def test_orphan_quarantine_plan_goes_stale_when_file_disappears(library, tmp_pat
     _, orphan = make_orphan_file(tmp_path)
     plan = repair(library).json()["data"]
     orphan.unlink()
+
+    stale = apply_plan(library, plan["plan_id"])
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "REPAIR_PLAN_STALE"
+
+
+def make_quarantine_dir(root):
+    quarantine = root / "tables" / ".quarantine"
+    quarantine.mkdir(mode=0o700, exist_ok=True)
+    return quarantine
+
+
+def test_apply_restores_missing_catalogue_file_from_quarantine(library, tmp_path):
+    table_id = create_empty_table(library)
+    quarantine = make_quarantine_dir(tmp_path)
+    canonical = tmp_path / "tables" / f"{table_id}.xl"
+    original = canonical.read_bytes()
+    canonical.rename(quarantine / f"{table_id}.xl")
+
+    plan = repair(library).json()["data"]
+    action = next(item for item in plan["actions"] if item["kind"] == "catalogue_table_file_missing")
+    assert action["action"] == "restore_from_quarantine"
+    assert action["file"] == f"{table_id}.xl"
+
+    applied = apply_plan(library, plan["plan_id"])
+    assert applied.status_code == 200, applied.text
+    result = next(
+        item for item in applied.json()["data"]["applied"] if item["kind"] == "catalogue_table_file_missing"
+    )
+    assert result["result"] == "restored-from-quarantine"
+    assert canonical.read_bytes() == original
+    assert not (quarantine / f"{table_id}.xl").exists()
+
+    data = consistency(library)
+    kinds = {issue["kind"] for issue in data["issues"]}
+    assert "catalogue_table_file_missing" not in kinds
+    assert data["counts"]["quarantined_table_files"] == 0
+
+
+def test_quarantined_file_with_other_identity_is_not_restored(library, tmp_path):
+    table_id = create_empty_table(library)
+    other_id = create_empty_table(library, name="其他表")
+    quarantine = make_quarantine_dir(tmp_path)
+    canonical = tmp_path / "tables" / f"{table_id}.xl"
+    canonical.rename(tmp_path / "detached.xl")
+    (tmp_path / "tables" / f"{other_id}.xl").rename(quarantine / f"{table_id}.xl")
+
+    plan = repair(library).json()["data"]
+    assert not [item for item in plan["actions"] if item["kind"] == "catalogue_table_file_missing"]
+    data = consistency(library)
+    assert "quarantined_table_file" in {issue["kind"] for issue in data["issues"]}
+
+
+def test_restore_plan_goes_stale_when_quarantined_file_disappears(library, tmp_path):
+    table_id = create_empty_table(library)
+    quarantine = make_quarantine_dir(tmp_path)
+    canonical = tmp_path / "tables" / f"{table_id}.xl"
+    canonical.rename(quarantine / f"{table_id}.xl")
+    plan = repair(library).json()["data"]
+    (quarantine / f"{table_id}.xl").unlink()
 
     stale = apply_plan(library, plan["plan_id"])
     assert stale.status_code == 409

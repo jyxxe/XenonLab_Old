@@ -135,7 +135,7 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
     quarantine = tables_dir / ".quarantine"
     if quarantine.is_dir():
         for entry in sorted(quarantine.iterdir(), key=lambda item: item.name):
-            if entry.is_file() and not entry.name.startswith("."):
+            if entry.is_file() and not entry.name.startswith(".") and entry.name.endswith(".xl"):
                 counts["quarantined_table_files"] += 1
                 add(
                     "quarantined_table_file",
@@ -220,11 +220,17 @@ def scan_library(root, *, max_issues=MAX_ISSUES):
             continue
         database = tables_dir / f"{table_id}.xl"
         if not database.is_file():
+            detail = "catalogue entry has no canonical table file"
+            quarantine_dir = tables_dir / ".quarantine"
+            if quarantine_dir.is_dir() and any(
+                candidate.is_file() for candidate in quarantine_dir.glob(f"{table_id}*.xl")
+            ):
+                detail += "; a quarantined copy exists for explicit restore review"
             add(
                 "catalogue_table_file_missing",
                 "critical",
                 table_id=table_id,
-                detail="catalogue entry has no canonical table file",
+                detail=detail,
             )
             orphan_check_complete = False
             continue
