@@ -14,6 +14,15 @@ Authorization: Bearer <token>
 
 响应为 `{"data": {...}, "meta": {...}}`；`data.ok=true` 表示无 critical 问题。
 
+## revision 与派生索引
+
+- `table_revision_lagging` / `change_revision_ahead` 为 critical：说明 `__xl_meta.table_revision`
+  落后于行/变更记录，先停止相关写入、备份现场，再由维护者核对；不要直接改 revision。
+- `stale_vector_reference` 为 warning：派生向量指向已删除行或旧 revision，可通过 reindex 重建，
+  扫描器不会自动删除。
+- `invalid_indexed_revision`、`invalid_index_job`、`index_job_table_missing` 反映索引任务状态，
+  可结合索引队列与 reindex 流程处理。
+
 ## 判读
 
 1. 先看 `data.ok` 与 `critical_issues`；`warning` 级多为启动恢复或维护操作可处理的状态。

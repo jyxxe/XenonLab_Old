@@ -99,3 +99,8 @@ catalogue 为权威：catalogue 尚未提交的移动标记 aborted；catalogue 
 （xelibrary:admin，dry-run 默认）。dry-run 生成 `repair_plans` 计划（≤500 项，1 天清理）；执行需
 plan_id，校验未使用/未过期/候选未变化，逐项写 `maintenance.repaired` 审计。仅覆盖墓碑收尾/回滚、
 catalogue/元数据路径对账与 deleting 标记清除；孤儿 `.xl` 回收、导入/恢复意图与真实故障注入仍待后续。
+
+第九增量（Issue #81 第五增量，2026-10-25）：只读一致性扫描增加 revision 与派生索引检查：
+`table_revision_lagging`、`change_revision_ahead`、`table_schema_empty`、`stale_vector_reference`、
+`invalid_indexed_revision`，以及 catalogue `index_jobs` 的无效 payload/未知表引用。均为只读检测，
+不自动删除或重建向量；revision 元数据 critical 项需先备份现场再由维护者处理。
