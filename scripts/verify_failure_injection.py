@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
 import signal
 import socket
 import sqlite3
@@ -27,7 +28,9 @@ import tempfile
 import threading
 import time
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import httpx
@@ -45,9 +48,15 @@ TOKENS = {
         "scope": "dev:read dev:write xelibrary:read xelibrary:write xelibrary:query",
         "agent_kind": "opencode",
     },
+    "admin": {
+        "sub": "admin",
+        "scope": "xelibrary:read xelibrary:write xelibrary:admin",
+        "agent_kind": "human",
+    },
 }
 ALICE = {"Authorization": "Bearer alice"}
 BOB = {"Authorization": "Bearer bob"}
+ADMIN = {"Authorization": "Bearer admin"}
 
 
 def free_port():
@@ -310,11 +319,85 @@ def scenario_collaboration_crash(root):
         stop(process)
 
 
+def create_table_via_api(base, headers, name, path):
+    response = httpx.post(
+        base + "/api/v1/tables",
+        headers=headers,
+        timeout=10,
+        json={"path": path, "name": name, "columns": [{"name": "title", "type": "string"}]},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["data"]["table_id"]
+
+
+def add_pending_operation(data, kind, table_id, payload="{}"):
+    with sqlite3.connect(data / "catalogue.sqlite", timeout=10) as database:
+        stamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        database.execute(
+            "INSERT INTO operations VALUES(?,?,?,?,?,?,?,NULL)",
+            (str(uuid4()), kind, table_id, "pending", payload, stamp, stamp),
+        )
+
+
+def scenario_lifecycle_recovery(root):
+    """Restart the real XeLibrary service on simulated crash leftovers (Issue #81)."""
+    data = root / "lifecycle"
+    process, port = start_service("xelibrary", data)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        rollback_id = create_table_via_api(base, ALICE, "删除回滚", "/源/delete-rollback")
+        published_id = create_table_via_api(base, ALICE, "已发布", "/源/published")
+        move_id = create_table_via_api(base, ALICE, "移动对账", "/源/move")
+    finally:
+        stop(process)
+
+    tables = data / "tables"
+    # 1. interrupted delete that must roll back (catalogue row still present).
+    (tables / f"{rollback_id}.xl").rename(tables / f".{rollback_id}.xl.deleting")
+    add_pending_operation(data, "table.delete", rollback_id)
+    # 2. interrupted create whose file was never published to the catalogue.
+    unpublished_id = str(uuid4())
+    shutil.copyfile(tables / f"{published_id}.xl", tables / f"{unpublished_id}.xl")
+    with sqlite3.connect(tables / f"{unpublished_id}.xl", timeout=10) as database:
+        database.execute("UPDATE __xl_meta SET table_id=?", (unpublished_id,))
+    add_pending_operation(data, "table.create", unpublished_id, '{"path": "/源/unpublished"}')
+    # 3. committed move whose table metadata path lags the catalogue.
+    with sqlite3.connect(data / "catalogue.sqlite", timeout=10) as database:
+        database.execute("UPDATE tables SET path=? WHERE id=?", ("/已移动", move_id))
+    add_pending_operation(
+        data, "table.move", move_id, '{"from": "/源/move", "to": "/已移动"}'
+    )
+
+    process, port = start_service("xelibrary", data)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for table_id in (rollback_id, published_id, move_id):
+            detail = httpx.get(base + f"/api/v1/tables/{table_id}", headers=ADMIN, timeout=10)
+            assert detail.status_code == 200, detail.text
+        assert (tables / f"{rollback_id}.xl").is_file(), "delete rollback did not restore the table file"
+        assert not (tables / f"{unpublished_id}.xl").exists(), "unpublished create file was not removed"
+        moved = httpx.get(base + f"/api/v1/tables/{move_id}/schema", headers=ADMIN, timeout=10)
+        assert moved.status_code == 200, moved.text
+        assert moved.json()["data"]["path"] == "/已移动"
+        with sqlite3.connect(data / "catalogue.sqlite", timeout=10) as database:
+            states = dict(database.execute("SELECT table_id,state FROM operations"))
+            recovered = database.execute(
+                "SELECT count(*) FROM audit WHERE event='operation.recovered'"
+            ).fetchone()[0]
+        assert states[rollback_id] == "aborted", states
+        assert states[unpublished_id] == "completed", states
+        assert states[move_id] == "completed", states
+        assert recovered >= 3, recovered
+        print("PASS lifecycle recovery: delete rollback, unpublished-create cleanup and move reconcile after restart")
+    finally:
+        stop(process)
+
+
 def main():
     failures = 0
     with tempfile.TemporaryDirectory(prefix="failure-injection-") as temporary:
         root = Path(temporary)
-        for scenario in (scenario_transaction_boundary, scenario_library_crash, scenario_collaboration_crash):
+        for scenario in (scenario_transaction_boundary, scenario_library_crash, scenario_lifecycle_recovery, scenario_collaboration_crash):
             try:
                 scenario(root)
             except Exception:
