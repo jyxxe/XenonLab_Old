@@ -36,3 +36,12 @@
 - 批量写入（`rows:bulkInsert`）可显著减少请求数，但需处理异步作业与幂等语义，后续增量评估。
 - bundle 存储/磁盘预算（当前约 92 MB bundle + 34 MB 源文件）与保留策略。
 - `names.gz` 名称/描述第二 bundle；按 A-number 建索引可降低审计成本。
+
+## LAN HTTPS 与导入凭据
+
+- 生产 XeLibrary 只通过 LAN 边缘 `https://192.168.0.101:9443` 暴露（内部 8100 端口对 VM111 防火墙关闭），
+  因此导入器新增 `--ca-file` / `XELIBRARY_CA_FILE`，用指定 CA 验证 TLS（不关闭校验）。
+- 生产导入使用 Keycloak 专用 service account client（`oeis-import-agent`，realm role `platform-admin`，
+  audience mapper 加入 `xeonolab`，token lifespan 7200s）；client secret 仅保存于 VM111
+  `runtime/oeis/keycloak-client.json`（0600），不进入 Git/日志。
+- `/公开数据` 路径 ACL 显式授予 `*: read`，导入表创建后普通登录用户可只读访问；写权限仍仅限服务账户/admin。

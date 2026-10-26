@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import os
+import ssl
 import sys
 import tempfile
 import time
@@ -112,12 +113,16 @@ def row_values(entry, snapshot):
 class APIClient:
     """Minimal JSON client for the XeLibrary REST API."""
 
-    def __init__(self, base_url, token, timeout=30, retry_429=5, sleeper=time.sleep):
+    def __init__(self, base_url, token, timeout=30, retry_429=5, sleeper=time.sleep, ca_file=None):
         self.base = base_url.rstrip("/")
         self.token = token
         self.timeout = timeout
         self.retry_429 = retry_429
         self.sleeper = sleeper
+        context = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context)
+        )
 
     def request(self, method, path, body=None, headers=None):
         request_headers = {"Authorization": f"Bearer {self.token}", **dict(headers or {})}
@@ -131,7 +136,7 @@ class APIClient:
                 self.base + path, data=data, method=method, headers=request_headers
             )
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with self.opener.open(request, timeout=self.timeout) as response:
                     return response.status, json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as error:
                 payload = {}
@@ -319,6 +324,11 @@ def main(argv=None):
     parser.add_argument("--bundle", required=True, help="bundle JSONL produced by build_oeis_bundle.py")
     parser.add_argument("--manifest", default=None, help="manifest path (default: <bundle>.manifest.json)")
     parser.add_argument("--base-url", default=os.getenv(URL_ENV, ""), help="XeLibrary base URL")
+    parser.add_argument(
+        "--ca-file",
+        default=os.getenv("XELIBRARY_CA_FILE", ""),
+        help="CA bundle for a private LAN HTTPS endpoint (XELIBRARY_CA_FILE)",
+    )
     parser.add_argument("--path", required=True, help="target logical path, e.g. /OEIS")
     parser.add_argument("--name", required=True, help="target table name")
     parser.add_argument("--checkpoint", required=True, help="resume checkpoint JSON (0600)")
@@ -346,7 +356,12 @@ def main(argv=None):
     target = {"path": args.path, "name": args.name}
     try:
         manifest = verify_bundle(args.bundle, args.manifest)
-        client = APIClient(args.base_url, token, retry_429=args.retry_429)
+        client = APIClient(
+            args.base_url,
+            token,
+            retry_429=args.retry_429,
+            ca_file=args.ca_file or None,
+        )
         if args.audit:
             checkpoint = load_checkpoint(args.checkpoint, manifest["sha256"], target)
             if checkpoint is None or not checkpoint.get("table_id"):
