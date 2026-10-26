@@ -11,6 +11,7 @@ from scripts.build_oeis_bundle import build
 from scripts.import_oeis import (
     APIClient,
     ImportError_,
+    audit_bundle,
     import_bundle,
     iter_entries,
     row_values,
@@ -170,3 +171,53 @@ def test_api_client_creates_table_and_forwards_idempotency_key():
     finally:
         server.shutdown()
         server.server_close()
+
+
+class FakeListClient:
+    def __init__(self, rows, page_size=2):
+        self.rows = rows
+        self.page_size = page_size
+        self.calls = 0
+
+    def list_rows(self, table_id, cursor=""):
+        self.calls += 1
+        start = int(cursor or 0)
+        page = self.rows[start:start + self.page_size]
+        next_cursor = str(start + self.page_size) if start + self.page_size < len(self.rows) else ""
+        return page, next_cursor
+
+
+def row(a_number, terms):
+    return {"values": {"a_number": a_number, "terms": terms}}
+
+
+def test_audit_reports_clean_bundle(tmp_path):
+    bundle, manifest = make_bundle(tmp_path)
+    rows = [row("A000001", "0,1,1"), row("A000002", "1,2"), row("A000003", "5")]
+    report = audit_bundle(FakeListClient(rows), bundle, manifest, "table-1")
+    assert report["complete"] is True
+    assert report["scanned"] == 3
+    assert report["missing_count"] == report["mismatched_count"] == report["extra_count"] == 0
+
+
+def test_audit_detects_missing_mismatch_and_extra(tmp_path):
+    bundle, manifest = make_bundle(tmp_path)
+    rows = [
+        row("A000001", "0,1,1"),
+        row("A000002", "changed"),
+        row("A999999", "1"),
+        row("A000001", "0,1,1"),
+    ]
+    report = audit_bundle(FakeListClient(rows), bundle, manifest, "table-1")
+    assert report["complete"] is True
+    assert report["missing"] == ["A000003"]
+    assert report["mismatched"] == ["A000002"]
+    assert sorted(report["extra"]) == ["A000001", "A999999"]
+
+
+def test_audit_respects_partial_scan_limit(tmp_path):
+    bundle, manifest = make_bundle(tmp_path)
+    rows = [row("A000001", "0,1,1"), row("A000002", "1,2"), row("A000003", "5")]
+    report = audit_bundle(FakeListClient(rows, page_size=1), bundle, manifest, "table-1", max_rows=1)
+    assert report["complete"] is False
+    assert report["scanned"] == 1
