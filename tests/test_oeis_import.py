@@ -129,7 +129,7 @@ def test_row_values_and_iter_entries(tmp_path):
 
 
 def test_api_client_creates_table_and_forwards_idempotency_key():
-    seen = {}
+    seen = {"row_calls": 0}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -150,10 +150,16 @@ def test_api_client_creates_table_and_forwards_idempotency_key():
                 body = json.dumps({"data": {"table_id": "table-9"}}).encode()
                 self.send_response(201)
             else:
-                seen["key"] = self.headers.get("Idempotency-Key")
-                seen["values"] = payload["values"]
-                body = json.dumps({"data": {"_row_id": "row-9"}}).encode()
-                self.send_response(201)
+                seen["row_calls"] += 1
+                if seen["row_calls"] == 1 and seen.get("rate_limit_first"):
+                    body = json.dumps({"error": {"code": "AUTHORIZATION_RATE_LIMITED"}}).encode()
+                    self.send_response(429)
+                    self.send_header("Retry-After", "0")
+                else:
+                    seen["key"] = self.headers.get("Idempotency-Key")
+                    seen["values"] = payload["values"]
+                    body = json.dumps({"data": {"_row_id": "row-9"}}).encode()
+                    self.send_response(201)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -168,6 +174,54 @@ def test_api_client_creates_table_and_forwards_idempotency_key():
         client.create_row("table-9", {"a_number": "A000001"}, "oeis:A000001")
         assert seen["key"] == "oeis:A000001"
         assert seen["values"] == {"a_number": "A000001"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_api_client_retries_429_with_retry_after():
+    seen = {"row_calls": 0, "rate_limit_first": True}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            body = json.dumps({"data": [{"id": "table-9", "path": "/OEIS", "name": "OEIS 数据"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            self.rfile.read(length)
+            seen["row_calls"] += 1
+            if seen["rate_limit_first"]:
+                seen["rate_limit_first"] = False
+                body = json.dumps({"error": {"code": "AUTHORIZATION_RATE_LIMITED"}}).encode()
+                self.send_response(429)
+                self.send_header("Retry-After", "0")
+            else:
+                body = json.dumps({"data": {"_row_id": "row-9"}}).encode()
+                self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        delays = []
+        client = APIClient(f"http://127.0.0.1:{server.server_address[1]}", "token", sleeper=delays.append)
+        table_id = client.ensure_table("/OEIS", "OEIS 数据")
+        assert table_id == "table-9"
+        client.create_row("table-9", {"a_number": "A000001"}, "oeis:A000001")
+        assert seen["row_calls"] == 2
+        assert delays == [0.0]
     finally:
         server.shutdown()
         server.server_close()
