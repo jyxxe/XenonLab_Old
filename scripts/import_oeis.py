@@ -25,6 +25,7 @@ import os
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -174,6 +175,16 @@ class APIClient:
             )
         raise ImportError_(f"row import failed: HTTP {status} {payload.get('error')}")
 
+    def list_rows(self, table_id, cursor=""):
+        query = "/api/v1/tables/" + table_id + "/rows?limit=1000"
+        if cursor:
+            query += "&cursor=" + urllib.parse.quote(cursor)
+        status, payload = self.request("GET", query)
+        if status != 200:
+            raise ImportError_(f"row listing failed: HTTP {status} {payload.get('error')}")
+        next_cursor = (payload.get("meta") or {}).get("next_cursor") or ""
+        return payload.get("data") or [], next_cursor
+
 
 def load_checkpoint(path, bundle_sha, target):
     if not Path(path).is_file():
@@ -235,6 +246,50 @@ def import_bundle(client, bundle_path, manifest, target, checkpoint_path, limit=
     return checkpoint
 
 
+def audit_bundle(client, bundle_path, manifest, table_id, max_rows=None):
+    """Compare imported rows with the verified bundle (paginated, read-only)."""
+    expected = {entry["a_number"]: entry["terms"] for entry in iter_entries(bundle_path)}
+    seen = set()
+    mismatched = []
+    extra = []
+    scanned = 0
+    cursor = ""
+    complete = False
+    while True:
+        rows, cursor = client.list_rows(table_id, cursor)
+        for row in rows:
+            values = row.get("values") or {}
+            a_number = values.get("a_number")
+            if not isinstance(a_number, str) or a_number not in expected:
+                extra.append(a_number)
+                continue
+            if a_number in seen:
+                extra.append(a_number)
+                continue
+            if values.get("terms") != expected[a_number]:
+                mismatched.append(a_number)
+            seen.add(a_number)
+        scanned += len(rows)
+        if not cursor:
+            complete = True
+            break
+        if max_rows is not None and scanned >= max_rows:
+            break
+    missing = sorted(set(expected) - seen)
+    return {
+        "scanned": scanned,
+        "expected": len(expected),
+        "seen": len(seen),
+        "missing_count": len(missing),
+        "mismatched_count": len(mismatched),
+        "extra_count": len(extra),
+        "missing": missing[:100],
+        "mismatched": sorted(mismatched)[:100],
+        "extra": extra[:100],
+        "complete": complete,
+    }
+
+
 def read_token():
     token = os.getenv(TOKEN_ENV)
     if token:
@@ -254,6 +309,8 @@ def main(argv=None):
     parser.add_argument("--name", required=True, help="target table name")
     parser.add_argument("--checkpoint", required=True, help="resume checkpoint JSON (0600)")
     parser.add_argument("--limit", type=int, default=None, help="import at most N rows this run")
+    parser.add_argument("--audit", action="store_true", help="only verify imported rows against the bundle")
+    parser.add_argument("--audit-limit", type=int, default=None, help="stop after scanning N rows")
     args = parser.parse_args(argv)
     if not args.base_url:
         parser.error("--base-url or XELIBRARY_URL is required")
@@ -262,10 +319,21 @@ def main(argv=None):
         parser.error(f"{TOKEN_ENV} or {TOKEN_FILE_ENV} is required")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be positive")
+    if args.audit_limit is not None and args.audit_limit < 1:
+        parser.error("--audit-limit must be positive")
     target = {"path": args.path, "name": args.name}
     try:
         manifest = verify_bundle(args.bundle, args.manifest)
         client = APIClient(args.base_url, token)
+        if args.audit:
+            checkpoint = load_checkpoint(args.checkpoint, manifest["sha256"], target)
+            if checkpoint is None or not checkpoint.get("table_id"):
+                raise ImportError_("audit requires an existing checkpoint with a table_id")
+            report = audit_bundle(
+                client, args.bundle, manifest, checkpoint["table_id"], max_rows=args.audit_limit
+            )
+            print(json.dumps({"ok": report["complete"] and not report["missing_count"] and not report["mismatched_count"] and not report["extra_count"], "table_id": checkpoint["table_id"], **report}, ensure_ascii=False, sort_keys=True))
+            return 0 if not report["missing_count"] and not report["mismatched_count"] and not report["extra_count"] else 1
         checkpoint = import_bundle(
             client, args.bundle, manifest, target, args.checkpoint, limit=args.limit
         )
