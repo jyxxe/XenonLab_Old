@@ -788,6 +788,29 @@ def create_app(settings=None):
             action: allowed(actor, table, action, db=db) for action in ("read", "write", "attach")
         }
 
+    def path_write_allowed(actor, path, db=None):
+        """Enforce only the destination path ACL chain; no explicit path ACL inherits table write."""
+        if "xelibrary:admin" in actor.scopes:
+            return True
+        if db is None:
+            with connect(catalogue) as connection:
+                return path_write_allowed(actor, path, connection)
+        current = path
+        while True:
+            acl = db.execute(
+                "SELECT grants,explicit FROM acl WHERE resource_type='path' AND resource_id=?", (current,)
+            ).fetchone()
+            if acl and acl["explicit"]:
+                grants = json.loads(acl[0])
+                for principal in (actor.sub, *actor.ancestors):
+                    if principal in grants:
+                        return "write" in grants[principal] or "write" in grants.get("*", [])
+                return "write" in grants.get("*", [])
+            if current == "/":
+                break
+            current = str(PurePosixPath(current).parent)
+        return True
+
     def request_acl(actor, table):
         """Load a table's ACL policies once and reuse them for this request's rows."""
         if "xelibrary:admin" in actor.scopes:
@@ -1204,7 +1227,7 @@ def create_app(settings=None):
     def move(tid: str, body: Move, request: Request, actor=Depends(scope("xelibrary:write"))):
         table = authorize(actor, tid, "write")
         path = clean_path(body.path)
-        if not allowed(actor, {**table, "path": path, "id": ""}, "write"):
+        if not path_write_allowed(actor, path):
             raise APIError(403, "XL_FORBIDDEN", "destination path permission denied")
         operation_id = begin_operation("table.move", tid, {"from": table["path"], "to": path})
         try:
