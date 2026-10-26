@@ -1,12 +1,14 @@
 """Issue #261 second increment: idempotent OEIS bundle importer."""
 
 import json
+import ssl
 import stat
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+import scripts.import_oeis as import_oeis_module
 from scripts.build_oeis_bundle import build
 from scripts.import_oeis import (
     APIClient,
@@ -275,3 +277,15 @@ def test_audit_respects_partial_scan_limit(tmp_path):
     report = audit_bundle(FakeListClient(rows, page_size=1), bundle, manifest, "table-1", max_rows=1)
     assert report["complete"] is False
     assert report["scanned"] == 1
+
+
+def test_api_client_ca_file_is_used_for_private_https(monkeypatch):
+    seen = {}
+
+    def fake_context(cafile=None):
+        seen["cafile"] = cafile
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    monkeypatch.setattr(import_oeis_module.ssl, "create_default_context", fake_context)
+    APIClient("https://127.0.0.1", "token", ca_file="/etc/devagent/lan-root-ca.crt")
+    assert seen["cafile"] == "/etc/devagent/lan-root-ca.crt"
