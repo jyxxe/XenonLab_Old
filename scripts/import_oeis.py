@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -111,10 +112,12 @@ def row_values(entry, snapshot):
 class APIClient:
     """Minimal JSON client for the XeLibrary REST API."""
 
-    def __init__(self, base_url, token, timeout=30):
+    def __init__(self, base_url, token, timeout=30, retry_429=5, sleeper=time.sleep):
         self.base = base_url.rstrip("/")
         self.token = token
         self.timeout = timeout
+        self.retry_429 = retry_429
+        self.sleeper = sleeper
 
     def request(self, method, path, body=None, headers=None):
         request_headers = {"Authorization": f"Bearer {self.token}", **dict(headers or {})}
@@ -122,21 +125,32 @@ class APIClient:
         if body is not None:
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
             request_headers["Content-Type"] = "application/json"
-        request = urllib.request.Request(
-            self.base + path, data=data, method=method, headers=request_headers
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                return response.status, json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            payload = {}
+        attempt = 0
+        while True:
+            request = urllib.request.Request(
+                self.base + path, data=data, method=method, headers=request_headers
+            )
             try:
-                payload = json.loads(error.read().decode("utf-8"))
-            except (ValueError, UnicodeDecodeError):
-                pass
-            return error.code, payload
-        except (urllib.error.URLError, TimeoutError) as error:
-            raise ImportError_(f"network failure: {error}") from None
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    return response.status, json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                payload = {}
+                try:
+                    payload = json.loads(error.read().decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    pass
+                if error.code == 429 and attempt < self.retry_429:
+                    retry_after = error.headers.get("Retry-After") if error.headers else None
+                    try:
+                        delay = float(retry_after) if retry_after is not None else min(60, 2 ** (attempt + 1))
+                    except (TypeError, ValueError):
+                        delay = min(60, 2 ** (attempt + 1))
+                    self.sleeper(max(0.0, min(60.0, delay)))
+                    attempt += 1
+                    continue
+                return error.code, payload
+            except (urllib.error.URLError, TimeoutError) as error:
+                raise ImportError_(f"network failure: {error}") from None
 
     def ensure_table(self, path, name):
         status, payload = self.request("GET", "/api/v1/tables?limit=1000")
@@ -311,6 +325,12 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=None, help="import at most N rows this run")
     parser.add_argument("--audit", action="store_true", help="only verify imported rows against the bundle")
     parser.add_argument("--audit-limit", type=int, default=None, help="stop after scanning N rows")
+    parser.add_argument(
+        "--retry-429",
+        type=int,
+        default=5,
+        help="retry a rate-limited request this many times, honouring Retry-After",
+    )
     args = parser.parse_args(argv)
     if not args.base_url:
         parser.error("--base-url or XELIBRARY_URL is required")
@@ -321,10 +341,12 @@ def main(argv=None):
         parser.error("--limit must be positive")
     if args.audit_limit is not None and args.audit_limit < 1:
         parser.error("--audit-limit must be positive")
+    if args.retry_429 < 0:
+        parser.error("--retry-429 must not be negative")
     target = {"path": args.path, "name": args.name}
     try:
         manifest = verify_bundle(args.bundle, args.manifest)
-        client = APIClient(args.base_url, token)
+        client = APIClient(args.base_url, token, retry_429=args.retry_429)
         if args.audit:
             checkpoint = load_checkpoint(args.checkpoint, manifest["sha256"], target)
             if checkpoint is None or not checkpoint.get("table_id"):
