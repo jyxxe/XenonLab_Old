@@ -45,3 +45,10 @@
   audience mapper 加入 `xeonolab`，token lifespan 7200s）；client secret 仅保存于 VM111
   `runtime/oeis/keycloak-client.json`（0600），不进入 Git/日志。
 - `/公开数据` 路径 ACL 显式授予 `*: read`，导入表创建后普通登录用户可只读访问；写权限仍仅限服务账户/admin。
+
+## 并行分片导入
+
+逐行导入在 120 请求/分钟/身份下需约 55 小时。导入器新增 `--shard-count/--shard-index`：
+按 bundle 1-based 位置把条目分配给 N 个独立导入器（各自凭据与 checkpoint，互不写同一行），
+checkpoint 记录全局进度；`--audit` 仍对整表复核。计划用多个 Keycloak service account 并行，
+以缩短生产导入时间；每个 shard 的 token 由外层 runner 定期刷新，checkpoint 续传保证幂等。

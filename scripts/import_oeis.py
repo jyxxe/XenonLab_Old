@@ -234,8 +234,18 @@ def save_checkpoint(path, checkpoint):
         raise
 
 
-def import_bundle(client, bundle_path, manifest, target, checkpoint_path, limit=None):
-    """Import rows after a verified bundle; returns the final checkpoint."""
+def import_bundle(
+    client, bundle_path, manifest, target, checkpoint_path, limit=None, shard_count=1, shard_index=1
+):
+    """Import rows after a verified bundle; returns the final checkpoint.
+
+    ``shard_count``/``shard_index`` split a bundle across independent importers
+    (each with its own credential and checkpoint). Entries are assigned to a shard
+    by their 1-based bundle position, so shards never write the same row.
+    """
+    if shard_count < 1 or not 1 <= shard_index <= shard_count:
+        raise ImportError_("shard-index must be within 1..shard-count")
+
     bundle_sha = manifest["sha256"]
     checkpoint = load_checkpoint(checkpoint_path, bundle_sha, target) or {
         "version": CHECKPOINT_VERSION,
@@ -253,11 +263,17 @@ def import_bundle(client, bundle_path, manifest, target, checkpoint_path, limit=
     processed = int(checkpoint.get("processed") or 0)
     start = processed
     snapshot = manifest.get("snapshot")
+    shard_indexes = set(range(shard_index, shard_count + 1, shard_count))
     for index, entry in enumerate(iter_entries(bundle_path), start=1):
         if index <= start:
             continue
         if limit is not None and processed - start >= limit:
             break
+        if shard_count > 1 and ((index - 1) % shard_count) + 1 not in shard_indexes:
+            if index % 5000 == 0:
+                checkpoint["processed"] = index
+                save_checkpoint(checkpoint_path, checkpoint)
+            continue
         client.create_row(table_id, row_values(entry, snapshot), f"oeis:{entry['a_number']}")
         processed = index
         checkpoint["processed"] = processed
@@ -335,6 +351,8 @@ def main(argv=None):
     parser.add_argument("--limit", type=int, default=None, help="import at most N rows this run")
     parser.add_argument("--audit", action="store_true", help="only verify imported rows against the bundle")
     parser.add_argument("--audit-limit", type=int, default=None, help="stop after scanning N rows")
+    parser.add_argument("--shard-count", type=int, default=1, help="split the bundle across N importers")
+    parser.add_argument("--shard-index", type=int, default=1, help="this importer's 1-based shard index")
     parser.add_argument(
         "--retry-429",
         type=int,
@@ -353,6 +371,8 @@ def main(argv=None):
         parser.error("--audit-limit must be positive")
     if args.retry_429 < 0:
         parser.error("--retry-429 must not be negative")
+    if args.shard_count < 1 or not 1 <= args.shard_index <= args.shard_count:
+        parser.error("--shard-index must be within 1..--shard-count")
     target = {"path": args.path, "name": args.name}
     try:
         manifest = verify_bundle(args.bundle, args.manifest)
