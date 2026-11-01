@@ -194,6 +194,14 @@ class APIClient:
             )
         raise ImportError_(f"row import failed: HTTP {status} {payload.get('error')}")
 
+    def import_batch(self, table_id, rows):
+        status, payload = self.request(
+            "POST", f"/api/v1/tables/{table_id}/rows:importBatch", {"rows": rows}
+        )
+        if status != 200:
+            raise ImportError_(f"batch import failed: HTTP {status} {payload.get('error')}")
+        return payload.get("data") or {}
+
     def list_rows(self, table_id, cursor=""):
         query = "/api/v1/tables/" + table_id + "/rows?limit=1000"
         if cursor:
@@ -235,7 +243,15 @@ def save_checkpoint(path, checkpoint):
 
 
 def import_bundle(
-    client, bundle_path, manifest, target, checkpoint_path, limit=None, shard_count=1, shard_index=1
+    client,
+    bundle_path,
+    manifest,
+    target,
+    checkpoint_path,
+    limit=None,
+    shard_count=1,
+    shard_index=1,
+    batch_size=1,
 ):
     """Import rows after a verified bundle; returns the final checkpoint.
 
@@ -245,6 +261,10 @@ def import_bundle(
     """
     if shard_count < 1 or not 1 <= shard_index <= shard_count:
         raise ImportError_("shard-index must be within 1..shard-count")
+    if batch_size < 1:
+        raise ImportError_("batch-size must be positive")
+    if batch_size > 1 and shard_count > 1:
+        raise ImportError_("batch mode does not support sharding")
 
     bundle_sha = manifest["sha256"]
     checkpoint = load_checkpoint(checkpoint_path, bundle_sha, target) or {
@@ -264,11 +284,31 @@ def import_bundle(
     start = processed
     snapshot = manifest.get("snapshot")
     shard_indexes = set(range(shard_index, shard_count + 1, shard_count))
+    pending = []
     for index, entry in enumerate(iter_entries(bundle_path), start=1):
         if index <= start:
             continue
         if limit is not None and processed - start >= limit:
             break
+        if batch_size > 1:
+            pending.append(
+                {
+                    "key": entry["a_number"],
+                    "values": row_values(entry, snapshot),
+                    "_index": index,
+                }
+            )
+            if len(pending) < batch_size:
+                continue
+            client.import_batch(
+                table_id,
+                [{"key": item["key"], "values": item["values"]} for item in pending],
+            )
+            processed = pending[-1]["_index"]
+            checkpoint["processed"] = processed
+            save_checkpoint(checkpoint_path, checkpoint)
+            pending = []
+            continue
         if shard_count > 1 and ((index - 1) % shard_count) + 1 not in shard_indexes:
             if index % 5000 == 0:
                 checkpoint["processed"] = index
@@ -276,6 +316,13 @@ def import_bundle(
             continue
         client.create_row(table_id, row_values(entry, snapshot), f"oeis:{entry['a_number']}")
         processed = index
+        checkpoint["processed"] = processed
+        save_checkpoint(checkpoint_path, checkpoint)
+    if batch_size > 1 and pending:
+        client.import_batch(
+            table_id, [{"key": item["key"], "values": item["values"]} for item in pending]
+        )
+        processed = pending[-1]["_index"]
         checkpoint["processed"] = processed
         save_checkpoint(checkpoint_path, checkpoint)
     return checkpoint
@@ -352,6 +399,12 @@ def main(argv=None):
     parser.add_argument("--audit", action="store_true", help="only verify imported rows against the bundle")
     parser.add_argument("--audit-limit", type=int, default=None, help="stop after scanning N rows")
     parser.add_argument("--shard-count", type=int, default=1, help="split the bundle across N importers")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="rows per atomic importBatch request (1 = per-row API)",
+    )
     parser.add_argument("--shard-index", type=int, default=1, help="this importer's 1-based shard index")
     parser.add_argument(
         "--retry-429",
@@ -373,6 +426,10 @@ def main(argv=None):
         parser.error("--retry-429 must not be negative")
     if args.shard_count < 1 or not 1 <= args.shard_index <= args.shard_count:
         parser.error("--shard-index must be within 1..--shard-count")
+    if args.batch_size < 1 or args.batch_size > 1000:
+        parser.error("--batch-size must be within 1..1000")
+    if args.batch_size > 1 and args.shard_count > 1:
+        parser.error("--batch-size > 1 does not support sharding")
     target = {"path": args.path, "name": args.name}
     try:
         manifest = verify_bundle(args.bundle, args.manifest)

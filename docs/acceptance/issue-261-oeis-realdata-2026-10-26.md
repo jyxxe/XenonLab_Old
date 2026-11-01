@@ -52,3 +52,16 @@
 按 bundle 1-based 位置把条目分配给 N 个独立导入器（各自凭据与 checkpoint，互不写同一行），
 checkpoint 记录全局进度；`--audit` 仍对整表复核。计划用多个 Keycloak service account 并行，
 以缩短生产导入时间；每个 shard 的 token 由外层 runner 定期刷新，checkpoint 续传保证幂等。
+
+## 原子批量导入端点与批处理（2026-11-02）
+
+- 逐行 commit 在 VM104 WAL 上约 1 秒/行（8 分片并发总吞吐约 2–3 行/秒，全量约 40 小时），
+  证明仅靠分片/429 重试不足以在合理时间完成导入。
+- 新增（admin-only）`POST /api/v1/tables/{tid}/rows:importBatch`：单个 table 事务内插入
+  ≤1000 行，逐行做 schema 校验、行/表 ACL、change log、FTS，使用稳定 `__xl_idempotency` key；
+  任一 key 冲突则整批回滚（409 `IDEMPOTENCY_CONFLICT`），重放同批返回 `existing` 而不重复插入；
+  写 `rows.import_batch` 审计。无新依赖。
+- 导入器新增 `--batch-size N`（1..1000，batch 模式不支持 shard 并行）：每 N 行一次请求、
+  批后写 checkpoint；批内原子、批间幂等，可在中止后续传。
+- 测试：batch 端点 3 项（原子/幂等/冲突回滚/权限与上限），导入器 batch 模式 2 项（分批+续传、
+  与 shard 互斥）；OpenAPI 重新导出。
