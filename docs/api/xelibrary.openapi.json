@@ -986,6 +986,54 @@
         }
       }
     },
+    "/api/v1/tables/{tid}/rows:importBatch": {
+      "post": {
+        "summary": "Import Batch",
+        "description": "Atomically insert a bounded batch of rows keyed by caller-supplied idempotency keys.",
+        "operationId": "import_batch_api_v1_tables__tid__rows_importBatch_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportBatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/rows:bulk/{job_id}": {
       "get": {
         "summary": "Bulk Job Status",
@@ -4014,6 +4062,45 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "ImportBatch": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ImportBatchItem"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "ImportBatch"
+      },
+      "ImportBatchItem": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "values": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "values"
+        ],
+        "title": "ImportBatchItem"
       },
       "ImportRequest": {
         "properties": {

@@ -312,3 +312,55 @@ def test_shard_index_must_be_within_range(tmp_path):
     bundle, manifest = make_bundle(tmp_path)
     with pytest.raises(ImportError_, match="shard-index"):
         import_bundle(FakeClient(), bundle, manifest, TARGET, tmp_path / "c.json", shard_count=2, shard_index=3)
+
+
+class FakeBatchClient:
+    def __init__(self, fail_after=None):
+        self.batches = []
+        self.fail_after = fail_after
+
+    def ensure_table(self, path, name):
+        return "table-1"
+
+    def import_batch(self, table_id, rows):
+        if self.fail_after is not None and len(self.batches) >= self.fail_after:
+            raise ImportError_("simulated network failure")
+        self.batches.append(rows)
+        return {"imported": len(rows), "existing": 0, "total": len(rows)}
+
+
+def test_batch_import_splits_and_resumes(tmp_path):
+    bundle, manifest = make_bundle(tmp_path)
+    client = FakeBatchClient()
+    checkpoint_path = tmp_path / "batch.json"
+    checkpoint = import_bundle(
+        client, bundle, manifest, TARGET, checkpoint_path, batch_size=2
+    )
+    assert [[row["key"] for row in batch] for batch in client.batches] == [["A000001", "A000002"], ["A000003"]]
+    assert checkpoint["processed"] == 3
+
+    failing = FakeBatchClient(fail_after=1)
+    failure_checkpoint = tmp_path / "batch-failure.json"
+    with pytest.raises(ImportError_, match="simulated network failure"):
+        import_bundle(
+            failing,
+            bundle,
+            manifest,
+            TARGET,
+            failure_checkpoint,
+            batch_size=2,
+            limit=3,
+        )
+    assert json.loads(failure_checkpoint.read_text())["processed"] == 2
+
+    resume = FakeBatchClient()
+    import_bundle(resume, bundle, manifest, TARGET, failure_checkpoint, batch_size=2)
+    assert [[row["key"] for row in batch] for batch in resume.batches] == [["A000003"]]
+
+
+def test_batch_mode_rejects_sharding(tmp_path):
+    bundle, manifest = make_bundle(tmp_path)
+    with pytest.raises(ImportError_, match="does not support sharding"):
+        import_bundle(
+            FakeBatchClient(), bundle, manifest, TARGET, tmp_path / "c.json", batch_size=2, shard_count=2
+        )

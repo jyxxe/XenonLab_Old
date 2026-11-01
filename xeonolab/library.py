@@ -154,6 +154,15 @@ class BulkInsert(BaseModel):
     batch_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class ImportBatchItem(BaseModel):
+    key: str = Field(min_length=1, max_length=256)
+    values: dict
+
+
+class ImportBatch(BaseModel):
+    rows: list[ImportBatchItem] = Field(min_length=1, max_length=1000)
+
+
 class BulkUpdateItem(BaseModel):
     row_id: str
     revision: int = Field(ge=1)
@@ -1930,6 +1939,48 @@ def create_app(settings=None):
     @app.post("/api/v1/tables/{tid}/rows:bulkDelete")
     def bulk_delete(tid: str, body: BulkDelete, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):
         return _bulk_submit("delete", body.rows, request, background, actor, tid, body.batch_id)
+
+    @app.post("/api/v1/tables/{tid}/rows:importBatch")
+    def import_batch(tid: str, body: ImportBatch, request: Request, actor=Depends(scope("xelibrary:admin"))):
+        """Atomically insert a bounded batch of rows keyed by caller-supplied idempotency keys."""
+        authorize(actor, tid, "write")
+        imported = existing = 0
+        with table_transaction(tid) as db:
+            definitions = columns(db)
+            for item in body.rows:
+                values = validate_values(definitions, item.values)
+                digest = hashlib.sha256(
+                    json.dumps(values, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                ).hexdigest()
+                idempotency_key = f"{actor.sub}:import:{item.key}"
+                previous = db.execute(
+                    "SELECT digest FROM __xl_idempotency WHERE key=?", (idempotency_key,)
+                ).fetchone()
+                if previous is not None:
+                    if previous["digest"] != digest:
+                        raise APIError(
+                            409,
+                            "IDEMPOTENCY_CONFLICT",
+                            f"import key {item.key!r} was already used with different values",
+                        )
+                    existing += 1
+                    continue
+                rid, stamp = str(uuid4()), now()
+                db.execute(
+                    "INSERT INTO data VALUES(?,?,?,?,?,?)",
+                    (rid, 1, stamp, stamp, None, json.dumps(values, ensure_ascii=False)),
+                )
+                row = load_row(db, rid)
+                change(db, row, "create")
+                db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+                index_cjk_row(db, rid, values.values())
+                db.execute("INSERT INTO __xl_idempotency VALUES(?,?,?)", (idempotency_key, digest, rid))
+                imported += 1
+        audit(actor, "rows.import_batch", f"{tid}:imported={imported}:existing={existing}")
+        return response(
+            request,
+            {"table_id": tid, "imported": imported, "existing": existing, "total": len(body.rows)},
+        )
 
     @app.get("/api/v1/tables/{tid}/rows:bulk/{job_id}")
     def bulk_job_status(tid: str, job_id: str, request: Request, actor=Depends(scope("xelibrary:read"))):
