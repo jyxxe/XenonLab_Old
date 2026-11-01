@@ -289,3 +289,26 @@ def test_api_client_ca_file_is_used_for_private_https(monkeypatch):
     monkeypatch.setattr(import_oeis_module.ssl, "create_default_context", fake_context)
     APIClient("https://127.0.0.1", "token", ca_file="/etc/devagent/lan-root-ca.crt")
     assert seen["cafile"] == "/etc/devagent/lan-root-ca.crt"
+
+
+def test_shard_import_splits_entries_without_overlap(tmp_path):
+    bundle, manifest = make_bundle(tmp_path)
+    first = FakeClient()
+    first_checkpoint = import_bundle(
+        first, bundle, manifest, TARGET, tmp_path / "shard1.json", shard_count=2, shard_index=1
+    )
+    second = FakeClient()
+    import_bundle(second, bundle, manifest, TARGET, tmp_path / "shard2.json", shard_count=2, shard_index=2)
+    assert [row[1]["a_number"] for row in first.rows] == ["A000001", "A000003"]
+    assert [row[1]["a_number"] for row in second.rows] == ["A000002"]
+    assert first_checkpoint["processed"] == 3
+
+    rerun = FakeClient()
+    import_bundle(rerun, bundle, manifest, TARGET, tmp_path / "shard1.json", shard_count=2, shard_index=1)
+    assert rerun.rows == []
+
+
+def test_shard_index_must_be_within_range(tmp_path):
+    bundle, manifest = make_bundle(tmp_path)
+    with pytest.raises(ImportError_, match="shard-index"):
+        import_bundle(FakeClient(), bundle, manifest, TARGET, tmp_path / "c.json", shard_count=2, shard_index=3)
