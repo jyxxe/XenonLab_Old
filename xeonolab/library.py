@@ -89,6 +89,9 @@ def cjk_fts_query(query):
     return " AND ".join(clauses)
 
 
+FTS_MAP_BACKFILL_KEY = "fts_map_backfilled"
+
+
 def ensure_cjk_fts(db):
     db.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS __xl_fts_cjk "
@@ -100,22 +103,116 @@ def cjk_fts_exists(db):
     return db.execute("SELECT 1 FROM sqlite_master WHERE name='__xl_fts_cjk'").fetchone() is not None
 
 
-def append_cjk_row(db, row_id, values):
-    """Index a row that did not exist before.
+def ensure_fts_map(db):
+    """Map application row ids to internal FTS5 rowids.
 
-    A fresh row id cannot have a stale index entry, so the defensive
-    ``DELETE ... WHERE row_id=?`` of :func:`index_cjk_row` is unnecessary. That
-    delete is a full scan of the FTS5 table (``row_id`` is UNINDEXED), which is
-    O(table rows) per insert and made large imports superlinear.
+    ``row_id`` is an UNINDEXED FTS5 column, so ``DELETE ... WHERE row_id=?`` is
+    a full scan of the index. Deleting by the internal ``rowid`` is O(1); this
+    side table remembers the rowid of the current index entry for each row.
+    Rows indexed before the map existed have no entry and keep the old scan
+    fallback once, then migrate on their next write.
     """
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS __xl_fts_map("
+        "row_id TEXT PRIMARY KEY, legacy_rowid INTEGER, cjk_rowid INTEGER)"
+    )
+
+
+def ensure_table_indexes(db):
+    ensure_fts_map(db)
+    # Row history and row cleanup look rows up by row id; without this index
+    # both scan the whole change log, which grows with every table mutation.
+    db.execute("CREATE INDEX IF NOT EXISTS __xl_changes_row ON __xl_changes(row_id)")
+    ensure_fts_map_backfill(db)
+
+
+def ensure_fts_map_backfill(db):
+    """Populate the rowid map once for tables indexed before it existed.
+
+    A single ``INSERT ... SELECT`` over each FTS table records the current
+    internal rowid of every indexed row, so later upcore writes can delete by
+    rowid. The stats marker keeps the write path from rescanning afterwards.
+    """
+    ensure_fts_map(db)
+    marker = db.execute("SELECT 1 FROM __xl_stats WHERE key=?", (FTS_MAP_BACKFILL_KEY,)).fetchone()
+    if marker is not None:
+        return
+    db.execute(
+        "INSERT INTO __xl_fts_map(row_id, legacy_rowid)"
+        " SELECT row_id, rowid FROM __xl_fts WHERE row_id IS NOT NULL"
+        " ON CONFLICT(row_id) DO UPDATE SET legacy_rowid=excluded.legacy_rowid"
+    )
+    if cjk_fts_exists(db):
+        db.execute(
+            "INSERT INTO __xl_fts_map(row_id, cjk_rowid)"
+            " SELECT row_id, rowid FROM __xl_fts_cjk WHERE row_id IS NOT NULL"
+            " ON CONFLICT(row_id) DO UPDATE SET cjk_rowid=excluded.cjk_rowid"
+        )
+    db.execute("INSERT OR REPLACE INTO __xl_stats VALUES(?,?)", (FTS_MAP_BACKFILL_KEY, "1"))
+
+
+def _fts_rowid(db, row_id, column):
+    row = db.execute(f"SELECT {column} FROM __xl_fts_map WHERE row_id=?", (row_id,)).fetchone()
+    return None if row is None else row[0]
+
+
+def _remember_fts_rowid(db, row_id, column, fts_rowid):
+    db.execute("INSERT INTO __xl_fts_map(row_id) VALUES(?) ON CONFLICT(row_id) DO NOTHING", (row_id,))
+    db.execute(f"UPDATE __xl_fts_map SET {column}=? WHERE row_id=?", (fts_rowid, row_id))
+
+
+def _prune_fts_map(db, row_id):
+    db.execute(
+        "DELETE FROM __xl_fts_map WHERE row_id=? AND legacy_rowid IS NULL AND cjk_rowid IS NULL",
+        (row_id,),
+    )
+
+
+def insert_legacy_fts_row(db, row_id, values):
+    ensure_fts_map(db)
+    db.execute("INSERT INTO __xl_fts VALUES(?,?)", (row_id, " ".join(str(x) for x in values)))
+    _remember_fts_rowid(db, row_id, "legacy_rowid", db.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def delete_legacy_fts_row(db, row_id):
+    ensure_fts_map(db)
+    fts_rowid = _fts_rowid(db, row_id, "legacy_rowid")
+    if fts_rowid is None:
+        # Rows indexed before __xl_fts_map existed: one scan, then migrate.
+        db.execute("DELETE FROM __xl_fts WHERE row_id=?", (row_id,))
+        _prune_fts_map(db, row_id)
+        return
+    db.execute("DELETE FROM __xl_fts WHERE rowid=?", (fts_rowid,))
+    db.execute("UPDATE __xl_fts_map SET legacy_rowid=NULL WHERE row_id=?", (row_id,))
+    _prune_fts_map(db, row_id)
+
+
+def append_cjk_row(db, row_id, values):
+    """Index a row that did not exist before (no stale entry to delete)."""
     ensure_cjk_fts(db)
+    ensure_fts_map(db)
     db.execute("INSERT INTO __xl_fts_cjk VALUES(?,?)", (row_id, cjk_fts_body(values)))
+    _remember_fts_rowid(db, row_id, "cjk_rowid", db.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def delete_cjk_row(db, row_id):
+    ensure_fts_map(db)
+    fts_rowid = _fts_rowid(db, row_id, "cjk_rowid")
+    if fts_rowid is None:
+        db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (row_id,))
+        _prune_fts_map(db, row_id)
+        return
+    db.execute("DELETE FROM __xl_fts_cjk WHERE rowid=?", (fts_rowid,))
+    db.execute("UPDATE __xl_fts_map SET cjk_rowid=NULL WHERE row_id=?", (row_id,))
+    _prune_fts_map(db, row_id)
 
 
 def index_cjk_row(db, row_id, values):
     ensure_cjk_fts(db)
-    db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (row_id,))
+    ensure_fts_map(db)
+    delete_cjk_row(db, row_id)
     db.execute("INSERT INTO __xl_fts_cjk VALUES(?,?)", (row_id, cjk_fts_body(values)))
+    _remember_fts_rowid(db, row_id, "cjk_rowid", db.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
 def now():
@@ -755,6 +852,7 @@ def create_app(settings=None):
     def table_transaction(tid):
         """Serialize table mutations across API workers and reject deleting tables."""
         with table_lock(tid), transaction(file(tid)) as db:
+            ensure_table_indexes(db)
             meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
             if "deleting" not in meta_columns:
                 db.execute("ALTER TABLE __xl_meta ADD COLUMN deleting INTEGER NOT NULL DEFAULT 0")
@@ -1226,17 +1324,11 @@ def create_app(settings=None):
             db.execute("DELETE FROM __xl_fts")
             ensure_cjk_fts(db)
             db.execute("DELETE FROM __xl_fts_cjk")
+            db.execute("DELETE FROM __xl_fts_map")
             for raw in db.execute("SELECT * FROM data WHERE _deleted_at IS NULL"):
                 row = decode(raw)
-                body = " ".join(str(v) for v in row["values"].values())
-                db.execute(
-                    "INSERT INTO __xl_fts VALUES(?,?)",
-                    (row["_row_id"], body),
-                )
-                db.execute(
-                    "INSERT INTO __xl_fts_cjk VALUES(?,?)",
-                    (row["_row_id"], cjk_fts_body(row["values"].values())),
-                )
+                insert_legacy_fts_row(db, row["_row_id"], row["values"].values())
+                append_cjk_row(db, row["_row_id"], row["values"].values())
             revision = metadata(db)["table_revision"]
         audit(actor, "schema.changed", tid)
         return JSONResponse(
@@ -1299,7 +1391,7 @@ def create_app(settings=None):
             if idempotency_key:
                 db.execute("INSERT INTO __xl_idempotency VALUES(?,?,?)", (idempotency_key, digest, rid))
             change(db, row, "create")
-            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+            insert_legacy_fts_row(db, rid, values.values())
             append_cjk_row(db, rid, values.values())
         return JSONResponse(response(request, row), status_code=201, headers={"ETag": etag(1)})
 
@@ -1457,8 +1549,8 @@ def create_app(settings=None):
             )
             row = load_row(db, rid)
             change(db, row, "update")
-            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
-            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+            delete_legacy_fts_row(db, rid)
+            insert_legacy_fts_row(db, rid, values.values())
             index_cjk_row(db, rid, values.values())
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
 
@@ -1482,11 +1574,12 @@ def create_app(settings=None):
                     ("__xl_changes", "row_id"),
                     ("__xl_attachments", "row_id"),
                     ("__xl_idempotency", "row_id"),
-                    ("__xl_fts", "row_id"),
                 ]:
                     db.execute(f"DELETE FROM {name} WHERE {column}=?", (rid,))
+                delete_legacy_fts_row(db, rid)
                 if cjk_fts_exists(db):
-                    db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (rid,))
+                    delete_cjk_row(db, rid)
+                db.execute("DELETE FROM __xl_fts_map WHERE row_id=?", (rid,))
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name='__xl_vectors'").fetchone():
                     db.execute("DELETE FROM __xl_vectors WHERE row_id=?", (rid,))
                 db.execute("UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?", (now(),))
@@ -1500,9 +1593,9 @@ def create_app(settings=None):
             remove_qdrant_points(tid, rid)
             db.execute("UPDATE data SET _deleted_at=?,_revision=_revision+1 WHERE _row_id=?", (now(), rid))
             change(db, load_row(db, rid, True), "delete")
-            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
+            delete_legacy_fts_row(db, rid)
             if cjk_fts_exists(db):
-                db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (rid,))
+                delete_cjk_row(db, rid)
         audit(actor, "row.deleted", f"{tid}:{rid}")
         return response(request, {"deleted": True})
 
@@ -1558,8 +1651,8 @@ def create_app(settings=None):
                             )
                             row = load_row(db, rid)
                             change(db, row, "create")
-                            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
-                            index_cjk_row(db, rid, values.values())
+                            insert_legacy_fts_row(db, rid, values.values())
+                            append_cjk_row(db, rid, values.values())
                             result = {"index": index, "status": "created", "row_id": rid, "revision": 1}
                             mark(db, index, result)
                     elif kind == "update":
@@ -1576,8 +1669,8 @@ def create_app(settings=None):
                             )
                             row = load_row(db, item.row_id)
                             change(db, row, "update")
-                            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
-                            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (item.row_id, " ".join(str(x) for x in values.values())))
+                            delete_legacy_fts_row(db, item.row_id)
+                            insert_legacy_fts_row(db, item.row_id, values.values())
                             index_cjk_row(db, item.row_id, values.values())
                             result = {"index": index, "status": "updated", "row_id": item.row_id, "revision": row["_revision"]}
                             mark(db, index, result)
@@ -1593,9 +1686,9 @@ def create_app(settings=None):
                                 (now(), item.row_id),
                             )
                             change(db, load_row(db, item.row_id, True), "delete")
-                            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (item.row_id,))
+                            delete_legacy_fts_row(db, item.row_id)
                             if cjk_fts_exists(db):
-                                db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (item.row_id,))
+                                delete_cjk_row(db, item.row_id)
                             result = {"index": index, "status": "deleted", "row_id": item.row_id}
                             mark(db, index, result)
                         audit(actor, "row.deleted", f"{tid}:{item.row_id}")
@@ -1984,7 +2077,7 @@ def create_app(settings=None):
                 )
                 row = load_row(db, rid)
                 change(db, row, "create")
-                db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
+                insert_legacy_fts_row(db, rid, values.values())
                 append_cjk_row(db, rid, values.values())
                 db.execute("INSERT INTO __xl_idempotency VALUES(?,?,?)", (idempotency_key, digest, rid))
                 imported += 1
@@ -2100,7 +2193,7 @@ def create_app(settings=None):
                         )
                         row = load_row(db, rid)
                         change(db, row, "create")
-                        db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in validated.values())))
+                        insert_legacy_fts_row(db, rid, validated.values())
                         append_cjk_row(db, rid, validated.values())
                     result = {"index": index, "status": "created", "row_id": rid}
                 except APIError as error:
@@ -2241,8 +2334,8 @@ def create_app(settings=None):
             )
             row = load_row(db, rid)
             change(db, row, "restore")
-            db.execute("DELETE FROM __xl_fts WHERE row_id=?", (rid,))
-            db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(v) for v in values.values())))
+            delete_legacy_fts_row(db, rid)
+            insert_legacy_fts_row(db, rid, values.values())
             index_cjk_row(db, rid, values.values())
         audit(actor, "row.restored", f"{tid}:{rid}")
         return JSONResponse(response(request, row), headers={"ETag": etag(row["_revision"])})
