@@ -1,0 +1,15 @@
+[Unit]
+Description=Verified nightly Forgejo snapshot (stop-copy-start, keep newest 7, local disk)
+Documentation=https://xenon.jyxxe.com/dev/xenon-admin/XeonoLab/src/branch/feature/platform-v1/docs/runbooks/forgejo-backup-restore.md
+ConditionPathExists=/var/lib/forgejo
+ConditionPathExists=/usr/local/libexec/xeonolab-forgejo-backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/xeonolab-forgejo-backup
+Nice=15
+IOSchedulingClass=idle
+# The wrapper always restarts Forgejo even when copying fails; a failed run
+# stays visible in the journal and as a stale snapshot.
+Restart=no
+TimeoutStartSec=900
