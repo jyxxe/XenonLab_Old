@@ -126,3 +126,5 @@ dry-run 比对 `data` 有效行数与 `__xl_fts`/`__xl_fts_cjk`/`__xl_fts_map` �
 第十三增量（Issue #95 收尾，2026-11-02）：`prune-changes` 新增 `vacuum: bool`（默认 `false`）。真实删除候选后，
 在表锁内对 `.xl` 执行 SQLite `VACUUM` 回收已释放页（`dry_run` 永不执行 VACUUM），响应返回 `vacuumed` 与
 `file_bytes_before`/`file_bytes_after`；VACUUM 失败不改变已提交的删除，响应带 `vacuum_error` 且表保持可读。
+候选选取改为「一次 `GROUP BY row_id` 求每行最新 revision，再按 `row_id` 索引连接」，避免旧的相关子查询在
+「单行大量 revision」时退化为 O(行数×revision 数)（20k revision 实测从 >60s 降到 0.07s）。

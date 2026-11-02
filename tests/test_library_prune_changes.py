@@ -1,6 +1,7 @@
 """Issue #95: explicit, bounded __xl_changes retention endpoint."""
 
 import sqlite3
+import time
 
 from .conftest import auth
 
@@ -138,3 +139,57 @@ def test_prune_changes_rejects_invalid_bounds(library):
             f"/api/v1/tables/{tid}/maintenance/prune-changes", headers=auth("admin"), json=payload
         )
         assert response.status_code == 422, payload
+
+
+def test_prune_changes_candidates_stay_fast_with_one_heavily_revised_row(library, tmp_path):
+    """Candidate selection must not run a per-row MAX scan: a row revised 20k
+    times is exactly the table shape this tool exists for, and the old
+    correlated subquery degraded to O(rows x revisions)."""
+    tid, row_id, database, total = seed_changes(library, tmp_path)
+    with sqlite3.connect(database) as db:
+        snapshot = db.execute("SELECT snapshot FROM __xl_changes LIMIT 1").fetchone()[0]
+        db.executemany(
+            "INSERT INTO __xl_changes(row_id,revision,operation,snapshot,created_at) VALUES(?,?,?,?,?)",
+            [(row_id, 100 + index, "update", snapshot, "2020-01-01T00:00:00Z") for index in range(20000)],
+        )
+        db.commit()
+        total = db.execute("SELECT COUNT(*) FROM __xl_changes").fetchone()[0]
+
+    started = time.monotonic()
+    response = library.post(
+        f"/api/v1/tables/{tid}/maintenance/prune-changes",
+        headers=auth("admin"),
+        json={"dry_run": True, "older_than_days": 30, "limit": 100000, "keep_recent": 50},
+    )
+    elapsed = time.monotonic() - started
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["candidates"] == total - 50
+    assert elapsed < 10, f"candidate selection took {elapsed:.1f}s for one heavily revised row"
+
+
+def test_prune_changes_vacuum_compacts_a_multi_megabyte_change_log(library, tmp_path):
+    tid, row_id, database, _ = seed_changes(library, tmp_path)
+    with sqlite3.connect(database) as db:
+        snapshot = '{"k":"' + ("a" * 900) + '","v":"' + ("b" * 900) + '"}'
+        db.executemany(
+            "INSERT INTO __xl_changes(row_id,revision,operation,snapshot,created_at) VALUES(?,?,?,?,?)",
+            [(row_id, 100 + index, "update", snapshot, "2020-01-01T00:00:00Z") for index in range(3000)],
+        )
+        db.commit()
+        total = db.execute("SELECT COUNT(*) FROM __xl_changes").fetchone()[0]
+    before = database.stat().st_size
+    assert before > 2 * 1024 * 1024
+    response = library.post(
+        f"/api/v1/tables/{tid}/maintenance/prune-changes",
+        headers=auth("admin"),
+        json={"dry_run": False, "older_than_days": 30, "limit": 5000, "keep_recent": 1, "vacuum": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()["data"]
+    assert body["deleted"] == total - 1  # keep_recent=1 keeps the newest revision
+    assert body["vacuumed"] is True
+    after = database.stat().st_size
+    assert body["file_bytes_after"] == after < before // 2, (before, after)
+    with sqlite3.connect(database) as db:
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert library.get(f"/api/v1/tables/{tid}/rows/{row_id}", headers=auth()).status_code == 200

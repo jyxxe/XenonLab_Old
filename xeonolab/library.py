@@ -2019,8 +2019,12 @@ def create_app(settings=None):
                 for row in db.execute(
                     """
                     SELECT c.sequence FROM __xl_changes c
+                    JOIN (
+                        SELECT row_id, MAX(revision) AS max_revision
+                        FROM __xl_changes GROUP BY row_id
+                    ) latest ON latest.row_id = c.row_id
                     WHERE c.created_at < ? AND c.sequence < ?
-                      AND c.revision < (SELECT MAX(revision) FROM __xl_changes WHERE row_id = c.row_id)
+                      AND c.revision < latest.max_revision
                     ORDER BY c.sequence LIMIT ?
                     """,
                     (cutoff, floor, body.limit),
@@ -2039,6 +2043,10 @@ def create_app(settings=None):
             try:
                 with table_lock(tid), connect(file(tid)) as db:
                     db.execute("VACUUM")
+                    # WAL mode keeps rewritten pages in the -wal file until a
+                    # checkpoint; truncate it so the reported size and the real
+                    # disk usage reflect the compacted database.
+                    db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 vacuumed = True
             except sqlite3.DatabaseError:
                 vacuum_error = "VACUUM failed; data is unchanged and the table stays readable"
