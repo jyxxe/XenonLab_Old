@@ -307,6 +307,10 @@ class PruneChangesRequest(BaseModel):
     keep_recent: int = Field(default=50000, ge=1, le=1000000)
 
 
+class RebuildIndexesRequest(BaseModel):
+    dry_run: bool = True
+
+
 class RepairRequest(BaseModel):
     dry_run: bool = True
     plan_id: str | None = Field(default=None, min_length=1, max_length=64)
@@ -2032,6 +2036,64 @@ def create_app(settings=None):
             "keep_recent": body.keep_recent,
             "limit": body.limit,
         })
+
+    @app.post("/api/v1/tables/{tid}/maintenance/rebuild-indexes")
+    def rebuild_indexes(tid: str, body: RebuildIndexesRequest, request: Request, actor=Depends(scope("xelibrary:admin"))):
+        """Atomically rebuild the additive FTS indexes from the current rows.
+
+        Recovery tool for a corrupted/divergent derived index: dry-run reports
+        whether the index counts match the live rows; the real run deletes and
+        re-creates `__xl_fts`, `__xl_fts_cjk` and `__xl_fts_map` in one table
+        transaction, so an interrupted rebuild rolls back to the previous index.
+        """
+        authorize(actor, tid, "write")
+        if bulk_jobs.active_for_table(tid):
+            raise APIError(409, "TABLE_BULK_ACTIVE", "wait for the table's bulk row job to finish")
+        with connect(catalogue) as db:
+            jobs_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='index_jobs'"
+            ).fetchone()
+            jobs = [json.loads(row[0]) for row in db.execute("SELECT payload FROM index_jobs")] if jobs_exists else []
+        if any(job.get("table_id") == tid and job.get("status") in ("queued", "running") for job in jobs):
+            raise APIError(409, "TABLE_INDEX_ACTIVE", "wait for the table's index job to finish")
+
+        def counts(db):
+            meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
+            if "deleting" in meta_columns and db.execute("SELECT deleting FROM __xl_meta").fetchone()[0]:
+                raise APIError(409, "TABLE_DELETING", "table is being deleted")
+            return {
+                "data_rows": db.execute("SELECT COUNT(*) FROM data WHERE _deleted_at IS NULL").fetchone()[0],
+                "legacy_rows": db.execute("SELECT COUNT(*) FROM __xl_fts").fetchone()[0],
+                "cjk_rows": db.execute("SELECT COUNT(*) FROM __xl_fts_cjk").fetchone()[0]
+                if cjk_fts_exists(db) else 0,
+                "mapping_rows": db.execute("SELECT COUNT(*) FROM __xl_fts_map").fetchone()[0]
+                if db.execute("SELECT 1 FROM sqlite_master WHERE name='__xl_fts_map'").fetchone() else 0,
+            }
+
+        with table_transaction(tid) as db:
+            ensure_table_indexes(db)
+            before = counts(db)
+            if body.dry_run:
+                return response(request, {
+                    "dry_run": True,
+                    "rebuilt": 0,
+                    "before": before,
+                    "consistent": before["data_rows"] == before["legacy_rows"] == before["cjk_rows"],
+                })
+            db.execute("DELETE FROM __xl_fts")
+            ensure_cjk_fts(db)
+            db.execute("DELETE FROM __xl_fts_cjk")
+            db.execute("DELETE FROM __xl_fts_map")
+            db.execute("DELETE FROM __xl_stats WHERE key=?", (FTS_MAP_BACKFILL_KEY,))
+            rebuilt = 0
+            for raw in db.execute("SELECT * FROM data WHERE _deleted_at IS NULL"):
+                row = decode(raw)
+                insert_legacy_fts_row(db, row["_row_id"], row["values"].values())
+                append_cjk_row(db, row["_row_id"], row["values"].values())
+                rebuilt += 1
+            after = counts(db)
+        audit(actor, "table.indexes_rebuilt", f"{tid} rows={rebuilt}")
+        return response(request, {"dry_run": False, "rebuilt": rebuilt, "before": before, "after": after})
 
     @app.post("/api/v1/tables/{tid}/rows:bulkInsert")
     def bulk_insert(tid: str, body: BulkInsert, request: Request, background: BackgroundTasks, actor=Depends(scope("xelibrary:write"))):

@@ -113,3 +113,12 @@ catalogue 无记录且 mtime 超过 300 秒宽限期；执行仅把文件移动�
 且隔离目录中存在 `__xl_meta.table_id` 匹配的副本时，修复计划可 `restore_from_quarantine`：表锁内复核
 catalogue/目标/identity 后移回主文件并带走 sidecar。identity 不匹配或状态变化一律跳过/stale；
 不提供丢弃隔离文件的动作，恢复后仍需按 runbook 抽查。
+
+第十二增量（Issue #81 第八增量，2026-11-02）：新增派生索引重建
+`POST /api/v1/tables/{tid}/maintenance/rebuild-indexes`（`xelibrary:admin` + 表写权限，dry-run 默认）。
+dry-run 比对 `data` 有效行数与 `__xl_fts`/`__xl_fts_cjk`/`__xl_fts_map` 行数并返回 `consistent`；
+真实执行在单个表事务内清空并按当前行重写三张派生索引、清空 `fts_map_backfilled` 标记，写
+`table.indexes_rebuilt` 审计。活动 bulk/index 作业或 deleting 表返回 409；失败整体回滚，不产生半删除
+索引。运维步骤见 `docs/runbooks/xelibrary-index-rebuild.md`。生产真实数据恢复演练、导入/恢复意图
+日志与向量索引重建仍待后续。
+
