@@ -1177,6 +1177,25 @@ def test_cjk_index_mutation_failure_rolls_back_row_and_both_indexes(library, set
     assert "一 致 收 敛" in cjk
 
 
+def test_create_row_appends_cjk_index_without_replacement_scan(library, monkeypatch):
+    tid, _ = seed(library)
+    import xeonolab.library as library_module
+
+    def fail_index(*_args, **_kwargs):
+        raise AssertionError("fresh rows must not run replacement CJK indexing")
+
+    monkeypatch.setattr(library_module, "index_cjk_row", fail_index)
+    created = library.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"title": "积分交换", "confidence": 0.7}},
+    )
+    assert created.status_code == 201, created.text
+    hits = library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"})
+    assert hits.status_code == 200, hits.text
+    assert [hit["row_id"] for hit in hits.json()["data"]] == [created.json()["data"]["_row_id"]]
+
+
 def test_row_acl_catalogue_connections_are_bounded_per_request(library, settings, monkeypatch):
     tid, _ = seed(library)
     table_file = settings.data_dir / "tables" / f"{tid}.xl"
