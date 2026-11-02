@@ -211,8 +211,11 @@ def _payload_files(root: Path) -> list[dict]:
     return result
 
 
-def create_backup(source: Path, destination: Path, *, quiesced: bool = False) -> Path:
-    if not quiesced:
+def create_backup(source: Path, destination: Path, *, quiesced: bool = False, online: bool = False) -> Path:
+    """Snapshot a data root; either an externally enforced pause (quiesced) or a
+    best-effort online copy whose manifest verification rejects a snapshot that
+    raced a concurrent catalogue/file change (see scripts/xelibrary_backup_online.py)."""
+    if not quiesced and not online:
         raise BackupError("production writes must be quiesced; pass explicit --quiesced acknowledgement")
     source = source.resolve(strict=True)
     validate_data_root(source)
@@ -251,6 +254,7 @@ def create_backup(source: Path, destination: Path, *, quiesced: bool = False) ->
         tables = validate_data_root(destination)
         manifest = {
             "format": "xelibrary-backup-v1",
+            "mode": "quiesced" if quiesced else "online",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "source_root": str(source),
             "tables": tables,

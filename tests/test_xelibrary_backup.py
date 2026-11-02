@@ -217,3 +217,21 @@ def test_upload_database_and_staged_parts_are_in_manifest(tmp_path):
     assert (restored / "uploads.sqlite").is_file()
     assert (restored / f"objects/.uploads/{upload_id}/00000001.part").read_bytes() == b"partial upload"
     assert (restored / f"objects/.uploads/.locks/{upload_id}.lock").is_file()
+
+
+def test_online_mode_creates_verified_snapshot_without_quiesced(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    sample(source)
+    backup = create_backup(source, tmp_path / "backup", online=True)
+    manifest = verify_backup(backup)
+    assert manifest["mode"] == "online"
+    assert len(manifest["files"]) == 3
+
+
+def test_create_backup_requires_quiesced_or_online(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    sample(source)
+    with pytest.raises(BackupError, match="quiesced"):
+        create_backup(source, tmp_path / "backup")

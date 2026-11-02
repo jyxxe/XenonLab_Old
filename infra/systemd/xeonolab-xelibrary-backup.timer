@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily verified online XeLibrary data snapshot (local retention, issue #390)
+
+[Timer]
+# Nightly low-traffic window plus boot catch-up; the service is a no-op on
+# targets without a XeLibrary data root.
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=xeonolab-xelibrary-backup.service
+
+[Install]
+WantedBy=timers.target
