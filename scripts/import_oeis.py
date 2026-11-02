@@ -449,7 +449,15 @@ def main(argv=None):
             print(json.dumps({"ok": report["complete"] and not report["missing_count"] and not report["mismatched_count"] and not report["extra_count"], "table_id": checkpoint["table_id"], **report}, ensure_ascii=False, sort_keys=True))
             return 0 if not report["missing_count"] and not report["mismatched_count"] and not report["extra_count"] else 1
         checkpoint = import_bundle(
-            client, args.bundle, manifest, target, args.checkpoint, limit=args.limit
+            client,
+            args.bundle,
+            manifest,
+            target,
+            args.checkpoint,
+            limit=args.limit,
+            shard_count=args.shard_count,
+            shard_index=args.shard_index,
+            batch_size=args.batch_size,
         )
     except ImportError_ as error:
         print(json.dumps({"ok": False, "error": str(error)}), file=sys.stderr)

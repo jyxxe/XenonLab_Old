@@ -364,3 +364,22 @@ def test_batch_mode_rejects_sharding(tmp_path):
         import_bundle(
             FakeBatchClient(), bundle, manifest, TARGET, tmp_path / "c.json", batch_size=2, shard_count=2
         )
+
+
+def test_main_wires_batch_args(monkeypatch, tmp_path):
+    bundle, _ = make_bundle(tmp_path)
+    client = FakeBatchClient()
+    monkeypatch.setattr(import_oeis_module, "APIClient", lambda *args, **kwargs: client)
+    monkeypatch.setenv("XELIBRARY_TOKEN", "test-token")
+    rc = import_oeis_module.main(
+        [
+            "--bundle", str(bundle),
+            "--base-url", "https://example.invalid",
+            "--path", "/OEIS",
+            "--name", "OEIS 数据",
+            "--checkpoint", str(tmp_path / "cli-batch.json"),
+            "--batch-size", "2",
+        ]
+    )
+    assert rc == 0
+    assert [[row["key"] for row in batch] for batch in client.batches] == [["A000001", "A000002"], ["A000003"]]
