@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily verified Keycloak PostgreSQL dump (local retention, issue #390)
+
+[Timer]
+# After the XeLibrary and Forgejo windows; pg_dump is online, no downtime.
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=xeonolab-postgres-backup.service
+
+[Install]
+WantedBy=timers.target
