@@ -1,0 +1,12 @@
+[Unit]
+Description=Prune old XeonoLab release directories (keep current + 3 rollback releases)
+Documentation=file:/opt/xeonolab/current/docs/runbooks/deployment-disk-retention.md
+ConditionPathExists=/opt/xeonolab/current/scripts/prune_releases.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/xeonolab-release-prune
+Nice=10
+IOSchedulingClass=idle
+# Retention is best-effort disk hygiene; never restart-loop the node over it.
+Restart=no
