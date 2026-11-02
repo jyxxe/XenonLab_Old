@@ -6,7 +6,7 @@ ConditionPathExists=/usr/local/libexec/xeonolab-forgejo-backup
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/libexec/xeonolab-forgejo-backup
+ExecStart=/usr/local/libexec/xeonolab-forgejo-backup.sh
 Nice=15
 IOSchedulingClass=idle
 # The wrapper always restarts Forgejo even when copying fails; a failed run
