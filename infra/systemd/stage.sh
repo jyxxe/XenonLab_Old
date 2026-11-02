@@ -47,5 +47,16 @@ if ! grep -q '# xeonolab-lan' /etc/hosts; then
  printf '\n192.168.0.101 xenon.lan auth.xenon.lan library.xenon.lan tools.xenon.lan deploy.xenon.lan llm.xenon.lan # xeonolab-lan\n' >> /etc/hosts
 fi
 systemctl daemon-reload
+# Release retention (issue #383): keep /opt/xeonolab/releases bounded so targets
+# cannot slowly fill up with every deployment again. Installed only when the
+# bootstrap supplies the reviewed unit files; existing targets are rolled out
+# by the disk-retention runbook and re-verified on every deployment.
+if [ -f /tmp/release_prune.sh ] && [ -f /tmp/xeonolab-release-prune.service ] && [ -f /tmp/xeonolab-release-prune.timer ]; then
+    install -m 755 /tmp/release_prune.sh /usr/local/libexec/xeonolab-release-prune
+    install -m 644 /tmp/xeonolab-release-prune.service /etc/systemd/system/xeonolab-release-prune.service
+    install -m 644 /tmp/xeonolab-release-prune.timer /etc/systemd/system/xeonolab-release-prune.timer
+    systemctl daemon-reload
+    systemctl enable --now xeonolab-release-prune.timer
+fi
 rm -rf /tmp/xeonolab-config
 printf 'staged VM %s release %s\n' "$node" "$commit"

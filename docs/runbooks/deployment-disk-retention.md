@@ -27,7 +27,42 @@ same deployment completed on the next attempt.
 - Keep at least **5 GiB** free on `/` on every target; below **1 GiB** staging is
   expected to fail and a deployment must not be started.
 
-## Procedure
+## Automatic retention (issue #383)
+
+Every target now runs a systemd timer that applies the same policy once a day
+(04:30 local, persistent across downtime) so release directories cannot grow
+unbounded between manual audits:
+
+- `infra/systemd/release_prune.sh` → `/usr/local/libexec/xeonolab-release-prune`:
+  root-only wrapper that executes the **active release's**
+  `scripts/prune_releases.py --keep 3 --apply`. The reviewed tool owns the
+  safety checks (active release, symlinks, release-root containment), so the
+  timer cannot delete anything the manual procedure would not.
+- `infra/systemd/xeonolab-release-prune.service` + `.timer`: oneshot service,
+  `Nice=10`/idle IO, `ConditionPathExists` on the current release tool.
+- `infra/systemd/stage.sh` installs and enables the timer during bootstrap when
+  the unit files are supplied in `/tmp`.
+
+Roll out or refresh it on a target (operator session):
+
+```sh
+sudo -n install -m 755 /path/to/release_prune.sh /usr/local/libexec/xeonolab-release-prune
+sudo -n install -m 644 /path/to/xeonolab-release-prune.service /etc/systemd/system/
+sudo -n install -m 644 /path/to/xeonolab-release-prune.timer /etc/systemd/system/
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable --now xeonolab-release-prune.timer
+sudo -n systemctl start xeonolab-release-prune.service   # verify once now
+sudo -n journalctl -u xeonolab-release-prune.service -n 20 --no-pager
+sudo -n systemctl list-timers xeonolab-release-prune.timer --no-pager
+```
+
+Expected: journal shows `keep (4)` / `delete (N)` / `removed N`, the release
+count stays at four (current + three previous), `current` is unchanged and
+`/health/ready` still returns 200. The timer never restarts application
+services; a pruning failure only logs and leaves the rest of the node intact.
+
+## Procedure (manual fallback)
+
 
 1. Inspect one target:
 
