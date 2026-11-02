@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily verified Forgejo snapshot (local retention, issue #390)
+
+[Timer]
+# Nightly after the XeLibrary snapshot window. The stop-copy-start is seconds on
+# the current ~110 MB data root; a persistent timer catches up after downtime.
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=xeonolab-forgejo-backup.service
+
+[Install]
+WantedBy=timers.target
