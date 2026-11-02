@@ -34,6 +34,39 @@ async function waitFor(fn, label) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
+// Command-palette state for keyboard selection. Reading it in one evaluate
+// keeps the item order and selected index consistent (issue #385: the old
+// blind ArrowDown loop raced React's filtered re-render under CI load).
+async function paletteState(cdp) {
+  return cdp.evaluate(`(() => {
+    const items = [...document.querySelectorAll('.command-item')];
+    return {
+      texts: items.map(item => item.innerText.trim()),
+      selected: items.findIndex(item => item.getAttribute('aria-selected') === 'true'),
+    };
+  })()`);
+}
+
+async function paletteTargetSelected(cdp) {
+  return cdp.evaluate(
+    "Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))",
+  );
+}
+
+// Press ArrowDown and wait for the selection to actually move before pressing
+// again, so a dropped/early keypress cannot desynchronise the loop.
+async function advancePaletteSelection(cdp) {
+  const before = (await paletteState(cdp)).selected;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await cdp.key('ArrowDown', 'ArrowDown');
+    for (let poll = 0; poll < 20; poll += 1) {
+      if ((await paletteState(cdp)).selected !== before) return true;
+      await sleep(50);
+    }
+  }
+  return false;
+}
+
 function waitForExit(child, timeoutMs) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
   return new Promise(resolve => {
@@ -488,15 +521,27 @@ test('Desktop shell acceptance: launchpad, windows, palette, settings persistenc
     await cdp.key('k', 'KeyK', 2 /* Ctrl */);
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.command-palette'))"), 'command palette');
     await cdp.evaluate(`(() => {const input=document.querySelector('.command-input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'Harness');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
-    await waitFor(() => cdp.evaluate("document.querySelectorAll('.command-item').length>=2"), 'palette items');
-    for (let step = 0; step < 6; step += 1) {
-      if (await cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))")) break;
-      await cdp.key('ArrowDown', 'ArrowDown');
-    }
+    await waitFor(() => cdp.evaluate("document.querySelector('.command-input')?.value === 'Harness'"), 'palette filter input');
     await waitFor(
-      () => cdp.evaluate("Boolean(document.querySelector('.command-item[aria-selected=\"true\"]')?.innerText.includes('任务'))"),
-      'palette keyboard selection',
+      () => cdp.evaluate("[...document.querySelectorAll('.command-item')].some(item => item.innerText.includes('任务'))"),
+      'filtered palette items',
     );
+    if (!(await paletteTargetSelected(cdp))) {
+      if ((await paletteState(cdp)).selected < 0) {
+        await cdp.key('ArrowDown', 'ArrowDown');
+        await waitFor(async () => (await paletteState(cdp)).selected >= 0, 'palette initial keyboard selection');
+      }
+      for (let step = 0; step < 15; step += 1) {
+        if (await paletteTargetSelected(cdp)) break;
+        if (!(await advancePaletteSelection(cdp))) break;
+      }
+    }
+    if (!(await paletteTargetSelected(cdp))) {
+      const state = await paletteState(cdp);
+      throw new Error(
+        `palette keyboard selection failed; items=${JSON.stringify(state.texts)} selected=${state.selected}`,
+      );
+    }
     await cdp.key('Enter', 'Enter');
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.window[data-app-id=issues] .issues-app'))"), 'issues app from palette');
     await waitFor(() => cdp.evaluate("document.querySelectorAll('.issues-table tbody tr').length===2"), 'active Issues excludes the expired claim');
