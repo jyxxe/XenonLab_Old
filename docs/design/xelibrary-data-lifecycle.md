@@ -122,3 +122,7 @@ dry-run 比对 `data` 有效行数与 `__xl_fts`/`__xl_fts_cjk`/`__xl_fts_map` �
 索引。运维步骤见 `docs/runbooks/xelibrary-index-rebuild.md`。生产真实数据恢复演练、导入/恢复意图
 日志与向量索引重建仍待后续。
 
+
+第十三增量（Issue #95 收尾，2026-11-02）：`prune-changes` 新增 `vacuum: bool`（默认 `false`）。真实删除候选后，
+在表锁内对 `.xl` 执行 SQLite `VACUUM` 回收已释放页（`dry_run` 永不执行 VACUUM），响应返回 `vacuumed` 与
+`file_bytes_before`/`file_bytes_after`；VACUUM 失败不改变已提交的删除，响应带 `vacuum_error` 且表保持可读。
