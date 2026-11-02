@@ -12,16 +12,22 @@ MAGIC = b"PGDMP"
 
 
 def fake_success(command, timeout=600):
-    if "pg_dump" in command:
-        destination = pathlib.Path(command[command.index("-f") + 1])
-        destination.write_bytes(MAGIC + b"payload")
     if "pg_restore" in command:
         return subprocess.CompletedProcess(command, 0, "; archive\n1; 0 0 TABLE public user\n", "")
     return subprocess.CompletedProcess(command, 0, "", "")
 
 
+def fake_dump_stdout(command, destination, timeout=600):
+    """The real helper pipes pg_dump stdout into a root-owned 0600 file."""
+    assert "pg_dump" in command
+    destination.write_bytes(MAGIC + b"payload")
+    destination.chmod(0o600)
+    return subprocess.CompletedProcess(command, 0, "", "")
+
+
 def test_snapshot_writes_manifest_and_verifies(tmp_path, monkeypatch):
     monkeypatch.setattr(postgres_backup, "run", fake_success)
+    monkeypatch.setattr(postgres_backup, "run_to_file", fake_dump_stdout)
     result = postgres_backup.create_snapshot("keycloak", tmp_path / "backups", keep=2)
     snapshot = pathlib.Path(result["snapshot"])
     dump = snapshot / "keycloak.dump"
@@ -35,10 +41,10 @@ def test_snapshot_writes_manifest_and_verifies(tmp_path, monkeypatch):
 
 
 def test_dump_failure_leaves_no_snapshot(tmp_path, monkeypatch):
-    def failing(command, timeout=600):
+    def failing(command, destination, timeout=600):
         return subprocess.CompletedProcess(command, 2, "", "connection refused")
 
-    monkeypatch.setattr(postgres_backup, "run", failing)
+    monkeypatch.setattr(postgres_backup, "run_to_file", failing)
     with pytest.raises(postgres_backup.PostgresBackupError):
         postgres_backup.create_snapshot("keycloak", tmp_path / "backups", attempts=2)
     remaining = [path for path in (tmp_path / "backups").iterdir() if path.is_dir() and not path.name.startswith("keycloak-dump-")]
@@ -51,6 +57,14 @@ def test_validate_rejects_non_custom_archive(tmp_path, monkeypatch):
     bad.write_bytes(b"plain text")
     with pytest.raises(postgres_backup.PostgresBackupError, match="custom-format"):
         postgres_backup.validate_dump(bad)
+
+
+def test_run_to_file_captures_stdout_as_private_file(tmp_path):
+    destination = tmp_path / "archive.dump"
+    result = postgres_backup.run_to_file(["/bin/sh", "-c", "printf PGDMPpayload"], destination)
+    assert result.returncode == 0
+    assert destination.read_bytes() == MAGIC + b"payload"
+    assert (destination.stat().st_mode & 0o777) == 0o600
 
 
 def test_prune_keeps_newest_and_ignores_foreign_entries(tmp_path):
