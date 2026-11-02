@@ -845,6 +845,54 @@
         }
       }
     },
+    "/api/v1/tables/{tid}/maintenance/rebuild-indexes": {
+      "post": {
+        "summary": "Rebuild Indexes",
+        "description": "Atomically rebuild the additive FTS indexes from the current rows.\n\nRecovery tool for a corrupted/divergent derived index: dry-run reports\nwhether the index counts match the live rows; the real run deletes and\nre-creates `__xl_fts`, `__xl_fts_cjk` and `__xl_fts_map` in one table\ntransaction, so an interrupted rebuild rolls back to the previous index.",
+        "operationId": "rebuild_indexes_api_v1_tables__tid__maintenance_rebuild_indexes_post",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebuildIndexesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/rows:bulkInsert": {
       "post": {
         "summary": "Bulk Insert",
@@ -4232,6 +4280,17 @@
           "expression"
         ],
         "title": "QueryBody"
+      },
+      "RebuildIndexesRequest": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "RebuildIndexesRequest"
       },
       "RepairRequest": {
         "properties": {
