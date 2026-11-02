@@ -5,8 +5,10 @@ VM109 hosts Keycloak plus its PostgreSQL 18 cluster (``keycloak`` database,
 ~13 MB). It had no scheduled backup. ``pg_dump -Fc`` is transactionally
 consistent on a live database, so no service stop is needed:
 
-- dump to a private staging file via ``sudo -n -u postgres pg_dump -Fc`` (peer
-  auth; no credential is read or written by this tool);
+- run ``sudo -n -u postgres pg_dump -Fc`` (peer auth; no credential is read or
+  written by this tool) and stream its archive from stdout into a root-owned
+  0600 staging file, so the database account never needs access to the private
+  backup tree;
 - validate the archive with ``pg_restore -l`` and the ``PGDMP`` magic, record
   size/SHA-256 in a per-snapshot ``manifest.json``/``manifest.sha256``;
 - retain the newest N ``keycloak-<UTC stamp>Z`` snapshot directories.
@@ -74,20 +76,37 @@ def run(command: list[str], timeout: int = 600) -> subprocess.CompletedProcess:
     return subprocess.run(command, capture_output=True, text=True, timeout=timeout)
 
 
+def run_to_file(command: list[str], destination: Path, timeout: int = 600) -> subprocess.CompletedProcess:
+    """Run a dump command and capture its binary stdout into a private file.
+
+    ``pg_dump`` runs as the database account via peer auth, but writes its
+    archive to stdout. The root process owns the destination file, so the
+    database account never needs traversal or write access to the private
+    backup tree and the archive bytes are created 0600 by the caller.
+    """
+    with destination.open("wb") as handle:
+        result = subprocess.run(command, stdout=handle, stderr=subprocess.PIPE, timeout=timeout)
+    os.chmod(destination, 0o600)
+    result.stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
+    return result
+
+
 def dump_database(database: str, destination: Path, *, run_as: str = "postgres") -> None:
-    command = ["sudo", "-n", "-u", run_as, "pg_dump", "-Fc", "-f", str(destination), database]
-    result = run(command)
+    command = ["sudo", "-n", "-u", run_as, "pg_dump", "-Fc", database]
+    result = run_to_file(command, destination)
     if result.returncode:
-        raise PostgresBackupError(f"pg_dump failed: {result.stderr.strip()[:300]}")
+        raise PostgresBackupError(f"pg_dump failed: {(result.stderr or '').strip()[:300]}")
 
 
-def validate_dump(path: Path, *, run_as: str = "postgres") -> int:
+def validate_dump(path: Path) -> int:
     if not path.is_file():
         raise PostgresBackupError(f"dump is missing: {path}")
     with path.open("rb") as handle:
         if handle.read(len(MAGIC)) != MAGIC:
             raise PostgresBackupError("dump is not a PostgreSQL custom-format archive")
-    result = run(["sudo", "-n", "-u", run_as, "pg_restore", "-l", str(path)])
+    # Listing the archive TOC is offline work: the root process can read its
+    # own 0600 dump, so no database account permission is needed here.
+    result = run(["pg_restore", "-l", str(path)])
     if result.returncode:
         raise PostgresBackupError(f"pg_restore -l failed: {result.stderr.strip()[:300]}")
     entries = [line for line in result.stdout.splitlines() if line and not line.startswith(";")]
@@ -114,7 +133,7 @@ def write_manifest(snapshot: Path, dump: Path, metadata: dict) -> None:
     os.chmod(snapshot / "manifest.sha256", 0o600)
 
 
-def verify_snapshot(snapshot: Path, *, run_as: str = "postgres") -> dict:
+def verify_snapshot(snapshot: Path) -> dict:
     manifest_path = snapshot / "manifest.json"
     sidecar = snapshot / "manifest.sha256"
     if not manifest_path.is_file() or not sidecar.is_file():
@@ -128,7 +147,7 @@ def verify_snapshot(snapshot: Path, *, run_as: str = "postgres") -> dict:
     dump = snapshot / manifest["dump"]
     if hashlib.sha256(dump.read_bytes()).hexdigest() != manifest["sha256"]:
         raise PostgresBackupError("dump checksum mismatch")
-    objects = validate_dump(dump, run_as=run_as)
+    objects = validate_dump(dump)
     return {"size": manifest["size"], "objects": objects, "sha256": manifest["sha256"]}
 
 
@@ -144,7 +163,7 @@ def create_snapshot(database: str, root: Path, *, keep: int = 7, run_as: str = "
         try:
             staged = staging / "keycloak.dump"
             dump_database(database, staged, run_as=run_as)
-            objects = validate_dump(staged, run_as=run_as)
+            objects = validate_dump(staged)
             destination = snapshot / "keycloak.dump"
             shutil.copyfile(staged, destination)
             os.chmod(destination, 0o600)
@@ -184,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"snapshot ok: {result['snapshot']} (attempt {result['attempts']}, "
                   f"{result['size']} bytes, {result['objects']} objects, pruned {len(result['pruned'])})")
         elif args.command == "verify":
-            result = verify_snapshot(args.directory, run_as=args.run_as)
+            result = verify_snapshot(args.directory)
             print(f"verified {args.directory}: {result['size']} bytes, {result['objects']} objects")
         else:
             removed = prune_snapshots(args.root, args.keep)

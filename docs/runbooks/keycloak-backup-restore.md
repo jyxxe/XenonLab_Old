@@ -53,7 +53,9 @@ timer 下次 04:30 UTC 左右。
 latest=$(sudo -n find /var/backups/xeonolab/keycloak -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
 drill=keycloak_drill_$(date -u +%Y%m%d%H%M%S)
 sudo -n -u postgres createdb "$drill"
-sudo -n -u postgres pg_restore -d "$drill" "$latest/keycloak.dump"
+# The dump stays root-owned 0600 in a 0700 tree: stream it to pg_restore as
+# postgres instead of granting the database account read access to the tree.
+sudo -n cat "$latest/keycloak.dump" | sudo -n -u postgres pg_restore -d "$drill"
 sudo -n -u postgres psql -d "$drill" -tAc "select count(*) from information_schema.tables where table_schema='public'"
 sudo -n -u postgres dropdb "$drill"
 ```
