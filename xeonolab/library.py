@@ -100,6 +100,18 @@ def cjk_fts_exists(db):
     return db.execute("SELECT 1 FROM sqlite_master WHERE name='__xl_fts_cjk'").fetchone() is not None
 
 
+def append_cjk_row(db, row_id, values):
+    """Index a row that did not exist before.
+
+    A fresh row id cannot have a stale index entry, so the defensive
+    ``DELETE ... WHERE row_id=?`` of :func:`index_cjk_row` is unnecessary. That
+    delete is a full scan of the FTS5 table (``row_id`` is UNINDEXED), which is
+    O(table rows) per insert and made large imports superlinear.
+    """
+    ensure_cjk_fts(db)
+    db.execute("INSERT INTO __xl_fts_cjk VALUES(?,?)", (row_id, cjk_fts_body(values)))
+
+
 def index_cjk_row(db, row_id, values):
     ensure_cjk_fts(db)
     db.execute("DELETE FROM __xl_fts_cjk WHERE row_id=?", (row_id,))
@@ -1288,7 +1300,7 @@ def create_app(settings=None):
                 db.execute("INSERT INTO __xl_idempotency VALUES(?,?,?)", (idempotency_key, digest, rid))
             change(db, row, "create")
             db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
-            index_cjk_row(db, rid, values.values())
+            append_cjk_row(db, rid, values.values())
         return JSONResponse(response(request, row), status_code=201, headers={"ETag": etag(1)})
 
     @app.get("/api/v1/tables/{tid}/rows")
@@ -1973,7 +1985,7 @@ def create_app(settings=None):
                 row = load_row(db, rid)
                 change(db, row, "create")
                 db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in values.values())))
-                index_cjk_row(db, rid, values.values())
+                append_cjk_row(db, rid, values.values())
                 db.execute("INSERT INTO __xl_idempotency VALUES(?,?,?)", (idempotency_key, digest, rid))
                 imported += 1
         audit(actor, "rows.import_batch", f"{tid}:imported={imported}:existing={existing}")
@@ -2089,7 +2101,7 @@ def create_app(settings=None):
                         row = load_row(db, rid)
                         change(db, row, "create")
                         db.execute("INSERT INTO __xl_fts VALUES(?,?)", (rid, " ".join(str(x) for x in validated.values())))
-                        index_cjk_row(db, rid, validated.values())
+                        append_cjk_row(db, rid, validated.values())
                     result = {"index": index, "status": "created", "row_id": rid}
                 except APIError as error:
                     failed = True

@@ -1,5 +1,7 @@
 """Admin batch import endpoint: atomic, bounded and idempotent (Issue #261)."""
 
+import pytest
+
 from .conftest import auth
 
 
@@ -80,3 +82,51 @@ def test_batch_import_requires_admin_and_is_bounded(library):
     assert response.status_code == 422
     empty = batch(library, table_id, [])
     assert empty.status_code == 422
+
+
+def test_batch_import_appends_to_cjk_index_without_replacement_scan(library, monkeypatch):
+    """Fresh rows must not run the O(table rows) CJK replace path.
+
+    `index_cjk_row` deletes by an UNINDEXED column, which FTS5 implements as a
+    full scan. Batch import only creates new rows, so it has to append instead;
+    otherwise import cost grows superlinearly with the table size.
+    """
+    import xeonolab.library as library_module
+
+    table_id = create_table(library)
+    replacement_calls = []
+    original = library_module.index_cjk_row
+
+    def tracked(db, row_id, values):
+        replacement_calls.append(row_id)
+        return original(db, row_id, values)
+
+    monkeypatch.setattr(library_module, "index_cjk_row", tracked)
+    rows = [
+        {"key": f"A{i:06d}", "values": {"a_number": f"A{i:06d}", "terms": "积分 交换"}}
+        for i in range(1, 4)
+    ]
+    response = batch(library, table_id, rows)
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["imported"] == 3
+    assert replacement_calls == []
+
+    hits = library.post("/api/v1/search/text", headers=auth("admin"), json={"query": "积分"})
+    assert hits.status_code == 200, hits.text
+    assert {hit["table_id"] for hit in hits.json()["data"]} == {table_id}
+
+
+def test_batch_cjk_append_failure_rolls_back_the_whole_batch(library, monkeypatch):
+    import xeonolab.library as library_module
+
+    table_id = create_table(library)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("injected CJK append failure")
+
+    monkeypatch.setattr(library_module, "append_cjk_row", fail)
+    rows = [{"key": "A000001", "values": {"a_number": "A000001", "terms": "1"}}]
+    with pytest.raises(RuntimeError, match="injected CJK append failure"):
+        batch(library, table_id, rows)
+    assert list_rows(library, table_id) == []
+
