@@ -6,6 +6,50 @@ independent-storage requirement. PostgreSQL, independent backup storage,
 automated retention/monitoring, and a production restore drill are not
 implemented by this tool.
 
+## Automatic online snapshots (issue #390)
+
+The production XeLibrary target (VM104) runs a nightly systemd timer that takes
+a **verified online snapshot** without pausing the service:
+
+- `xeonolab-xelibrary-backup.timer` (daily 03:30 + randomized delay, persistent)
+  → `xeonolab-xelibrary-backup.service` → root wrapper
+  `/usr/local/libexec/xeonolab-xelibrary-backup`;
+- the wrapper runs the active release's
+  `scripts/xelibrary_backup_online.py snapshot` against
+  `/srv/xelibrary/core/xeonolab`, writing
+  `/var/backups/xeonolab/xelibrary/xelibrary-<UTC stamp>Z`;
+- each SQLite payload is copied with the online backup API, content-addressed
+  objects are copied, and the existing manifest verification
+  (format/checksum/payload SHA-256/SQLite integrity/catalogue↔table identity)
+  must pass. If a concurrent table create/move/delete or attachment binding
+  races the copy, verification fails, the partial directory is removed and the
+  attempt is retried (3 attempts); a passing snapshot is internally consistent;
+- retention keeps the newest **7** snapshots (`XELIBRARY_BACKUP_KEEP`), pruning
+  older `xelibrary-*Z` directories only; other entries are never touched.
+
+Operate/verify it:
+
+```sh
+sudo -n systemctl list-timers xeonolab-xelibrary-backup.timer --no-pager
+sudo -n systemctl start xeonolab-xelibrary-backup.service
+sudo -n journalctl -u xeonolab-xelibrary-backup.service -n 20 --no-pager
+sudo -n ls -lt /var/backups/xeonolab/xelibrary | head
+sudo -n /opt/xeonolab/current/.venv/bin/python \
+  /opt/xeonolab/current/scripts/xelibrary_backup_online.py verify \
+  --root /var/backups/xeonolab/xelibrary
+```
+
+Timing: a ~1 GB data root takes seconds on local disk; the service is a no-op
+on targets without a XeLibrary data root (units are installed fleet-wide but
+guarded by `ConditionPathExists`).
+
+**Limits (must stay explicit):** this is still a same-host local copy — it does
+not survive host/disk loss and is not offsite. The snapshot is not a quiesced
+point-in-time: it is consistent as verified by the manifest, but a write that
+lands after a table was copied simply belongs to the next snapshot. A daily
+timer is not a substitute for the isolated restore drill below, or for the
+offsite-storage decision tracked in #390.
+
 ## Preconditions
 
 Before a production backup, the service coordinator must explicitly confirm

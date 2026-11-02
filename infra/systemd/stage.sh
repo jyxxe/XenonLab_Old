@@ -51,6 +51,16 @@ systemctl daemon-reload
 # cannot slowly fill up with every deployment again. Installed only when the
 # bootstrap supplies the reviewed unit files; existing targets are rolled out
 # by the disk-retention runbook and re-verified on every deployment.
+# Daily verified XeLibrary snapshot (issue #390): installed only when the
+# bootstrap supplies the reviewed wrapper/units; otherwise the timer is rolled
+# out by the backup runbook on the data-holding target.
+if [ -f /tmp/xelibrary_backup.sh ] && [ -f /tmp/xeonolab-xelibrary-backup.service ] && [ -f /tmp/xeonolab-xelibrary-backup.timer ]; then
+    install -m 755 /tmp/xelibrary_backup.sh /usr/local/libexec/xeonolab-xelibrary-backup
+    install -m 644 /tmp/xeonolab-xelibrary-backup.service /etc/systemd/system/xeonolab-xelibrary-backup.service
+    install -m 644 /tmp/xeonolab-xelibrary-backup.timer /etc/systemd/system/xeonolab-xelibrary-backup.timer
+    systemctl daemon-reload
+    systemctl enable --now xeonolab-xelibrary-backup.timer
+fi
 if [ -f /tmp/release_prune.sh ] && [ -f /tmp/xeonolab-release-prune.service ] && [ -f /tmp/xeonolab-release-prune.timer ]; then
     install -m 755 /tmp/release_prune.sh /usr/local/libexec/xeonolab-release-prune
     install -m 644 /tmp/xeonolab-release-prune.service /etc/systemd/system/xeonolab-release-prune.service

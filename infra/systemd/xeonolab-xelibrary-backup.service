@@ -1,0 +1,15 @@
+[Unit]
+Description=Verified online XeLibrary data snapshot (keep newest 7, local disk)
+Documentation=file:/opt/xeonolab/current/docs/runbooks/xelibrary-backup-restore.md
+ConditionPathExists=/srv/xelibrary/core/xeonolab
+ConditionPathExists=/opt/xeonolab/current/scripts/xelibrary_backup_online.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/xeonolab-xelibrary-backup
+Nice=15
+IOSchedulingClass=idle
+# A backup failure must not restart-loop the node; it is visible in the journal
+# and as a stale snapshot in /var/backups/xeonolab/xelibrary.
+Restart=no
+TimeoutStartSec=900
