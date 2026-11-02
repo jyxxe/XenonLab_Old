@@ -1196,6 +1196,108 @@ def test_create_row_appends_cjk_index_without_replacement_scan(library, monkeypa
     assert [hit["row_id"] for hit in hits.json()["data"]] == [created.json()["data"]["_row_id"]]
 
 
+def test_fts_rowid_map_keeps_replace_and_delete_off_scan(library, settings):
+    tid, rid = seed(library)
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    row_url = f"/api/v1/tables/{tid}/rows/{rid}"
+    with sqlite3.connect(table_file) as db:
+        mapping = db.execute(
+            "SELECT legacy_rowid, cjk_rowid FROM __xl_fts_map WHERE row_id=?", (rid,)
+        ).fetchone()
+        assert mapping and mapping[0] is not None and mapping[1] is not None
+        assert db.execute("SELECT 1 FROM __xl_fts WHERE rowid=?", (mapping[0],)).fetchone()
+        assert db.execute("SELECT 1 FROM __xl_fts_cjk WHERE rowid=?", (mapping[1],)).fetchone()
+
+    before = library.get(row_url, headers=auth())
+    patched = library.patch(
+        row_url, headers=auth(**{"If-Match": before.headers["ETag"]}), json={"values": {"title": "积分交换"}}
+    )
+    assert patched.status_code == 200, patched.text
+    with sqlite3.connect(table_file) as db:
+        mapping = db.execute(
+            "SELECT legacy_rowid, cjk_rowid FROM __xl_fts_map WHERE row_id=?", (rid,)
+        ).fetchone()
+        assert mapping
+        legacy = db.execute("SELECT body FROM __xl_fts WHERE rowid=?", (mapping[0],)).fetchone()
+        cjk = db.execute("SELECT body FROM __xl_fts_cjk WHERE rowid=?", (mapping[1],)).fetchone()
+        assert legacy and legacy[0] == "积分交换 0.92"
+        assert cjk and "积 分 交 换" in cjk[0]
+        assert db.execute("SELECT count(*) FROM __xl_fts WHERE row_id=?", (rid,)).fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM __xl_fts_cjk WHERE row_id=?", (rid,)).fetchone()[0] == 1
+
+    deleted = library.delete(row_url, headers=auth(**{"If-Match": patched.headers["ETag"]}))
+    assert deleted.status_code == 200, deleted.text
+    with sqlite3.connect(table_file) as db:
+        assert db.execute("SELECT count(*) FROM __xl_fts_map WHERE row_id=?", (rid,)).fetchone()[0] == 0
+
+
+def test_fts_rowid_map_falls_back_for_rows_indexed_before_the_map(library, settings):
+    tid, rid = seed(library)
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    row_url = f"/api/v1/tables/{tid}/rows/{rid}"
+    # Simulate a table written by the previous release: index rows exist but
+    # the rowid map does not.
+    with sqlite3.connect(table_file) as db:
+        db.execute("DELETE FROM __xl_fts_map")
+        db.commit()
+
+    before = library.get(row_url, headers=auth())
+    patched = library.patch(
+        row_url, headers=auth(**{"If-Match": before.headers["ETag"]}), json={"values": {"title": "积分交换"}}
+    )
+    assert patched.status_code == 200, patched.text
+    with sqlite3.connect(table_file) as db:
+        assert db.execute("SELECT count(*) FROM __xl_fts WHERE row_id=?", (rid,)).fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM __xl_fts_cjk WHERE row_id=?", (rid,)).fetchone()[0] == 1
+        mapping = db.execute(
+            "SELECT legacy_rowid, cjk_rowid FROM __xl_fts_map WHERE row_id=?", (rid,)
+        ).fetchone()
+        assert mapping and mapping[0] is not None and mapping[1] is not None
+    assert library.post("/api/v1/search/text", headers=auth(), json={"query": "积分"}).json()["data"]
+
+
+def test_fts_rowid_map_backfills_untouched_rows_on_first_write(library, settings):
+    tid, rid = seed(library)
+    other = library.post(
+        f"/api/v1/tables/{tid}/rows",
+        headers=auth(),
+        json={"values": {"title": "另一行", "confidence": 0.5}},
+    ).json()["data"]["_row_id"]
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    row_url = f"/api/v1/tables/{tid}/rows/{rid}"
+    with sqlite3.connect(table_file) as db:
+        db.execute("DELETE FROM __xl_fts_map")
+        db.execute("DELETE FROM __xl_stats WHERE key='fts_map_backfilled'")
+        db.commit()
+
+    before = library.get(row_url, headers=auth())
+    patched = library.patch(
+        row_url, headers=auth(**{"If-Match": before.headers["ETag"]}), json={"values": {"title": "积分交换"}}
+    )
+    assert patched.status_code == 200, patched.text
+    with sqlite3.connect(table_file) as db:
+        mapping = db.execute(
+            "SELECT legacy_rowid, cjk_rowid FROM __xl_fts_map WHERE row_id=?", (other,)
+        ).fetchone()
+        assert mapping and mapping[0] is not None and mapping[1] is not None
+        marker = db.execute("SELECT value FROM __xl_stats WHERE key='fts_map_backfilled'").fetchone()
+        assert marker and marker[0] == "1"
+
+
+def test_changes_lookup_uses_the_row_id_index(library, settings):
+    tid, rid = seed(library)
+    table_file = settings.data_dir / "tables" / f"{tid}.xl"
+    with sqlite3.connect(table_file) as db:
+        plan = [
+            row[-1]
+            for row in db.execute(
+                "EXPLAIN QUERY PLAN SELECT snapshot FROM __xl_changes WHERE row_id=? AND revision=?",
+                (rid, 1),
+            )
+        ]
+    assert any("__xl_changes_row" in detail for detail in plan), plan
+
+
 def test_row_acl_catalogue_connections_are_bounded_per_request(library, settings, monkeypatch):
     tid, _ = seed(library)
     table_file = settings.data_dir / "tables" / f"{tid}.xl"
