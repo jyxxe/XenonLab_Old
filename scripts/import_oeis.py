@@ -406,6 +406,7 @@ def main(argv=None):
         help="rows per atomic importBatch request (1 = per-row API)",
     )
     parser.add_argument("--shard-index", type=int, default=1, help="this importer's 1-based shard index")
+    parser.add_argument("--timeout", type=float, default=30.0, help="HTTP timeout per request in seconds")
     parser.add_argument(
         "--retry-429",
         type=int,
@@ -438,6 +439,7 @@ def main(argv=None):
             token,
             retry_429=args.retry_429,
             ca_file=args.ca_file or None,
+            timeout=args.timeout,
         )
         if args.audit:
             checkpoint = load_checkpoint(args.checkpoint, manifest["sha256"], target)
