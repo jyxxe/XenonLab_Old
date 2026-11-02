@@ -81,6 +81,47 @@ def test_prune_changes_deletes_only_bounded_candidates_and_keeps_latest(library,
     assert latest == 4
 
 
+def test_prune_changes_vacuum_reclaims_free_pages_after_real_delete(library, tmp_path):
+    tid, row_id, database, total = seed_changes(library, tmp_path)
+    before = database.stat().st_size
+    response = library.post(
+        f"/api/v1/tables/{tid}/maintenance/prune-changes",
+        headers=auth("admin"),
+        json={
+            "dry_run": False,
+            "older_than_days": 30,
+            "limit": 3,
+            "keep_recent": 1,
+            "vacuum": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()["data"]
+    assert body["deleted"] == 3
+    assert body["vacuumed"] is True
+    assert body["file_bytes_before"] == before
+    assert 0 < body["file_bytes_after"] <= body["file_bytes_before"]
+    assert "vacuum_error" not in body
+    with sqlite3.connect(database) as db:
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert library.get(f"/api/v1/tables/{tid}/rows/{row_id}", headers=auth()).status_code == 200
+
+
+def test_prune_changes_dry_run_never_vacuums(library, tmp_path):
+    tid, _, database, _ = seed_changes(library, tmp_path)
+    before = database.stat().st_size
+    response = library.post(
+        f"/api/v1/tables/{tid}/maintenance/prune-changes",
+        headers=auth("admin"),
+        json={"dry_run": True, "older_than_days": 30, "vacuum": True},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()["data"]
+    assert body["vacuumed"] is False
+    assert body["file_bytes_after"] == before
+    assert body["deleted"] == 0
+
+
 def test_prune_changes_rejects_invalid_bounds(library):
     tid = library.post(
         "/api/v1/tables",

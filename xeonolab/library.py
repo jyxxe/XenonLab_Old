@@ -305,6 +305,7 @@ class PruneChangesRequest(BaseModel):
     older_than_days: int = Field(default=30, ge=1, le=3650)
     limit: int = Field(default=5000, ge=1, le=100000)
     keep_recent: int = Field(default=50000, ge=1, le=1000000)
+    vacuum: bool = False
 
 
 class RebuildIndexesRequest(BaseModel):
@@ -2005,6 +2006,8 @@ def create_app(settings=None):
         if any(job.get("table_id") == tid and job.get("status") in ("queued", "running") for job in jobs):
             raise APIError(409, "TABLE_INDEX_ACTIVE", "wait for the table's index job to finish")
         cutoff = (datetime.now(timezone.utc) - timedelta(days=body.older_than_days)).isoformat()
+        database = table_directory / f"{tid}.xl"
+        file_bytes_before = database.stat().st_size if database.is_file() else 0
         with table_transaction(tid) as db:
             meta_columns = {row[1] for row in db.execute("PRAGMA table_info(__xl_meta)")}
             if "deleting" in meta_columns and db.execute("SELECT deleting FROM __xl_meta").fetchone()[0]:
@@ -2027,15 +2030,38 @@ def create_app(settings=None):
             if not body.dry_run and candidates:
                 db.executemany("DELETE FROM __xl_changes WHERE sequence = ?", [(sequence,) for sequence in candidates])
                 deleted = len(candidates)
-        audit(actor, "table.prune_changes", f"{tid} dry_run={body.dry_run} candidates={len(candidates)} deleted={deleted}")
-        return response(request, {
+        vacuumed = False
+        vacuum_error = None
+        if not body.dry_run and body.vacuum:
+            # VACUUM cannot run inside a transaction; the table lock keeps it
+            # exclusive. Deleted history rows leave free pages that are only
+            # reused by later writes, so reclaiming them is opt-in.
+            try:
+                with table_lock(tid), connect(file(tid)) as db:
+                    db.execute("VACUUM")
+                vacuumed = True
+            except sqlite3.DatabaseError:
+                vacuum_error = "VACUUM failed; data is unchanged and the table stays readable"
+        file_bytes_after = database.stat().st_size if database.is_file() else 0
+        audit(
+            actor,
+            "table.prune_changes",
+            f"{tid} dry_run={body.dry_run} candidates={len(candidates)} deleted={deleted} vacuum={vacuumed}",
+        )
+        data = {
             "dry_run": body.dry_run,
             "candidates": len(candidates),
             "deleted": deleted,
             "older_than_days": body.older_than_days,
             "keep_recent": body.keep_recent,
             "limit": body.limit,
-        })
+            "vacuumed": vacuumed,
+            "file_bytes_before": file_bytes_before,
+            "file_bytes_after": file_bytes_after,
+        }
+        if vacuum_error:
+            data["vacuum_error"] = vacuum_error
+        return response(request, data)
 
     @app.post("/api/v1/tables/{tid}/maintenance/rebuild-indexes")
     def rebuild_indexes(tid: str, body: RebuildIndexesRequest, request: Request, actor=Depends(scope("xelibrary:admin"))):

@@ -4263,6 +4263,11 @@
             "minimum": 1.0,
             "title": "Keep Recent",
             "default": 50000
+          },
+          "vacuum": {
+            "type": "boolean",
+            "title": "Vacuum",
+            "default": false
           }
         },
         "type": "object",
