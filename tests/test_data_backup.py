@@ -80,3 +80,12 @@ def test_snapshot_name_is_stamped_and_collision_safe():
     moment = datetime.datetime(2026, 11, 3, 4, 45, 0, tzinfo=datetime.UTC)
     assert data_backup.snapshot_name(moment) == "data-20261103T044500Z"
     assert data_backup.snapshot_name(moment, suffix=2) == "data-20261103T044500Z-2"
+
+
+def test_unit_has_no_release_only_condition():
+    """Non-release targets (VM110) must be able to run the timer."""
+    unit = data_backup.Path(__file__).parents[1] / "infra/systemd/xeonolab-data-backup.service"
+    text = unit.read_text()
+    assert "ConditionPathExists=/usr/local/libexec/xeonolab-data-backup.sh" in text
+    conditions = [line for line in text.splitlines() if line.startswith("ConditionPathExists=")]
+    assert not any("/opt/xeonolab" in line for line in conditions), conditions
