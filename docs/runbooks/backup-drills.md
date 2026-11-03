@@ -28,12 +28,45 @@
 - **整机/启动式 RTO 未在生产测量**：切换数据根、重启服务与入口验证需要维护窗口，本页**不声明**该指标；
   恢复演练的基础设施事实见 `xelibrary-backup-restore.md` 等 runbook 的“真实恢复”小节。
 
+## 2.5 VM 级整机备份（PVE vzdump，2026-11-03 起部分覆盖）
+
+PVE 上新增了每周集群备份任务（不改动任何 VM 配置，仅覆盖单 OS 盘的 VM）：
+
+```sh
+# 只读查看任务（PVE API token，或 Web UI → Datacenter → Backup）
+curl -s -k -H "Authorization: PVEAPIToken=root@pam!<token-id>=<secret>"   https://192.168.0.10:8006/api2/json/cluster/backup
+```
+
+| 字段 | 值 |
+| --- | --- |
+| job id | `751ca682-95ab-4900-b0bb-ed6deaa427b6` |
+| vmid | `105`（network-server）、`107`（embedding）、`109`（auth） |
+| 计划 | `sun 03:00`（PVE 本地时区 UTC+8，即周六 19:00 UTC） |
+| 模式 / 压缩 | `snapshot`（guest-agent freeze/thaw）+ `zstd` |
+| 存储 | `xeonolab-backup`（ZFS mirror 池，dir storage，quota 200G；实测 used 59.4G / avail 155.3G） |
+| 保留 | `prune-backups=keep-last=2` |
+| 首次验证 | 2026-11-03 手动 VM109 → 任务 stopped OK；归档 3,238,882,674 bytes；`zstd -t` 通过；SHA256 `7fe4d264ce06a4fa89d9beb7d8b358df463de3c3b360153e9286cdc541e53cb1` |
+
+手工触发与核对（PVE API；需要 `root@pam` token）：
+
+```sh
+# 触发单 VM 备份；返回 UPID
+curl -s -k -H "Authorization: PVEAPIToken=..." -X POST   https://192.168.0.10:8006/api2/json/nodes/pve/vzdump   --data-urlencode vmid=109 --data-urlencode storage=xeonolab-backup   --data-urlencode mode=snapshot --data-urlencode compress=zstd
+# 轮询任务终态（stopped / exitstatus=OK），再用 API content 列表确认归档
+curl -s -k -H "Authorization: PVEAPIToken=..."   'https://192.168.0.10:8006/api2/json/nodes/pve/storage/xeonolab-backup/content?content=backup'
+# 宿主只读校验（root SSH 后）：zstd -t <archive> && sha256sum <archive>
+```
+
+**未覆盖**：VM101/106/110/111 的大容量数据盘必须先在其 VM 配置里标 `backup=0`（否则 200G quota 不够），
+数据盘内容另需 tar/rsync 或 ZFS send 策略；VM104 2×8T、VM100 200G、VM103 2T 未纳入。
+该存储与 PVE 同宿主，因此**不是 offsite**。
+
 ## 3. 覆盖矩阵与已知缺口（截至 2026-11-03）
 
 | 范围 | 状态 | 说明 |
 | --- | --- | --- |
 | 业务库数据 / 代码仓库 / 认证数据库 / 桌面账号偏好 | ✅ 每日校验备份 + 独立恢复抽检 | 见上表 |
-| VM 级整机（OS、配置、密钥） | ❌ **无定时** | PVE `xeonolab-backup`（ZFS mirror 池，quota 200G）只有 2026-10-02/03 手工归档；`GET /cluster/backup` 为空。见 #113/#390 |
+| VM 级整机（OS、配置、密钥） | 🟡 **部分**：VM105/107/109 每周 | PVE 任务 `751ca682-95ab-4900-b0bb-ed6deaa427b6`：`vmid=105,107,109`，`sun 03:00`（UTC+8）→ 周六 19:00 UTC，snapshot+zstd，`xeonolab-backup`，keep-last 2；首份 VM109 归档已实测（3,238,882,674 bytes，`zstd -t` OK，SHA256 `7fe4d264…`）。VM101/106/110/111 因大容量数据盘需先标 `backup=0` 才能加入，见 #113/#390 |
 | 大容量数据盘内容 | ❌ 未纳入 VM 级归档 | `/srv/control`(VM101, 115M)、`/srv/docker`(VM106, 2.1M)、`/srv/dev`(VM110, 656M)、`/srv/dev-agent`(VM111, 2.1M)；VM104 2×8T、VM100 200G、VM103 2T 亦未覆盖 |
 | offsite / 独立故障域 | ❌ 无自动通道 | #113 只有手工加密离机副本（外部物理终端）与回传恢复演练；durable 离机渠道未决 |
 | 备份失败/年龄的外部推送告警 | ❌ 未实现 | 目前为 `ops_audit` finding + journal/退出码；无邮件/IM transport |
