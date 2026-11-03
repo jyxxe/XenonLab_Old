@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily verified data-disk tar snapshot (local retention, issue #390)
+
+[Timer]
+# After the per-domain backups; the wrapper is a no-op on hosts without a known
+# mounted data disk.
+OnCalendar=*-*-* 04:45:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=xeonolab-data-backup.service
+
+[Install]
+WantedBy=timers.target
