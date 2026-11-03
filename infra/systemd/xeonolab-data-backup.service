@@ -1,0 +1,15 @@
+[Unit]
+Description=Verified tar snapshot of the mounted data disk (keep newest 7, local disk)
+Documentation=file:/opt/xeonolab/current/docs/runbooks/data-disk-backup.md
+ConditionPathExists=/usr/local/libexec/xeonolab-data-backup.sh
+ConditionPathExists=/opt/xeonolab/current/scripts/data_backup_online.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/xeonolab-data-backup.sh
+Nice=15
+IOSchedulingClass=idle
+# A backup failure must not restart-loop the node; it is visible in the journal
+# and as a stale snapshot in /var/backups/xeonolab/data.
+Restart=no
+TimeoutStartSec=1800

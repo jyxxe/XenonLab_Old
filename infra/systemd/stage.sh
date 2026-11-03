@@ -61,6 +61,20 @@ if [ -f /tmp/xelibrary_backup.sh ] && [ -f /tmp/xeonolab-xelibrary-backup.servic
     systemctl daemon-reload
     systemctl enable --now xeonolab-xelibrary-backup.timer
 fi
+# Daily verified data-disk tar snapshot (issue #390): the durable bulk data of
+# the four data-disk VMs. Installed only from the bootstrap (or the runbook
+# operator step); hosts without a known data root are a no-op.
+case "$node" in
+  101|106|110|111)
+    if [ -f infra/systemd/data_backup.sh ] && [ -f scripts/data_backup_online.py ]; then
+        install -m 755 infra/systemd/data_backup.sh /usr/local/libexec/xeonolab-data-backup.sh
+        install -m 644 infra/systemd/xeonolab-data-backup.service /etc/systemd/system/xeonolab-data-backup.service
+        install -m 644 infra/systemd/xeonolab-data-backup.timer /etc/systemd/system/xeonolab-data-backup.timer
+        systemctl daemon-reload
+        systemctl enable --now xeonolab-data-backup.timer
+    fi
+    ;;
+esac
 # Daily verified desktop state snapshot (issue #390): only VM101 carries the
 # durable accounts/desktop databases, so this is installed from the release
 # tree where that data root exists and is a no-op elsewhere.
