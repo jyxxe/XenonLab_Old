@@ -1,8 +1,10 @@
 [Unit]
 Description=Verified tar snapshot of the mounted data disk (keep newest 7, local disk)
 Documentation=file:/opt/xeonolab/current/docs/runbooks/data-disk-backup.md
+# The wrapper selects the tool tree (active release, or the standalone install
+# documented in the runbook for non-release targets such as VM110) and exits 2
+# when neither exists, so no release-only path may be a condition here.
 ConditionPathExists=/usr/local/libexec/xeonolab-data-backup.sh
-ConditionPathExists=/opt/xeonolab/current/scripts/data_backup_online.py
 
 [Service]
 Type=oneshot
