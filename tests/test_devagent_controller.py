@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,11 +51,11 @@ def test_kernel_lock_excludes_other_process_and_recovers(tmp_path):
     script = "import fcntl,sys; f=open(sys.argv[1],'a'); fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)"
     with state.lock():
         result = subprocess.run(
-            ["python", "-c", script, str(tmp_path / "working-tree.lock")], capture_output=True
+            [sys.executable, "-c", script, str(tmp_path / "working-tree.lock")], capture_output=True
         )
         assert result.returncode != 0
     result = subprocess.run(
-        ["python", "-c", script, str(tmp_path / "working-tree.lock")], capture_output=True
+        [sys.executable, "-c", script, str(tmp_path / "working-tree.lock")], capture_output=True
     )
     assert result.returncode == 0
 
