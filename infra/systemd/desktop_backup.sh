@@ -1,8 +1,9 @@
 #!/bin/sh
 # Root-only wrapper: verified nightly desktop state snapshot (accounts.sqlite,
 # desktop.sqlite and its wallpaper assets) with local retention. Issue #390.
-# VM101 is a release target, so stage.sh installs this wrapper and the units;
-# other targets have no desktop data root and the timer is a no-op there.
+# Installed by the bootstrap stage.sh or by the desktop backup runbook operator
+# step (protected deploys only update the release tree); other targets have no
+# desktop data root and the timer is a no-op there.
 set -eu
 
 data_dir=${DESKTOP_BACKUP_DATA_DIR:-/var/lib/xeonolab/desktop-web}

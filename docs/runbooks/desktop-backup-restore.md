@@ -19,11 +19,22 @@ VM101 的桌面服务数据根 `/var/lib/xeonolab/desktop-web` 保存持久状�
 
 **限制**：同机本地副本，不是 offsite 备份；不包含 OIDC 运行时凭据、服务配置与 ephemeral session。
 
-## 安装/验证（VM101 是发布目标）
+## 安装/验证（VM101 是发布目标，但 timer 需 operator 首次安装）
 
-`infra/systemd/stage.sh` 在存在 `/var/lib/xeonolab/desktop-web/accounts.sqlite` 的节点上自动安装
-`/usr/local/libexec/xeonolab-desktop-backup.sh`、`xeonolab-desktop-backup.service/.timer` 并启用 timer；
-其它目标上该 timer 是 no-op。首次或手动安装可执行一次部署即可（工具来自 `/opt/xeonolab/current`）。
+受保护部署只更新 `/opt/xeonolab/releases/<sha>` 与 `current`，**不会**执行 `infra/systemd/stage.sh`；
+stage.sh 仅用于人工 bootstrap（存在 `/var/lib/xeonolab/desktop-web/accounts.sqlite` 时会安装并启用）。
+因此 timer 首次上线/刷新按下面的 operator 步骤执行（工具来自已部署的 release 树）：
+
+```sh
+R=/opt/xeonolab/releases/$(readlink -f /opt/xeonolab/current | xargs basename)
+sudo -n install -m 755 "$R/infra/systemd/desktop_backup.sh" /usr/local/libexec/xeonolab-desktop-backup.sh
+sudo -n install -m 644 "$R/infra/systemd/xeonolab-desktop-backup.service" /etc/systemd/system/
+sudo -n install -m 644 "$R/infra/systemd/xeonolab-desktop-backup.timer" /etc/systemd/system/
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable --now xeonolab-desktop-backup.timer
+```
+
+其它目标没有 `/var/lib/xeonolab/desktop-web/accounts.sqlite`，即使安装了 timer 也是 no-op。
 
 ## 运行与验证
 
