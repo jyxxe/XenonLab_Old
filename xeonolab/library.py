@@ -2212,6 +2212,9 @@ def create_app(settings=None):
         done = 0
         try:
             table = authorize(actor, tid, "read")
+            # Reuse the request-level ACL snapshot for every exported row instead
+            # of opening the catalogue once per row (issue #70).
+            permits = request_acl(actor, table)
             with table_connect(tid) as db, output.open("w", encoding="utf-8", newline="") as handle:
                 columns_now = columns(db)
                 writer = csv.writer(handle) if fmt == "csv" else None
@@ -2224,7 +2227,7 @@ def create_app(settings=None):
                     row = decode(raw)
                     if row["_deleted_at"] and not include_deleted:
                         continue
-                    if not allowed(actor, table, "read", row["_row_id"]):
+                    if not permits("read", row["_row_id"]):
                         continue
                     done += 1
                     if done > max_rows:

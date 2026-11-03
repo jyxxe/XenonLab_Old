@@ -93,6 +93,33 @@ def test_export_excludes_rows_without_read_acl(settings):
     assert bodies == ["public"], "rows without read ACL must never appear in an export"
 
 
+def test_export_applies_row_acl_snapshot_across_many_rows(settings):
+    """The export path must reuse one ACL snapshot per request (issue #70)."""
+    client = make_client(settings)
+    table_id = create_table(client, "批量权限导出")
+    for index in range(40):
+        client.post(f"/api/v1/tables/{table_id}/rows", headers=auth(),
+                    json={"values": {"body": f"row-{index:02d}"}})
+    rows = client.get(f"/api/v1/tables/{table_id}/rows?limit=100", headers=auth()).json()["data"]
+    assert len(rows) == 40
+    put_acl(client, "table", table_id, {"bob": ["read"]})
+    denied = {row["_row_id"] for row in rows if int(row["values"]["body"].split("-")[1]) % 2}
+    assert len(denied) == 20
+    for row_id in denied:
+        put_acl(client, "row", f"{table_id}:{row_id}", {"bob": []})
+    export = client.post("/api/v1/exports", headers=auth("bob"),
+                         json={"table_id": table_id, "format": "jsonl"})
+    assert export.status_code == 202, export.text
+    job_id = export.json()["data"]["job_id"]
+    status = wait_terminal(client, f"/api/v1/exports/{job_id}", headers=auth("bob"))
+    assert status["status"] == "completed" and status["done"] == 20, json.dumps(status, ensure_ascii=False)
+    download = client.get(f"/api/v1/exports/{job_id}/download", headers=auth("bob"))
+    bodies = {json.loads(line)["values"]["body"] for line in download.text.splitlines()}
+    expected = {row["values"]["body"] for row in rows if row["_row_id"] not in denied}
+    assert bodies == expected, "export must filter exactly the rows denied by the row ACL snapshot"
+    assert len(bodies) == 20
+
+
 def test_job_access_is_owner_scoped(settings):
     client = make_client(settings)
     table_id = create_table(client, "隔离表")
