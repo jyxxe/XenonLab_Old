@@ -316,3 +316,4 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 - `scripts/ops_audit.py` 增加逐域备份年龄与 backup timer/service 状态检查（默认 36h），并去掉无定时备份主机的一次性手工归档噪声；release 保留计数容忍部署窗口（keep+2）。
 - #70 导出路径改为每请求一次 ACL 快照（5,000 行导出 catalogue 连接 5,005→6），`#70` 仍待生产非管理员线上验收。
 - #76 会话韧性（缓存 token、Retry-After、失败重放、logout/刷新 fencing）复核通过并关闭；冲突标记文档修复 + 新增 `tests/test_documentation_hygiene.py`（全量 1572 passed）。
+- PVE 首次建立每周 VM 级 vzdump 调度（VM105/107/109 → `xeonolab-backup`，keep-last 2）；VM109 首份归档实测 `zstd -t` 通过（SHA256 `7fe4d264…`）。大容量数据盘（VM101/106/110/111）需先标 `backup=0` 并另定策略，见 #113/#390。
