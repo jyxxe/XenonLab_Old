@@ -1,0 +1,15 @@
+[Unit]
+Description=Verified online desktop state snapshot (accounts/desktop DBs and wallpapers, keep newest 7, local disk)
+Documentation=file:/opt/xeonolab/current/docs/runbooks/desktop-backup-restore.md
+ConditionPathExists=/var/lib/xeonolab/desktop-web/accounts.sqlite
+ConditionPathExists=/opt/xeonolab/current/scripts/desktop_backup_online.py
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/xeonolab-desktop-backup.sh
+Nice=15
+IOSchedulingClass=idle
+# A backup failure must not restart-loop the node; it is visible in the journal
+# and as a stale snapshot in /var/backups/xeonolab/desktop.
+Restart=no
+TimeoutStartSec=900
