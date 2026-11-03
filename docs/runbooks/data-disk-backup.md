@@ -42,6 +42,28 @@ sudo -n systemctl daemon-reload
 sudo -n systemctl enable --now xeonolab-data-backup.timer
 ```
 
+### 非发布目标（VM110 dev / Forgejo）
+
+VM110 不是发布目标，没有 `/opt/xeonolab/current`，但它有最大的非空数据根 `/srv/dev`（约 654 MiB）。
+wrapper 支持 standalone 安装：从任一已部署 release 树把工具复制到固定路径，units 也从该 release 安装：
+
+```sh
+# 在 VM110 上（root 或 sudo -n），SRC 指向任一已部署 release 的路径，例如先 scp 到 /tmp/data-backup-src
+SRC=/tmp/data-backup-src
+sudo -n install -d -m 755 /usr/local/libexec/xeonolab-data-backup/xeonolab
+sudo -n install -d -m 755 /usr/local/libexec/xeonolab-data-backup/scripts
+sudo -n install -m 644 "$SRC/xeonolab/__init__.py" /usr/local/libexec/xeonolab-data-backup/xeonolab/
+sudo -n install -m 644 "$SRC/xeonolab/data_backup.py" /usr/local/libexec/xeonolab-data-backup/xeonolab/
+sudo -n install -m 644 "$SRC/scripts/data_backup_online.py" /usr/local/libexec/xeonolab-data-backup/scripts/
+sudo -n install -m 755 "$SRC/infra/systemd/data_backup.sh" /usr/local/libexec/xeonolab-data-backup.sh
+sudo -n install -m 644 "$SRC/infra/systemd/xeonolab-data-backup.service" /etc/systemd/system/
+sudo -n install -m 644 "$SRC/infra/systemd/xeonolab-data-backup.timer" /etc/systemd/system/
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable --now xeonolab-data-backup.timer
+```
+
+wrapper 优先使用 release 树工具，缺失时回退到上述 standalone 树（系统 `python3`，仅标准库依赖）。
+
 ## 运行与验证
 
 ```sh
