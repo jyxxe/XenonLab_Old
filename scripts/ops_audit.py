@@ -40,6 +40,8 @@ echo '###failed'; sudo -n systemctl --failed --no-legend 2>/dev/null | head -20
 echo '###timers'; systemctl list-timers --no-pager 2>/dev/null | grep -E 'xeonolab|devagent|backup' | head -20
 echo '###release'; readlink /opt/xeonolab/current 2>/dev/null; ls -1 /opt/xeonolab/releases 2>/dev/null | wc -l
 echo '###backup'; line=$(sudo -n find /var/backups/xeonolab -maxdepth 1 -mindepth 1 -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1); if [ -n "$line" ]; then set -- $line; echo "$2"; echo "${1%%.*}"; else echo none; fi
+echo '###backupdomains'; for d in xelibrary forgejo keycloak desktop; do p=/var/backups/xeonolab/$d; sudo -n test -d "$p" || continue; line=$(sudo -n find "$p" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %f\n' 2>/dev/null | sort -rn | head -1); if [ -n "$line" ]; then set -- $line; echo "$d $2 ${1%%.*}"; else echo "$d none 0"; fi; done
+echo '###backupunits'; for u in xeonolab-xelibrary-backup.timer xeonolab-forgejo-backup.timer xeonolab-postgres-backup.timer xeonolab-desktop-backup.timer xeonolab-xelibrary-backup.service xeonolab-forgejo-backup.service xeonolab-postgres-backup.service xeonolab-desktop-backup.service; do load=$(systemctl show -p LoadState --value "$u" 2>/dev/null); [ "$load" = "not-found" ] && continue; echo "$u $(systemctl is-active "$u" 2>/dev/null || true) $(systemctl is-enabled "$u" 2>/dev/null || true) $(systemctl show -p Result --value "$u" 2>/dev/null)"; done
 echo '###errors'; sudo -n journalctl --since '24 hours ago' -p err --no-pager -o cat 2>/dev/null | sort | uniq -c | sort -rn | head -6
 """
 
@@ -58,7 +60,8 @@ def parse_host_output(text: str) -> dict:
 
     report: dict = {"hostname": None, "disk": None, "failed_units": [], "timers": [],
                     "release": None, "release_count": None, "backup_path": None,
-                    "backup_age_hours": None, "error_lines": []}
+                    "backup_age_hours": None, "backup_domains": {}, "backup_units": [],
+                    "error_lines": []}
     if sections.get("hostname"):
         report["hostname"] = sections["hostname"][0].strip() or None
     if sections.get("df"):
@@ -83,6 +86,27 @@ def parse_host_output(text: str) -> dict:
         if len(backup_lines) > 1 and backup_lines[1].isdigit():
             age = datetime.datetime.now(datetime.UTC).timestamp() - int(backup_lines[1])
             report["backup_age_hours"] = round(age / 3600, 1)
+    now = datetime.datetime.now(datetime.UTC).timestamp()
+    for line in sections.get("backupdomains", []):
+        parts = line.split()
+        if len(parts) != 3 or parts[0] in report["backup_domains"]:
+            continue
+        domain, snapshot, stamp = parts
+        entry = {"snapshot": None if snapshot == "none" else snapshot}
+        if snapshot != "none" and stamp.isdigit():
+            entry["age_hours"] = round((now - int(stamp)) / 3600, 1)
+        report["backup_domains"][domain] = entry
+    for line in sections.get("backupunits", []):
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        name = parts[0]
+        report["backup_units"].append({
+            "name": name,
+            "active": parts[1] if len(parts) > 1 else "",
+            "enabled": parts[2] if len(parts) > 2 else "",
+            "result": parts[3] if len(parts) > 3 else "",
+        })
     report["error_lines"] = [line.strip() for line in sections.get("errors", []) if line.strip()]
     return report
 
@@ -117,7 +141,8 @@ def certificate_days_left(host: str, port: int, ca_file: str | None, timeout: fl
 
 def evaluate(reports: dict[str, dict], certificates: dict[str, int | None], *,
              min_free_mib: int = 5120, max_used_percent: int = 90, keep_releases: int = 4,
-             max_backup_age_hours: float = 192.0, allowed_failed: tuple[str, ...] = DEFAULT_ALLOWED_FAILED,
+             release_tolerance: int = 2, max_backup_age_hours: float = 36.0,
+             allowed_failed: tuple[str, ...] = DEFAULT_ALLOWED_FAILED,
              min_cert_days: int = 0) -> list[str]:
     """Return human-readable findings; an empty list means the fleet looks healthy."""
     findings: list[str] = []
@@ -135,12 +160,27 @@ def evaluate(reports: dict[str, dict], certificates: dict[str, int | None], *,
         if unexpected:
             findings.append(f"{name}: failed units: {', '.join(sorted(unexpected))}")
         count = report.get("release_count")
-        if count is not None and count > keep_releases:
+        # Deployments can transiently add one release directory per rollout; only
+        # flag growth that the daily prune timer should already have removed.
+        if count is not None and count > keep_releases + release_tolerance:
             findings.append(f"{name}: {count} release directories (retention keeps {keep_releases})")
-        if report.get("backup_path") is None:
-            findings.append(f"{name}: no /var/backups/xeonolab snapshot found")
-        elif report.get("backup_age_hours") is not None and report["backup_age_hours"] > max_backup_age_hours:
-            findings.append(f"{name}: newest backup is {report['backup_age_hours']:.0f}h old (> {max_backup_age_hours:.0f}h)")
+        # Only hosts that actually carry a scheduled backup domain (XeLibrary,
+        # Forgejo, Keycloak, desktop) are checked for freshness; one-off manual
+        # archive directories on other hosts are informational only.
+        for domain, entry in sorted((report.get("backup_domains") or {}).items()):
+            if entry.get("snapshot") is None:
+                findings.append(f"{name}: {domain} backup directory has no snapshot")
+            elif entry.get("age_hours") is not None and entry["age_hours"] > max_backup_age_hours:
+                findings.append(
+                    f"{name}: {domain} backup is {entry['age_hours']:.0f}h old (> {max_backup_age_hours:.0f}h)"
+                )
+        for unit in report.get("backup_units", []):
+            if unit.get("enabled") == "not-found":
+                continue
+            if unit["name"].endswith(".timer") and unit.get("active") not in ("active", "activating"):
+                findings.append(f"{name}: backup timer {unit['name']} is {unit.get('active') or 'unknown'}")
+            if unit["name"].endswith(".service") and unit.get("result") == "failed":
+                findings.append(f"{name}: backup unit {unit['name']} last run failed")
     for endpoint, days in sorted(certificates.items()):
         if days is None:
             findings.append(f"{endpoint}: certificate expiry unavailable")
@@ -162,7 +202,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-free-mib", type=int, default=5120)
     parser.add_argument("--max-used-percent", type=int, default=90)
     parser.add_argument("--keep-releases", type=int, default=4)
-    parser.add_argument("--max-backup-age-hours", type=float, default=192.0)
+    parser.add_argument("--release-tolerance", type=int, default=2,
+                        help="extra release directories tolerated between deploy and prune")
+    parser.add_argument("--max-backup-age-hours", type=float, default=36.0,
+                        help="maximum age of the newest snapshot per backup domain")
     parser.add_argument("--allow-failed", action="append", default=None,
                         help="failed unit name to tolerate (repeatable; default openipmi.service)")
     args = parser.parse_args(argv)
@@ -194,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
 
     findings = evaluate(reports, certificates, min_free_mib=args.min_free_mib,
                         max_used_percent=args.max_used_percent, keep_releases=args.keep_releases,
+                        release_tolerance=args.release_tolerance,
                         max_backup_age_hours=args.max_backup_age_hours,
                         allowed_failed=allowed_failed)
     if args.json:
@@ -203,8 +247,14 @@ def main(argv: list[str] | None = None) -> int:
         for host, report in sorted(reports.items()):
             name = report.get("hostname") or host
             disk = report.get("disk") or {}
+            domains = report.get("backup_domains") or {}
+            backup = ", ".join(
+                f"{domain}={entry.get('snapshot') or 'none'}"
+                + (f" ({entry['age_hours']:.0f}h)" if entry.get("age_hours") is not None else "")
+                for domain, entry in sorted(domains.items())
+            ) or str(report.get("backup_path"))
             print(f"{name}: {disk.get('used_percent')}% used, {disk.get('available_kib', 0) // 1024} MiB free, "
-                  f"{report.get('release_count')} releases, backup={report.get('backup_path')}")
+                  f"{report.get('release_count')} releases, backup={backup}")
         for endpoint, days in sorted(certificates.items()):
             print(f"{endpoint}: certificate days_left={days}")
         print("findings:" if findings else "findings: none")
