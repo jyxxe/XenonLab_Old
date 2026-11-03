@@ -140,3 +140,34 @@ def test_evaluate_tolerates_deploy_window_but_flags_real_release_drift():
     assert any("7 release directories" in item for item in ops_audit.evaluate(
         {"192.168.0.104": report}, {}, keep_releases=4, release_tolerance=2,
         max_backup_age_hours=36, allowed_failed=()))
+
+
+def test_evaluate_pve_backups_flags_empty_disabled_missing_and_stale():
+    now = 1_800_000_000
+    assert ops_audit.evaluate_pve_backups({}, now=now) == ["pve: no scheduled VM backup jobs"]
+    report = ops_audit.evaluate_pve_backups(
+        {"error": "PVE API unavailable: timeout"}, now=now
+    )
+    assert report and report[0].startswith("pve: PVE API unavailable")
+
+    jobs = [
+        {"id": "job-enabled", "vmid": "101,109", "storage": "xeonolab-backup", "enabled": 1},
+        {"id": "job-disabled", "vmid": "105", "storage": "xeonolab-backup", "enabled": 0},
+    ]
+    archives = {"xeonolab-backup:101": now - 3600 * 24, "xeonolab-backup:105": now - 3600}
+    findings = ops_audit.evaluate_pve_backups(
+        {"jobs": jobs, "archives": archives}, now=now, max_age_hours=48
+    )
+    joined = "\n".join(findings)
+    assert "pve: backup job-disabled is disabled" in joined
+    assert "pve: VM109 has no vzdump archive" in joined
+    assert "VM101" not in joined
+    assert "VM105" not in joined
+
+    stale = ops_audit.evaluate_pve_backups(
+        {"jobs": [jobs[0]], "archives": {"xeonolab-backup:101": now - 3600 * 240,
+                                         "xeonolab-backup:109": now - 3600}},
+        now=now, max_age_hours=48,
+    )
+    assert any("VM101 newest archive is" in line for line in stale)
+    assert not any("VM109 newest archive is" in line for line in stale)

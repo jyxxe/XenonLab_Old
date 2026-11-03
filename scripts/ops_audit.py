@@ -23,10 +23,14 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import pathlib
 import re
 import socket
 import ssl
 import subprocess
+import time
+import urllib.error
+import urllib.request
 
 # Hardware services that are expected to be inactive on these VMs; listed so a
 # noisy-but-known unit does not hide a real failure.
@@ -126,6 +130,80 @@ def parse_df_line(line: str) -> dict | None:
     }
 
 
+def pve_get(endpoint: str, token: str, path: str, *, insecure: bool = False,
+            ca_file: str | None = None, timeout: float = 20.0) -> object:
+    """GET one read-only PVE API path; the token is only sent in the header."""
+    request = urllib.request.Request(
+        endpoint.rstrip("/") + path,
+        headers={"Authorization": "PVEAPIToken=" + token, "Accept": "application/json"},
+    )
+    if ca_file:
+        context = ssl.create_default_context(cafile=ca_file)
+    elif insecure:
+        context = ssl._create_unverified_context()  # noqa: SLF001 - explicit opt-in for self-signed PVE certs
+    else:
+        context = ssl.create_default_context()
+    with urllib.request.urlopen(request, context=context, timeout=timeout) as response:
+        return json.loads(response.read().decode())["data"]
+
+
+def pve_vm_backup_status(endpoint: str, token: str, *, insecure: bool = False,
+                         ca_file: str | None = None) -> dict:
+    """Read scheduled PVE backup jobs and the newest vzdump archive per VM."""
+    try:
+        jobs = pve_get(endpoint, token, "/api2/json/cluster/backup", insecure=insecure, ca_file=ca_file)
+        nodes = pve_get(endpoint, token, "/api2/json/nodes", insecure=insecure, ca_file=ca_file)
+    except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+        return {"error": f"PVE API unavailable: {error}"}
+    node = nodes[0]["node"] if nodes else "pve"
+    archives: dict[str, int] = {}
+    for job in jobs or []:
+        storage = job.get("storage")
+        if not storage:
+            continue
+        try:
+            content = pve_get(
+                endpoint, token,
+                f"/api2/json/nodes/{node}/storage/{storage}/content?content=backup",
+                insecure=insecure, ca_file=ca_file,
+            )
+        except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+            return {"error": f"PVE storage {storage} content unavailable: {error}", "jobs": jobs}
+        for entry in content or []:
+            match = re.search(r"/vzdump-qemu-(\d+)-", str(entry.get("volid", "")))
+            if not match:
+                continue
+            key = f"{storage}:{int(match.group(1))}"
+            archives[key] = max(archives.get(key, 0), int(entry.get("ctime") or 0))
+    return {"jobs": jobs or [], "archives": archives}
+
+
+def evaluate_pve_backups(status: dict, *, now: float, max_age_hours: float = 192.0) -> list[str]:
+    """Return findings for the scheduled VM-level (vzdump) backups."""
+    if status.get("error"):
+        return [f"pve: {status['error']}"]
+    findings: list[str] = []
+    jobs = status.get("jobs") or []
+    if not jobs:
+        findings.append("pve: no scheduled VM backup jobs")
+    archives = status.get("archives") or {}
+    for job in jobs:
+        label = job.get("id") or "job"
+        if not job.get("enabled"):
+            findings.append(f"pve: backup {label} is disabled")
+        storage = job.get("storage") or "?"
+        vmids = [int(item) for item in re.split(r"[,\s]+", str(job.get("vmid") or "")) if item.isdigit()]
+        for vmid in vmids:
+            created = archives.get(f"{storage}:{vmid}")
+            if not created:
+                findings.append(f"pve: VM{vmid} has no vzdump archive in {storage}")
+                continue
+            age = (now - created) / 3600
+            if age > max_age_hours:
+                findings.append(f"pve: VM{vmid} newest archive is {age:.0f}h old (> {max_age_hours:.0f}h)")
+    return findings
+
+
 def certificate_days_left(host: str, port: int, ca_file: str | None, timeout: float = 8.0) -> int | None:
     """Return whole days until the presented certificate expires."""
     context = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()
@@ -208,6 +286,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="maximum age of the newest snapshot per backup domain")
     parser.add_argument("--allow-failed", action="append", default=None,
                         help="failed unit name to tolerate (repeatable; default openipmi.service)")
+    parser.add_argument("--pve-token-file", default="",
+                        help="file holding one PVE API token (tokenid=secret) for read-only VM backup checks")
+    parser.add_argument("--pve-endpoint", default="https://192.168.0.10:8006")
+    parser.add_argument("--pve-ca-file", default="", help="CA bundle for the PVE API (default: system trust)")
+    parser.add_argument("--pve-insecure", action="store_true",
+                        help="accept the self-signed PVE certificate (explicit opt-in)")
+    parser.add_argument("--max-vm-backup-age-hours", type=float, default=192.0,
+                        help="maximum age of the newest vzdump archive per scheduled VM")
     args = parser.parse_args(argv)
 
     allowed_failed = tuple(args.allow_failed) if args.allow_failed is not None else DEFAULT_ALLOWED_FAILED
@@ -235,13 +321,32 @@ def main(argv: list[str] | None = None) -> int:
         host, _, port = endpoint.rpartition(":")
         certificates[endpoint] = certificate_days_left(host, int(port), args.ca_file or None)
 
+    pve_status: dict | None = None
+    pve_findings: list[str] = []
+    if args.pve_token_file:
+        try:
+            token = pathlib.Path(args.pve_token_file).read_text().strip()
+        except OSError as error:
+            pve_status = {"error": f"cannot read PVE token file: {error}"}
+            token = ""
+        if token:
+            pve_status = pve_vm_backup_status(
+                args.pve_endpoint, token,
+                insecure=args.pve_insecure, ca_file=args.pve_ca_file or None,
+            )
+        pve_findings = evaluate_pve_backups(
+            pve_status or {}, now=time.time(), max_age_hours=args.max_vm_backup_age_hours
+        )
+
     findings = evaluate(reports, certificates, min_free_mib=args.min_free_mib,
                         max_used_percent=args.max_used_percent, keep_releases=args.keep_releases,
                         release_tolerance=args.release_tolerance,
                         max_backup_age_hours=args.max_backup_age_hours,
                         allowed_failed=allowed_failed)
+    findings.extend(pve_findings)
     if args.json:
-        print(json.dumps({"reports": reports, "certificates": certificates, "findings": findings},
+        print(json.dumps({"reports": reports, "certificates": certificates,
+                          "pve_backups": pve_status, "findings": findings},
                          indent=2, ensure_ascii=False))
     else:
         for host, report in sorted(reports.items()):
