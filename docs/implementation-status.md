@@ -286,11 +286,10 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 
 分支 `zcode/issue-93-work-active`（基于 `754ff27`）：`GET /api/v1/work` 新增 `?active=true|false` 服务端过滤（SQL 级，游标分页语义不变）并在每行显式返回 `lease_expired` 布尔（claimed 且租约已过期），客户端不再各自实现 `expires > now` 比较；计算列由 SQLite 产出后转回 JSON 布尔以保持既有契约。新增 1 项测试覆盖五种状态的过滤/标记/游标/422（全库 353 项通过），改动文件 Ruff 通过，OpenAPI 导出仅 dev-agent.openapi.json 增加查询参数。
 
-<<<<<<< HEAD
 ### Issue #92 修复（zcode 本地交付，叠放于 #93 之上）
 
 分支 `zcode/issue-92-work-ordering`（基于 `zcode/issue-93-work-active`，PR 需在 #102 合并后重定向 `feature/platform-v1`）。`work` 表新增 `created_at REAL`（新库建表含列，存量库经 `ALTER TABLE` 迁移、旧行保持 0 即视为最旧）；两个 INSERT 点写入创建时间戳。`GET /api/v1/work` 改为 FIFO 排序（`created_at ASC, id ASC`，分页在新项到达时保持稳定），游标格式升级为 `<created_at>:<id>`（非法值 422 `INVALID_CURSOR`）；新增 `status`（逗号分隔多值）/`repository`/`issue_id` SQL 级过滤，非法状态 422 `INVALID_STATUS`；`meta.counts` 恒返回全队列状态计数（供前端徽章后续迁移）。新增 2 项测试（FIFO/确定性/counts/游标/四类过滤 + 重启与迁移持久化，全库 355 项通过），改动文件 Ruff 通过，OpenAPI 导出仅 dev-agent.openapi.json 变化。前端各视图迁移到服务端过滤属后续增量（counts 已就绪）。
-=======
+
 ### Issue #91 管理员收尾端点（zcode 本地交付）
 
 分支 `zcode/issue-91-work-complete`（基于 `e3c1b30`）：`POST /api/v1/work/{id}/admin-complete`（scope `dev:write`）补齐队列卫生缺口——无人认领或认领已过期的项可由管理员标记完成（status=completed、holder 清空、epoch+1 fencing），**活跃认领一律 409 `WORK_CLAIMED`**、已完成项 409，写 `work.admin_completed` 审计事件；与 reconcile（Issue 关闭→completed）互补。新增 1 项测试覆盖 queued/过期认领/活跃认领/已完成/404/401/幂等（全库 384 项通过），Ruff 与 OpenAPI 导出通过。
@@ -302,7 +301,6 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 ### Issue #84 JSONL/CSV import-export（已集成部署）
 
 `POST /api/v1/exports` + `GET /api/v1/exports/{job_id}` + `/download`：按表导出 JSONL/CSV 快照，行级读 ACL 过滤（无读权限的行不会出现），下载与状态仅 owner 或 `xelibrary:admin`。`POST /api/v1/imports` + 状态 + `/cancel`：内容上限 `XELIBRARY_IMPORT_MAX_BYTES`（默认 2MB，超限 413），导出行快照与纯值对象均可导入（往返无缝），逐条结果与错误定位、部分失败不丢弃已应用行；取消为协作式（queued 直接 cancelled，running 由 worker 行间检查），取消/失败清理输出文件。作业持久化扩展 #83 的 `BulkJobStore`（output/cancel_requested 列与 complete/set_done/request_cancel/finish_cancelled），重启恢复语义一致。集成时与 #83 的作用域 batch_id、载荷摘要与恢复对账合并且迁移同时覆盖旧表与导出列；OpenAPI 重新生成。
->>>>>>> origin/feature/platform-v1
 
 ### Issue #117 XeLibrary 数据生命周期设计（设计稿，未实现）
 
