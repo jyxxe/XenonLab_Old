@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily verified desktop state snapshot (local retention, issue #390)
+
+[Timer]
+# Between the XeLibrary and Forgejo/Keycloak windows; the snapshot is online and
+# the service is a no-op on targets without a desktop data root.
+OnCalendar=*-*-* 04:15:00
+RandomizedDelaySec=20min
+Persistent=true
+Unit=xeonolab-desktop-backup.service
+
+[Install]
+WantedBy=timers.target

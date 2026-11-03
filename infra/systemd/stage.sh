@@ -61,6 +61,17 @@ if [ -f /tmp/xelibrary_backup.sh ] && [ -f /tmp/xeonolab-xelibrary-backup.servic
     systemctl daemon-reload
     systemctl enable --now xeonolab-xelibrary-backup.timer
 fi
+# Daily verified desktop state snapshot (issue #390): only VM101 carries the
+# durable accounts/desktop databases, so this is installed from the release
+# tree where that data root exists and is a no-op elsewhere.
+if [ -f /var/lib/xeonolab/desktop-web/accounts.sqlite ] && [ -f scripts/desktop_backup_online.py ] && [ -f infra/systemd/desktop_backup.sh ]; then
+    install -d -m 755 /usr/local/libexec
+    install -m 755 infra/systemd/desktop_backup.sh /usr/local/libexec/xeonolab-desktop-backup.sh
+    install -m 644 infra/systemd/xeonolab-desktop-backup.service /etc/systemd/system/xeonolab-desktop-backup.service
+    install -m 644 infra/systemd/xeonolab-desktop-backup.timer /etc/systemd/system/xeonolab-desktop-backup.timer
+    systemctl daemon-reload
+    systemctl enable --now xeonolab-desktop-backup.timer
+fi
 if [ -f /tmp/release_prune.sh ] && [ -f /tmp/xeonolab-release-prune.service ] && [ -f /tmp/xeonolab-release-prune.timer ]; then
     install -m 755 /tmp/release_prune.sh /usr/local/libexec/xeonolab-release-prune
     install -m 644 /tmp/xeonolab-release-prune.service /etc/systemd/system/xeonolab-release-prune.service
