@@ -1,13 +1,19 @@
-# 数据盘内容快照与恢复演练（VM101/106/110/111）
+# 数据盘内容快照与恢复演练（VM100/101/106/110/111）
 
-四台发布目标把持久批量数据放在独立的 PVE 数据盘上，并在 guest 内挂载：
+多台 VM 把持久数据放在独立的 PVE 数据盘上，并在 guest 内挂载：
 
-| 主机 | 挂载点 | 实测内容 |
-| --- | --- | --- |
-| VM101 web-server | `/srv/control` | caddy-config/data、postgresql 遗留目录、cutover 等（约 113 MiB） |
-| VM106 docker-server | `/srv/docker` | 空（约 20 KiB） |
-| VM110 dev | `/srv/dev` | public-source、archives、bug-reports、workspaces（约 654 MiB） |
-| VM111 dev-agent | `/srv/dev-agent` | 空（约 20 KiB） |
+| 主机 | 挂载点 | 实测内容 | 策略 |
+| --- | --- | --- | --- |
+| VM100 openwebui | `/srv/openwebui` | Open WebUI 生产数据（SQLite 会话/聊天、上传、模型配置，约 7.7 MiB） | **stop-copy**（见下） |
+| VM101 web-server | `/srv/control` | caddy-config/data、postgresql 遗留目录、cutover 等（约 113 MiB） | 在线 tar |
+| VM106 docker-server | `/srv/docker` | 空（约 20 KiB） | 在线 tar |
+| VM110 dev | `/srv/dev` | public-source、archives、bug-reports、workspaces（约 654 MiB） | 在线 tar |
+| VM111 dev-agent | `/srv/dev-agent` | 空（约 20 KiB） | 在线 tar |
+
+**Open WebUI 的一致性**：`/srv/openwebui` 上运行 `xeonolab-openwebui-production.service`（rootless Podman），
+数据目录含活跃 SQLite 数据库。wrapper 在快照期间 `systemctl stop` 该服务，并由 `EXIT/INT/TERM` trap
+**始终重启**，因此每天 04:45 UTC 窗口内聊天服务会有数秒不可用（低峰时段；服务启动失败会打印到 journal）。
+其它数据根仍是在线 tar（best-effort，不同文件间不保证事务一致）。
 
 这些盘的虚拟容量为 200 GiB–8 TiB，无法用 VM 级 `vzdump` 覆盖；实际内容很小，因此按**目录 tar 快照**
 纳入每日校验备份（#390）。
@@ -15,8 +21,8 @@
 ## 快照策略
 
 - `xeonolab-data-backup.timer` 每日 04:45 UTC（随机 ≤20min，`Persistent`）触发；
-- wrapper 按 hostname 选择数据根（web-server→`/srv/control`、docker-server→`/srv/docker`、
-  dev→`/srv/dev`、dev-agent→`/srv/dev-agent`），其它主机直接 no-op；
+- wrapper 按 hostname 选择数据根（openwebui→`/srv/openwebui`、web-server→`/srv/control`、
+  docker-server→`/srv/docker`、dev→`/srv/dev`、dev-agent→`/srv/dev-agent`），其它主机直接 no-op；
 - tar.gz（compresslevel 6，不做跨挂载点遍历），跳过顶层 `lost+found` 与 tar 无法安全表达的
   特殊文件（socket/fifo/device，计数记录在 manifest）；
 - 快照目录 `/var/backups/xeonolab/data/data-<UTC stamp>Z/`：`data.tar.gz`（0600）+
@@ -42,10 +48,11 @@ sudo -n systemctl daemon-reload
 sudo -n systemctl enable --now xeonolab-data-backup.timer
 ```
 
-### 非发布目标（VM110 dev / Forgejo）
+### 非发布目标（VM110 dev / Forgejo、VM100 openwebui）
 
-VM110 不是发布目标，没有 `/opt/xeonolab/current`，但它有最大的非空数据根 `/srv/dev`（约 654 MiB）。
-wrapper 支持 standalone 安装：从任一已部署 release 树把工具复制到固定路径，units 也从该 release 安装：
+VM110 与 VM100 不是发布目标，没有 `/opt/xeonolab/current`；VM110 有最大的非空数据根 `/srv/dev`（约 654 MiB），
+VM100 有 Open WebUI 生产数据 `/srv/openwebui`（约 7.7 MiB）。wrapper 支持 standalone 安装：
+从任一已部署 release 树把工具复制到固定路径，units 也从该 release 安装（把 `SRC` 指向该 release 树）：
 
 ```sh
 # 在 VM110 上（root 或 sudo -n），SRC 指向任一已部署 release 的路径，例如先 scp 到 /tmp/data-backup-src

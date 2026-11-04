@@ -4,9 +4,15 @@
 # (200 GiB-8 TiB) makes VM-level vzdump impractical while the real content is
 # small.
 #
+# Some hosts keep a live SQLite-backed service on the data root (Open WebUI's
+# /srv/openwebui). For those, stop the service for the duration of the snapshot
+# (always restarted by an EXIT trap) so the database file is captured
+# consistently instead of mid-write.
+#
 # The tool is taken from the active release on release targets. Hosts that are
 # not release targets (VM110/Forgejo, which carries the largest non-empty data
-# root at /srv/dev) install the standalone tree documented in the runbook:
+# root at /srv/dev; VM100/Open WebUI) install the standalone tree documented in
+# the runbook:
 #   /usr/local/libexec/xeonolab-data-backup/{xeonolab,scripts}
 # Installed by the bootstrap stage.sh or the data-disk backup runbook operator
 # step; hosts without a known data root exit 0 as a no-op.
@@ -20,11 +26,16 @@ standalone=/usr/local/libexec/xeonolab-data-backup
 
 case "$keep$attempts" in *[!0-9]*) echo "invalid retention/attempt setting" >&2; exit 2;; esac
 
+stop_unit=
 case "$(hostname 2>/dev/null || true)" in
     web-server) source=/srv/control ;;
     docker-server) source=/srv/docker ;;
     dev) source=/srv/dev ;;
     dev-agent) source=/srv/dev-agent ;;
+    openwebui)
+        source=/srv/openwebui
+        stop_unit=xeonolab-openwebui-production.service
+        ;;
     *)
         echo "no known data disk on this node"
         exit 0
@@ -51,9 +62,15 @@ fi
 
 install -d -m 700 "$(dirname "$backup_root")"
 install -d -m 700 "$backup_root"
+if [ -n "$stop_unit" ]; then
+    # A stop-copy window of a few seconds is safer than tarring a live database.
+    systemctl stop "$stop_unit"
+    trap 'systemctl start "$stop_unit" || echo "failed to restart $stop_unit" >&2' EXIT INT TERM
+fi
 if [ -n "$python_path" ]; then
-    exec env PYTHONPATH="$python_path" "$python" "$tool" snapshot \
+    env PYTHONPATH="$python_path" "$python" "$tool" snapshot \
+        --source "$source" --root "$backup_root" --keep "$keep" --attempts "$attempts"
+else
+    "$python" "$tool" snapshot \
         --source "$source" --root "$backup_root" --keep "$keep" --attempts "$attempts"
 fi
-exec "$python" "$tool" snapshot \
-    --source "$source" --root "$backup_root" --keep "$keep" --attempts "$attempts"

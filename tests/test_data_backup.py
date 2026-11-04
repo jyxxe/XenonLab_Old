@@ -89,3 +89,20 @@ def test_unit_has_no_release_only_condition():
     assert "ConditionPathExists=/usr/local/libexec/xeonolab-data-backup.sh" in text
     conditions = [line for line in text.splitlines() if line.startswith("ConditionPathExists=")]
     assert not any("/opt/xeonolab" in line for line in conditions), conditions
+
+
+def test_wrapper_maps_supported_hosts_and_stop_copy_host():
+    """The shell wrapper contract: host root mapping and the Open WebUI stop-copy window."""
+    root = data_backup.Path(__file__).parents[1]
+    text = (root / "infra/systemd/data_backup.sh").read_text()
+    for host, data_root in {
+        "web-server": "/srv/control",
+        "docker-server": "/srv/docker",
+        "dev": "/srv/dev",
+        "dev-agent": "/srv/dev-agent",
+        "openwebui": "/srv/openwebui",
+    }.items():
+        assert f"{host})" in text, host
+        assert data_root in text, host
+    assert "xeonolab-openwebui-production.service" in text
+    assert "trap 'systemctl start" in text
