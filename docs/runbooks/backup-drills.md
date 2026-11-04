@@ -115,6 +115,27 @@ curl -s -k -H "Authorization: PVEAPIToken=$PVE" -X DELETE \
   'https://192.168.0.10:8006/api2/json/nodes/pve/qemu/190?purge=1&destroy-unreferenced-disks=1'
 ```
 
+**自动化**：`scripts/pve_restore_drill.py` 把上述步骤固化为一条命令（默认 **dry-run**，只做只读预检并
+打印计划；`--execute` 才真正动作）：
+
+```sh
+uv run python scripts/pve_restore_drill.py \
+  --archive 'xeonolab-backup:backup/vzdump-qemu-106-2026_11_04-08_17_19.vma.zst' \
+  --source-vmid 106 --vmid 190 --storage local-lvm \
+  --token-file ~/.config/devagent/pve-api-token --insecure --execute
+```
+
+安全约束：scratch VMID 必须在 112–989、不在生产/保留段且未被占用；归档必须是目标存储上真实存在的
+VMA 卷；启动前强制 `link_down=1` + `onboot=0`；成功后自动 shutdown + purge 销毁并核对 VMID/卷无残留；
+失败默认保留现场供检查（输出含清理方式），`--keep` 则始终保留。脚本只读取源 VM 配置（可选的
+`--source-vmid` 对比），所有写操作仅针对 scratch VMID。
+
+2026-11-04 用该脚本对同一份 VM106 归档做了首次 `--execute` 实测：restore **26.2s**、断网启动 2.0s、
+guest agent 14.2s 就绪；校验通过（Ubuntu 26.04.1 LTS / kernel 7.0.0-38、hostname `docker-server`、
+根分区 82,068,492,288 bytes 与生产一致；`scsi1` 数据盘因 `backup=0` 不在归档中，脚本按预期把它列为
+“源盘未恢复”而非失败）；清理后 VMID 与 thin 卷均无残留。该克隆的 ACPI shutdown 任务报
+`VM quit/powerdown failed`，脚本按超时回退硬停止后完成销毁。
+
 ## 3. 覆盖矩阵与已知缺口（截至 2026-11-04）
 
 | 范围 | 状态 | 说明 |
