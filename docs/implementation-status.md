@@ -318,3 +318,12 @@ Coordinator 集成与发布（2026-10-22）：分支已 rebase 到当时 release
 - #76 会话韧性（缓存 token、Retry-After、失败重放、logout/刷新 fencing）复核通过并关闭；冲突标记文档修复 + 新增 `tests/test_documentation_hygiene.py`（全量 1572 passed）。
 - PVE 首次建立每周 VM 级 vzdump 调度（VM105/107/109 → `xeonolab-backup`，keep-last 2）；VM109 首份归档实测 `zstd -t` 通过（SHA256 `7fe4d264…`）。大容量数据盘（VM101/106/110/111）需先标 `backup=0` 并另定策略，见 #113/#390。
 - 2026-11-04：数据盘 `backup=0` 后 VM 级 vzdump 扩为 7 台（101/105/106/107/109/110/111，OS-only）；VM106 实测归档 1,797,992,031 bytes、60s、`zstd -t` 通过、SHA256 `563041e3…`。数据盘内容由每日 tar 快照覆盖。
+
+### 2026-11-04 PVE VM 级归档恢复演练（#113）
+
+对 2026-11-04 手动 vzdump 的 VM106 归档执行了一次不触碰生产的恢复演练（仅 PVE API token，无宿主 shell）：
+restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 cores / 16 GiB / scsi0 discard+iothread+ssd）与生产一致；
+`net0 link_down=1` 隔离启动后 guest agent 正常，`get-osinfo` Ubuntu 26.04.1 LTS / kernel 7.0.0-38、`get-host-name` docker-server、
+根分区 82,068,492,288 bytes 与生产一致；ACPI shutdown 3s、purge 销毁 2s，VMID 与两个 thin 卷无残留。
+结论与限制（同宿主/非离站、无网络与业务验收、VM106 数据盘 `backup=0` 需与每日 tar 快照拼接、未测整机 RTO）记入
+`docs/runbooks/backup-drills.md` §2.6。
