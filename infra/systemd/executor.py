@@ -51,6 +51,7 @@ for host in config['targets']:
     if execute(host,'activate '+manifest['commit']+' '+job['deployment_id']):
         # Include failed target: its receiver may already have restored itself.
         ok=all(execute(target,'rollback '+job['deployment_id'])==0 for target in [host,*reversed(completed)])
-        print(json.dumps({'state':'rolled_back' if ok else 'failed'}));raise SystemExit(0 if ok else 1)
+        print(json.dumps({'state':'rolled_back' if ok else 'failed'}))
+        raise SystemExit(0 if ok else 1)
     completed.append(host)
 print(json.dumps({'state':'completed'}))
