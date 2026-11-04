@@ -10,7 +10,23 @@
 - 上述备份域的 systemd timer/service 状态（timer 未 active、service 上次 run failed 报 finding）；
 - 24h `journalctl -p err` 的 top 来源（帮助识别 agetty 之类噪声：issue #391）；
 - 指定 TLS 端点的证书剩余天数（默认只报告已过期；Caddy 内部证书为短周期（12h）自动轮换，0 天通常正常，需要提前预警时用 `--min-cert-days 7`）；
-- （可选）PVE 的 VM 级 vzdump 巡检：传入 `--pve-token-file` 时，只读查询 `GET /cluster/backup` 与备份存储内容，报告任务被禁用、某 VM 无归档、最新归档超过 `--max-vm-backup-age-hours`（默认 192h）。token 只放 HTTP 头、不会写入输出；自签证书需显式 `--pve-insecure` 或 `--pve-ca-file`。
+- （可选）PVE 的 VM 级 vzdump 巡检：传入 `--pve-token-file` 时，只读查询 `GET /api2/json/cluster/backup` 与备份存储内容，报告任务被禁用、某 VM 无归档、最新归档超过 `--max-vm-backup-age-hours`（默认 192h）。token 只放 HTTP 头、不会写入输出；自签证书需显式 `--pve-insecure` 或 `--pve-ca-file`。
+
+  运维循环可以把 PVE API token（`tokenid=secret` 一行）放在 DevAgent 主机的私密文件里，避免每轮重新处理密钥：
+
+  ```sh
+  # 一次写入（0600，仅 devagent 可读），之后每轮只读使用
+  install -m 600 -D /dev/stdin ~/.config/devagent/pve-api-token <<'TOKEN'
+  root@pam!<token-id>=<secret>
+  TOKEN
+
+  uv run python scripts/ops_audit.py \
+    --pve-token-file ~/.config/devagent/pve-api-token --pve-insecure \
+    --hosts 192.168.0.101,192.168.0.104,192.168.0.106,192.168.0.107,192.168.0.109,192.168.0.110,192.168.0.111 \
+    --key /tmp/devagent-admin/vm-key --known-hosts /tmp/devagent-admin/known_hosts
+  ```
+
+  首次定时 vzdump（每周六 19:00 UTC）运行前，VM105/107/101/110/111 会按预期报「归档过旧」；运行后才应转为新鲜。
 
 不写入目标、不读取任何密钥内容；SSH 只执行固定命令串，使用调用者提供的 key/known_hosts。
 
