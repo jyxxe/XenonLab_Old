@@ -70,7 +70,7 @@ quota 200G 下 keep-last 2 余量充足（当前 used 61.2G / avail 153.5G）。
 | --- | --- | --- |
 | 业务库数据 / 代码仓库 / 认证数据库 / 桌面账号偏好 | ✅ 每日校验备份 + 独立恢复抽检 | 见上表 |
 | VM 级整机（OS、配置、密钥） | 🟡 **部分**：VM105/107/109 每周 | PVE 任务 `751ca682-95ab-4900-b0bb-ed6deaa427b6`：`vmid=105,107,109`，`sun 03:00`（UTC+8）→ 周六 19:00 UTC，snapshot+zstd，`xeonolab-backup`，keep-last 2；首份 VM109 归档已实测（3,238,882,674 bytes，`zstd -t` OK，SHA256 `7fe4d264…`）。VM101/106/110/111 因大容量数据盘需先标 `backup=0` 才能加入，见 #113/#390 |
-| 大容量数据盘内容 | 🟡 每日 tar 快照（VM101/106/110/111），见 `data-disk-backup.md` | 覆盖 `/srv/control`(VM101)、`/srv/docker`(VM106)、`/srv/dev`(VM110)、`/srv/dev-agent`(VM111)；VM104 2×8T、VM100 200G、VM103 2T **仍未覆盖**，且 tar 为 best-effort 非跨文件事务一致 |
+| 大容量数据盘内容 | 🟡 每日 tar 快照（VM100/101/106/110/111），见 `data-disk-backup.md` | 覆盖 `/srv/openwebui`(VM100，stop-copy 4s)、`/srv/control`(VM101)、`/srv/docker`(VM106)、`/srv/dev`(VM110)、`/srv/dev-agent`(VM111)；VM104 2×8T 空闲盘（XeLibrary 数据根已由应用级备份覆盖）、VM103 2T HF-cache（可重建）**仍未覆盖**，tar 对在线数据根为 best-effort |
 | offsite / 独立故障域 | ❌ 无自动通道 | #113 只有手工加密离机副本（外部物理终端）与回传恢复演练；durable 离机渠道未决 |
 | 备份失败/年龄的外部推送告警 | ❌ 未实现 | 目前为 `ops_audit` finding + journal/退出码；无邮件/IM transport |
 
