@@ -40,12 +40,13 @@ curl -s -k -H "Authorization: PVEAPIToken=root@pam!<token-id>=<secret>"   https:
 | 字段 | 值 |
 | --- | --- |
 | job id | `751ca682-95ab-4900-b0bb-ed6deaa427b6` |
-| vmid | `105`（network-server）、`107`（embedding）、`109`（auth） |
+| vmid | `101`（web-server）、`105`（network-server）、`106`（docker-server）、`107`（embedding）、`109`（auth）、`110`（dev）、`111`（dev-agent） |
 | 计划 | `sun 03:00`（PVE 本地时区 UTC+8，即周六 19:00 UTC） |
 | 模式 / 压缩 | `snapshot`（guest-agent freeze/thaw）+ `zstd` |
 | 存储 | `xeonolab-backup`（ZFS mirror 池，dir storage，quota 200G；实测 used 59.4G / avail 155.3G） |
 | 保留 | `prune-backups=keep-last=2` |
-| 首次验证 | 2026-11-03 手动 VM109 → 任务 stopped OK；归档 3,238,882,674 bytes；`zstd -t` 通过；SHA256 `7fe4d264ce06a4fa89d9beb7d8b358df463de3c3b360153e9286cdc541e53cb1` |
+| 首次验证 | 2026-11-03 手动 VM109 → 任务 stopped OK；归档 3,238,882,674 bytes；`zstd -t` 通过；SHA256 `7fe4d264…` |
+| 2026-11-04 扩容 | VM101/106/110/111 的数据盘（`scsi1`）在 VM 配置中标 `backup=0`（数据盘内容另由每日 tar 快照覆盖，见 `data-disk-backup.md`），任务 vmid 扩为 7 台；手动 VM106 验证：仅 80 GiB OS 盘、sparse 94%、**1,797,992,031 bytes**、60s、`zstd -t` 通过、SHA256 `563041e3e9d82cfdff88d4bad68d8417861f88a5379b5e0f1e46ce750a7ab6e0` |
 
 手工触发与核对（PVE API；需要 `root@pam` token）：
 
@@ -57,9 +58,11 @@ curl -s -k -H "Authorization: PVEAPIToken=..."   'https://192.168.0.10:8006/api2
 # 宿主只读校验（root SSH 后）：zstd -t <archive> && sha256sum <archive>
 ```
 
-**未覆盖**：VM101/106/110/111 的大容量数据盘必须先在其 VM 配置里标 `backup=0`（否则 200G quota 不够），
-数据盘内容另需 tar/rsync 或 ZFS send 策略；VM104 2×8T、VM100 200G、VM103 2T 未纳入。
-该存储与 PVE 同宿主，因此**不是 offsite**。
+**数据盘策略（2026-11-04）**：VM101/106/110/111 的大容量数据盘已在 VM 配置中标 `backup=0`，
+因此 VM 级归档只含 OS 盘；数据盘内容由每日校验 tar 快照覆盖（`data-disk-backup.md`）。
+VM104 2×8T、VM100 200G、VM103 2T 仍未纳入任何 VM 级归档。
+该存储与 PVE 同宿主，因此**不是 offsite**；容量：7 台 OS-only 归档约 20 GiB/轮（实测 VM106 1.67 GiB），
+quota 200G 下 keep-last 2 余量充足（当前 used 61.2G / avail 153.5G）。
 
 ## 3. 覆盖矩阵与已知缺口（截至 2026-11-03）
 
