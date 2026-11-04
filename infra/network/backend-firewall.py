@@ -2,7 +2,6 @@
 """Filter only XeonoLab backend ports; leave existing SSH and unrelated services intact."""
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 config=json.loads(Path('/etc/xeonolab/backend-firewall.json').read_text())

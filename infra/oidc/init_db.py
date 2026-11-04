@@ -1,5 +1,6 @@
-import os,subprocess
+import subprocess
 from pathlib import Path
+
 values=dict(line.split('=',1) for line in Path('/etc/xeonolab/oidc/postgres.env').read_text().splitlines())
 password=values['POSTGRES_PASSWORD']
 query="SELECT 1 FROM pg_roles WHERE rolname='keycloak'"
