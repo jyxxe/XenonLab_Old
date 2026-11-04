@@ -327,3 +327,13 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 根分区 82,068,492,288 bytes 与生产一致；ACPI shutdown 3s、purge 销毁 2s，VMID 与两个 thin 卷无残留。
 结论与限制（同宿主/非离站、无网络与业务验收、VM106 数据盘 `backup=0` 需与每日 tar 快照拼接、未测整机 RTO）记入
 `docs/runbooks/backup-drills.md` §2.6。
+
+### 2026-11-04 PVE 恢复演练自动化（#113）
+
+`scripts/pve_restore_drill.py` 把 VM106 的手动恢复演练固化为可复核脚本：默认 **dry-run**（只读预检并打印计划），
+`--execute` 才执行 restore→隔离启动→guest agent 校验→shutdown/purge 销毁；安全约束包括 scratch VMID 必须在
+112–989 且不在生产/保留段/占用中、归档必须是目标存储上存在的 VMA 卷、强制 `link_down=1` + `onboot=0`、
+失败保留现场（`--keep` 始终保留）。`tests/test_pve_restore_drill.py` 14 项覆盖安全拒绝、dry-run 无变更、
+隔离配置、校验汇总、`backup=0` 数据盘缺失语义、硬停止回退、失败清理与销毁；全量 pytest 1595 passed。
+脚本已对 VM106 归档执行首次 `--execute` 实测（restore 26.2s、agent 14.2s、清理无残留、`ok=true`）。演练口径与已知限制见
+`docs/runbooks/backup-drills.md` §2.6。
