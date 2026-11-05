@@ -337,3 +337,11 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 隔离配置、校验汇总、`backup=0` 数据盘缺失语义、硬停止回退、失败清理与销毁；全量 pytest 1595 passed。
 脚本已对 VM106 归档执行首次 `--execute` 实测（restore 26.2s、agent 14.2s、清理无残留、`ok=true`）。演练口径与已知限制见
 `docs/runbooks/backup-drills.md` §2.6。
+
+### 2026-11-05 备份重校验工具（#390）
+
+新增只读 `scripts/backup_verify.py`：对每台主机 `/var/backups/xeonolab/<domain>` 下的最新快照
+重新执行各域 verify（xelibrary/desktop/data 走发布树，提供 standalone 回退；forgejo/keycloak 走
+`/usr/local/libexec` 包装器），输出逐域结果与失败/SSH 错误，退出码 0/1/2。`tests/test_backup_verify.py`
+7 项覆盖解析、汇总、失败标记与退出码；全量 pytest 1602 passed。首次实测 10 台主机：9 个快照全部
+`ok`（data×5、desktop、xelibrary、keycloak、forgejo），无失败。用法已写入 `docs/runbooks/backup-drills.md` §4。
