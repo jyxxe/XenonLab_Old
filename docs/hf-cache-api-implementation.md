@@ -43,3 +43,25 @@ Base: `0efab2d`; integrated candidate: `a46544d`; revision branch: `codex/issue-
 ## Production rollout still required
 
 Configure and install the collector, receiver, HMAC secret, expected pool names, and private-network firewall rules using `docs/runbooks/pool-telemetry.md`. Confirm the selected ZFS pool backs the intended shared physical storage, then verify sample freshness, reader rejection of stale telemetry, service readiness, and recovery after collector/receiver interruption. These deployment checks are not performed by the local tests or release staging scripts.
+
+## 2026-11-05 生产状态复核（更新上面旧状态）
+
+上面的 “Not yet production-complete / Production rollout still required” 小节写于首个增量，
+其中「receiver 未安装」已与现状不符。2026-11-05 只读复核结果：
+
+- **已部署**：VM103（`hf-cache`）运行 `xeonolab-pool-telemetry-receiver.service`（192.168.0.103:9183）
+  与对应防火墙 unit；2T 数据盘 `sdb`（ext4）已挂载到 `/srv/hf-cache`，当前为空（仅 `lost+found`）。
+- **未部署**：HF-cache 服务本身——VM103 上没有服务 unit、没有 `/opt/xeonolab/releases` 发布树，
+  也没有缓存 API 监听端口；`/srv/hf-cache` 下无 snapshots/元数据。因此 ensure/prefetch/pin/evict/gc
+  仍**没有生产实例**可验收。
+- **代码与测试**：`uv run pytest -q tests/test_hf_cache.py` → 47 passed（2026-11-05）；
+  GC 崩溃安全（pending_evictions 事务日志 + 启动恢复 + 部分失败预留）测试仍在并通过。
+
+关闭 #22 仍需要的生产步骤（与 `docs/runbooks/pool-telemetry.md` 的 rollout 小节一致）：
+
+1. 在 VM103 以非发布目标方式安装 HF-cache 服务（从发布树复制 venv/包到受控目录 + systemd unit，
+   `DATA_DIR=/srv/hf-cache`，配置 OIDC 与 `HF_CACHE_POOL_METRICS_FILE`/`HF_CACHE_EXPECTED_POOL`）；
+2. 边界：VM101 Caddy LAN 路由 + 防火墙仅放行消费方（101/104/107），确认 receiver 指标文件为
+   root 所有、非 world/group 可写且新鲜（服务在遥测缺失/过期时 fail-closed）；
+3. 生产验收：ensure 新建/已存在/409 配额、prefetch 生命周期与 retry、pin/unpin、evict/lease、
+   gc dry-run/confirm + 审计、配额/水位 503、readiness 在 telemetry 中断时的不就绪与恢复。
