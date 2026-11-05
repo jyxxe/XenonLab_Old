@@ -62,6 +62,45 @@ uv run python scripts/public_probe.py \
   （二级子域无证书）。该基线表明公网桌面的问题表现为**间歇性 TLS 握手超时/高延迟**，与 #126 描述一致；
 - 原始报告按轮次保存在维护主机私有 state 目录（`state/public-probe-*.json`，无凭据）。
 
+## 公网隧道连接诊断（cloudflared，只读）
+
+公网入口经 VM101 的 `cloudflared.service` 隧道；连接器运行参数（2026-11-05 核对）：
+
+```
+/usr/bin/cloudflared tunnel --no-autoupdate --metrics 127.0.0.1:20241 --protocol http2 run --token-file /etc/cloudflared/tunnel-token
+```
+
+只读诊断：
+
+```sh
+# 指标（HA 连接数、代理到源站错误、按状态码响应计数）
+sudo -n curl -s http://127.0.0.1:20241/metrics | grep -E 'cloudflared_tunnel_(ha_connections|request_errors|response_by_code)'
+# 边缘连接掉线事件（每次掉线后连接器会自动重连，服务本身通常不重启）
+sudo -n journalctl -u cloudflared --since '24 hours ago' --no-pager | grep -E 'Lost connection with the edge|Connection terminated'
+```
+
+2026-11-05 观测：`ha_connections=4`、`request_errors=3`（自 11-01 启动以来）、24h 内 24 次边缘连接掉线
+（多为单条连接，自动重连秒级完成；`systemctl show -p NRestarts` 为 0）。与 `public_probe` 观测到的公网
+TLS 握手超时（11–15s，LAN 4ms 正常）时间窗相邻，指向**公网出口/边缘链路质量**而非源站应用错误。
+
+### 为什么强制 `--protocol http2`
+
+Cloudflare 默认优先 QUIC（UDP 7844）。本机对该出口做过一次**附加式**诊断（另起一个短时连接器，不替换现有
+service；共享同一 tunnel token，Cloudflare 侧按 HA 连接分发，20s 后自动退出）：
+
+```sh
+sudo -n timeout -s TERM 20 /usr/bin/cloudflared tunnel --no-autoupdate \
+  --metrics 127.0.0.1:20242 --protocol quic run --token-file /etc/cloudflared/tunnel-token
+```
+
+结果：2/4 条 QUIC 连接注册成功，另 2 条 `failed to dial to edge with quic: timeout: no recent network activity`，
+precheck 输出 **`UDP Connectivity ... FAIL` / `Allow outbound QUIC traffic on port 7844 or use HTTP2`**。
+因此当前 `http2` 是有依据的回退选择，**在确认 WAN/防火墙放行出站 UDP/TCP 7844 之前不要切换 QUIC**；
+若后续放行，可评估 `--protocol auto` 并用上述指标/掉线率对比验证。
+
+注意：诊断会短暂增加 HA 连接（不影响现有 service），但不要用临时连接器替代正式 unit；任何 unit/token 变更
+都应走维护窗口并准备回滚（`systemctl restart cloudflared.service`）。
+
 ## 安全边界与依赖
 
 - `/metrics` 保持现有访问边界：仅监听服务节点端口，由防火墙限制到 Prometheus 主机；
