@@ -354,3 +354,12 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 公网桌面 4/6 200、2/6 TLS 握手超时（11–15s）、中位 2.1s；LAN 桌面 6/6 200、中位 4ms；
 `chat.jyxxe.com` 530/超时、`chat.xenon.jyxxe.com` 全部证书握手失败。用法与判读写入
 `docs/runbooks/monitoring.md`。
+
+### 2026-11-05 公网采样日志汇总工具（#126）
+
+新增只读 `scripts/public_probe_report.py`：聚合 `/var/lib/devagent/logs/public-probe.jsonl`（10 分钟定时采样）
+为每 URL 成功率/状态码分布/中位与最差 p95/失败轮次（含首条错误），支持 `--since-hours`、`--json`、
+`--fail-on-errors`；退出码 0/1/2。`tests/test_public_probe_report.py` 6 项覆盖解析、时间过滤、聚合、
+失败窗口与退出码；全量 pytest 1616 passed。首 10 轮聚合（20:45–22:10Z）：公网桌面 57/60（95%，3 次 TLS 握手超时
+集中在 22:10:46 一轮）、LAN 60/60（100%、中位 4ms）、chat 公网 0/60（530×58）、chat 二级子域 0/60（证书失败）。
+用法与聚合基线写入 `docs/runbooks/monitoring.md`。

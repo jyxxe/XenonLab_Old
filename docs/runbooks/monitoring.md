@@ -124,6 +124,21 @@ tail -n 1 /var/lib/devagent/logs/public-probe.jsonl
 - 采样失败不会被当作 unit 失败（退出码 0；报告里的 `ok=false` 才是数据），避免每 10 分钟产生 failed unit；
 - 该日志用于区分“链路慢”和“边缘 5xx/握手超时”，为 #126/#67 提供连续证据；外部告警通道仍未实现。
 
+### 采样日志汇总
+
+`scripts/public_probe_report.py` 把 `public-probe.jsonl` 聚合成成功率/状态码/延迟与失败时间窗，供 #126 引用：
+
+```sh
+uv run python scripts/public_probe_report.py --log /var/lib/devagent/logs/public-probe.jsonl --since-hours 24
+uv run python scripts/public_probe_report.py --json --fail-on-errors   # 机读/告警式退出码
+```
+
+输出每个 URL 的采样数、成功数/成功率、状态码分布、各轮中位数的中位、最差 p95 与失败轮次（含首条错误）；
+退出码 0=报告生成、1=窗口内无有效轮次（或 `--fail-on-errors` 下存在失败样本）、2=日志不存在。
+2026-11-05 20:45–22:10Z 的首 10 轮聚合：公网桌面 **57/60 (95%)**、3 次 TLS 握手超时集中在
+22:10:46 一轮；LAN 桌面 **60/60 (100%)、中位 4ms**；`chat.jyxxe.com` 0/60（530×58）；
+`chat.xenon.jyxxe.com` 0/60（全部证书握手失败）——再次指向公网边缘/链路而非源站。
+
 ## 安全边界与依赖
 
 - `/metrics` 保持现有访问边界：仅监听服务节点端口，由防火墙限制到 Prometheus 主机；
