@@ -72,3 +72,36 @@ Authorization: Bearer <token>
 文件（连同 sidecar）；其余隔离文件需人工核对 `__xl_meta.table_id` 与备份后移回 `tables/<uuid>.xl`，
 没有"丢弃隔离文件"的自动动作。计划生成前请先确认 catalogue 是期望的权威状态；
 该端点不替代备份。
+
+## 生产隔离 fixture 验收（写路径）
+
+管理员的写路径（schema 变更、移动、记录历史/恢复、软删除/purge、删除空表）可以用一张
+**临时空表**在生产上做端到端验收，验收后必须完全删除。2026-11-05 用该流程在
+`http://192.168.0.104:8100`（VM104 本机直连生产 XeLibrary）完成 16/16 步验收，fixture 清理后
+一致性扫描 `ok=true`、0 critical/0 warning。
+
+前置：
+
+- 使用具备 `xelibrary:admin` 的服务身份（`platform-admin` realm role 会映射到全部 scope）；
+  从 VM104 本机访问 `http://192.168.0.104:8100`，不要经过公网入口。
+- 每一步写操作都带当前 **ETag** 作为 `If-Match`；ETag 格式为 `"revision:<n>"`。
+  HTTP 客户端读取响应头时不要假设大小写（Python `urllib` 的 `dict(response.headers)`
+  可能给出小写 `etag`，按下标访问会丢值 → 请求缺 `If-Match` 会得到 412）。
+- 删除表只允许**空表**：有行（包括软删除行）、附件/向量引用、活跃索引任务或活跃上传时会 409，
+  软删除的行必须先 `?purge=true`。
+
+步骤与期望（全部使用 fixture 路径，不触碰既有表）：
+
+1. `POST /api/v1/tables`（2 个字段）→ 201；`GET /api/v1/tables/{tid}` → 200 且带 ETag；
+2. 用过期 ETag `PATCH .../schema` → **412**（并发保护），再用当前 ETag 增加字段 → 200；
+3. `POST .../move`（If-Match）→ 200；
+4. `POST .../rows` → 201；`PATCH .../rows/{rid}`（If-Match）→ 新 revision；
+   `GET .../rows/{rid}/revisions` 能看到旧 revision；`POST .../rows/{rid}/restore`（If-Match，旧 revision）
+   → 新 revision 且值恢复；
+5. `DELETE .../rows/{rid}`（If-Match，软删除）→ `include_deleted=true` 可读到 `_deleted_at`；
+   `DELETE .../rows/{rid}?purge=true`（admin，If-Match）→ 行被物理清除；
+6. `DELETE /api/v1/tables/{tid}`（admin，If-Match，空表）→ 200；再读 → 404；
+7. 清理复核：`GET /api/v1/tables` 中无 fixture，`GET /api/v1/maintenance/consistency` 仍 `ok=true`。
+
+该流程覆盖 API 层；**浏览器 UI 的真实登录态写路径**与**受限账号（无表写 ACL）的只读禁用状态**
+需要单独验收，后者依赖人工 root 账户树创建的非管理员主体（见 #70），不能由合成账号替代。

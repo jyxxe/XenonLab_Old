@@ -168,6 +168,29 @@ CI and the protected validator status; Forgejo receives `head_commit_id` to
 reject a concurrent push. Validation is published by the separate non-admin
 `devagent-validator` identity, whose token is root-owned.
 
+### PR author vs approving identity
+
+Forgejo refuses to let an author approve their own pull request
+(`HTTP 422 "approve your own pull is not allowed"`). Because `devctl pr-create`
+authenticates as `devagent-maintainer` (the identity whose approval `devctl
+merge` requires), a PR created with `devctl pr-create` cannot also be approved
+by the maintainer.
+
+Use this order for a normal maintenance publication:
+
+1. create the PR under the writing identity (`git push` with the askpass helper,
+   then `POST /api/v1/repos/.../pulls` with the `dsh-agent` token), so the author
+   is `dsh-agent`;
+2. run `devctl validate <head>`, wait for `verify / backend (pull_request)` and
+   `verify / frontend (pull_request)` success on the exact head;
+3. `devctl review <pr> <head> APPROVED` as `devagent-maintainer` (this also
+   records the local review row), then `devctl merge <pr> <head>`.
+
+If a PR was accidentally created by `devagent-maintainer`, close it and recreate
+the same head with the writing identity; do not hand-edit the `reviews` table or
+work around the guard. The production branch protection, required checks and
+merge guard stay enabled.
+
 The model user has exactly one sudo entry point:
 `/usr/local/libexec/devagent-privileged` with no arguments and a bounded JSON
 stdin protocol. PVE and staging keys are stored under root-only
