@@ -149,6 +149,11 @@ guest agent 14.2s 就绪；校验通过（Ubuntu 26.04.1 LTS / kernel 7.0.0-38�
 ## 4. 日常核对（只读）
 
 ```sh
+# 重新执行各域 verify（最新快照，只读；发现位翻转/安装损坏时退出码非 0）
+uv run python scripts/backup_verify.py \
+  --hosts 192.168.0.100,192.168.0.101,192.168.0.103,192.168.0.104,192.168.0.105,192.168.0.106,192.168.0.107,192.168.0.109,192.168.0.110,192.168.0.111 \
+  --key /tmp/devagent-admin/vm-key --known-hosts /tmp/devagent-admin/known_hosts
+
 # 全部域的快照年龄、timer/unit 状态、磁盘/证书巡检
 uv run python scripts/ops_audit.py \
   --hosts 192.168.0.101,192.168.0.104,192.168.0.109,192.168.0.110 \
