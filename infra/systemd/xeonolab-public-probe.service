@@ -1,0 +1,14 @@
+[Unit]
+Description=Sample public/LAN entry points for Cloudflare intermittency tracking (issue #126)
+Documentation=docs/runbooks/monitoring.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=devagent
+Group=devagent
+ExecStart=/usr/local/libexec/xeonolab-public-probe
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=180

@@ -101,6 +101,29 @@ precheck 输出 **`UDP Connectivity ... FAIL` / `Allow outbound QUIC traffic on 
 注意：诊断会短暂增加 HA 连接（不影响现有 service），但不要用临时连接器替代正式 unit；任何 unit/token 变更
 都应走维护窗口并准备回滚（`systemctl restart cloudflared.service`）。
 
+### 定时采样（VM111，10 分钟窗口）
+
+`infra/systemd/xeonolab-public-probe.{service,timer}` + `/usr/local/libexec/xeonolab-public-probe`
+把上面的采样做成 10 分钟一次的后台记录（仅 VM111 维护主机，只读、不写目标）：
+
+```sh
+# 从发布树安装（VM111，root）
+sudo install -m 755 /opt/xeonolab/current/infra/systemd/public-probe.sh /usr/local/libexec/xeonolab-public-probe
+sudo install -m 644 /opt/xeonolab/current/infra/systemd/xeonolab-public-probe.service /etc/systemd/system/
+sudo install -m 644 /opt/xeonolab/current/infra/systemd/xeonolab-public-probe.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now xeonolab-public-probe.timer
+sudo systemctl start xeonolab-public-probe.service
+
+systemctl list-timers xeonolab-public-probe.timer
+tail -n 1 /var/lib/devagent/logs/public-probe.jsonl
+```
+
+- 每轮 4 个端点 × 6 次（间隔 2s），JSON 报告逐行追加到 `/var/lib/devagent/logs/public-probe.jsonl`
+  （超过 5 MiB 自动轮转一份为 `.1`）；stderr 记录在 `public-probe.log`；
+- 采样失败不会被当作 unit 失败（退出码 0；报告里的 `ok=false` 才是数据），避免每 10 分钟产生 failed unit；
+- 该日志用于区分“链路慢”和“边缘 5xx/握手超时”，为 #126/#67 提供连续证据；外部告警通道仍未实现。
+
 ## 安全边界与依赖
 
 - `/metrics` 保持现有访问边界：仅监听服务节点端口，由防火墙限制到 Prometheus 主机；

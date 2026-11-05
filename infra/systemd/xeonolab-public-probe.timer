@@ -1,0 +1,10 @@
+[Unit]
+Description=Sample public/LAN entry points every 10 minutes (issue #126)
+
+[Timer]
+OnCalendar=*:0/10
+RandomizedDelaySec=30
+Persistent=false
+
+[Install]
+WantedBy=timers.target
