@@ -345,3 +345,12 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 `/usr/local/libexec` 包装器），输出逐域结果与失败/SSH 错误，退出码 0/1/2。`tests/test_backup_verify.py`
 7 项覆盖解析、汇总、失败标记与退出码；全量 pytest 1602 passed。首次实测 10 台主机：9 个快照全部
 `ok`（data×5、desktop、xelibrary、keycloak、forgejo），无失败。用法已写入 `docs/runbooks/backup-drills.md` §4。
+
+### 2026-11-05 公开/内网入口采样工具（#126）
+
+新增只读 `scripts/public_probe.py`：多 URL、N 次 GET 采样，输出成功比例/状态码分布/中位与 p95 延迟/失败详情，
+退出码 0/1，支持 `--json`；CA 在系统根证书之上追加，可同时采样公网与 LAN 自签入口。`tests/test_public_probe.py`
+8 项覆盖采样聚合、百分位、失败标记、退出码与 JSON；全量 pytest 1610 passed。首次生产采样（6 次/URL，间隔 2s）：
+公网桌面 4/6 200、2/6 TLS 握手超时（11–15s）、中位 2.1s；LAN 桌面 6/6 200、中位 4ms；
+`chat.jyxxe.com` 530/超时、`chat.xenon.jyxxe.com` 全部证书握手失败。用法与判读写入
+`docs/runbooks/monitoring.md`。
