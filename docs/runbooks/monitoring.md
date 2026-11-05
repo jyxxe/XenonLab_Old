@@ -43,6 +43,25 @@
   curl -s localhost:8100/metrics | head
   ```
 
+## 公开/内网入口采样（边缘链路，只读）
+
+`scripts/public_probe.py` 对一组 URL 做 N 次 GET 采样，输出成功比例、状态码分布、中位/p95/最大延迟与失败详情，
+用于区分「链路慢」和「边缘 5xx」（#126/#67），不依赖 Cloudflare account API：
+
+```sh
+uv run python scripts/public_probe.py \
+  --url https://xenon.jyxxe.com/ --url https://192.168.0.101/ \
+  --url https://chat.jyxxe.com/ --url https://chat.xenon.jyxxe.com/ \
+  --ca-file /etc/devagent/lan-root-ca.crt --samples 10 --interval 2
+```
+
+- 退出码 0 = 全部 2xx/3xx；1 = 有失败；`--json` 输出机读报告；
+- CA 在系统根证书基础上追加（可同时采样公网与 LAN 自签入口），不发送任何凭据；
+- 2026-11-05 基线（6 次采样，间隔 2s）：公网桌面 **4/6 200、2/6 TLS 握手超时（11–15s）**、中位 2.1s；
+  LAN 桌面 **6/6 200、中位 4ms**；`chat.jyxxe.com` 530/超时、`chat.xenon.jyxxe.com` 全部 TLS 握手失败
+  （二级子域无证书）。该基线表明公网桌面的问题表现为**间歇性 TLS 握手超时/高延迟**，与 #126 描述一致；
+- 原始报告按轮次保存在维护主机私有 state 目录（`state/public-probe-*.json`，无凭据）。
+
 ## 安全边界与依赖
 
 - `/metrics` 保持现有访问边界：仅监听服务节点端口，由防火墙限制到 Prometheus 主机；
