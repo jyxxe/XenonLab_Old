@@ -105,3 +105,39 @@ Authorization: Bearer <token>
 
 该流程覆盖 API 层；**浏览器 UI 的真实登录态写路径**与**受限账号（无表写 ACL）的只读禁用状态**
 需要单独验收，后者依赖人工 root 账户树创建的非管理员主体（见 #70），不能由合成账号替代。
+
+## 附件对象 GC（显式维护，默认 dry-run）
+
+内容寻址附件对象可以被多行/多表共享；只有**不再被任何表**的 `__xl_attachments.object_hash` 引用、
+且 mtime 早于宽限期（默认 24h）的对象才可回收。端点 `POST /api/v1/storage/attachment-gc`
+（`xelibrary:admin`）默认 dry-run，真实删除必须回传 dry-run 返回的 `confirm` token，并且每个动作写
+`storage.attachment_gc` 审计。设计见 `docs/design/xelibrary-data-lifecycle.md` 第二增量。
+
+只读观察（先看再动）：
+
+```bash
+# 对象总数 / 引用数 / 未引用数与字节数（不删除）
+GET /api/v1/storage/telemetry
+# catalogue ↔ 文件 ↔ 对象一致性（read-only；unreferenced 只是观测）
+GET /api/v1/maintenance/consistency
+```
+
+回收步骤：
+
+1. dry-run：`POST /api/v1/storage/attachment-gc`，body `{"dry_run": true, "grace_hours": 24, "limit": 1000}`
+   → 200，返回 `candidates[]`（digest/bytes）、`candidate_count`、`candidate_bytes`、`confirm` token，
+   `deleted=0`。
+2. **先核对候选**：digest/大小、来源与时间是否符合预期；来源不明时不要执行，先排查上传/绑定失败。
+3. 执行：同一候选集合上 `{"dry_run": false, ..., "confirm": "<token>"}` → 200，`deleted`/`deleted_bytes`
+   等于候选；省略或过期 `confirm` 返回 **409 `GC_CONFIRMATION_REQUIRED`**（无删除）。
+4. 复核：`telemetry` 的 `unreferenced`/`bytes_unreferenced` 归零（或回到预期基线），
+   `consistency` 的 `object_store.unreferenced` 为 0 且 `orphan_check_complete=true`；
+   `GET /api/v1/audit/events` 能看到 `storage.attachment_gc` 的 dry-run 与执行两条事件。
+
+注意事项：
+
+- 引用集合在单次调用内建立；**不要在 dry-run 与执行之间新增/删除附件绑定**，否则重新 dry-run 拿新 token；
+- 对象被共享引用时不会进入候选；不要手工 `rm` 对象文件（会绕过审计与引用差集）；
+- 该端点是显式管理员操作，目前未接入定时任务；上传临时目录 `objects/.uploads` 不参与回收；
+- 2026-11-05 生产实测：未引用对象 1 个 / 18,900,000 B，dry-run 确认后执行 `deleted=1`，
+  telemetry/consistency 复核 0 未引用，审计两条事件，期间 referenced 对象保持 1 个未受影响。
