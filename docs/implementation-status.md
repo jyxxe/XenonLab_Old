@@ -363,3 +363,13 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 失败窗口与退出码；全量 pytest 1616 passed。首 10 轮聚合（20:45–22:10Z）：公网桌面 57/60（95%，3 次 TLS 握手超时
 集中在 22:10:46 一轮）、LAN 60/60（100%、中位 4ms）、chat 公网 0/60（530×58）、chat 二级子域 0/60（证书失败）。
 用法与聚合基线写入 `docs/runbooks/monitoring.md`。
+
+### 2026-11-05 PVE 恢复演练月度自动化（#113）
+
+`scripts/pve_restore_drill.py` 新增 `--latest-archive-for <vmid>`：从归档存储 content 中按
+`vzdump-qemu-<vmid>-<UTCstamp>` 自动选择最新 VMA 归档（`select_latest_archive` 纯函数 + 测试），
+与 `--archive` 互斥、必须二选一。新增 `infra/systemd/xeonolab-pve-restore-drill.{service,timer}` +
+`pve-restore-drill.sh`：VM111 每月 1 日 05:30 UTC 自动执行一次完整隔离演练（恢复→断网启动→guest 校验→
+销毁），JSON 证据追加 `/var/lib/devagent/logs/pve-restore-drill.jsonl`；失败令 unit failed（真实告警信号）。
+测试新增 3 项（归档选择、dry-run 自动选择、参数互斥），全量 pytest 1619 passed。安装/操作步骤写入
+`docs/runbooks/backup-drills.md` §2.6。
