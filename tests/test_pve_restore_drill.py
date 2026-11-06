@@ -32,6 +32,7 @@ class FakeClient:
                  source_config: dict | None = None, shutdown_fails: bool = False):
         self.used = {100, 101, 106}
         self.archive = ARCHIVE
+        self.archives: list[str] | None = None
         self.storage = "local-lvm"
         self.agent_answers = agent_answers
         self.task_failure = task_failure
@@ -72,7 +73,7 @@ class FakeClient:
                 {"storage": "xeonolab-backup", "content": "backup", "active": 1},
             ]
         if method == "GET" and path == "/nodes/pve/storage/xeonolab-backup/content?content=backup":
-            return [{"volid": self.archive}]
+            return [{"volid": volid} for volid in (self.archives or [self.archive])]
         if method == "GET" and path == f"/nodes/pve/storage/{self.storage}/content":
             return [{"volid": f"{self.storage}:vm-190-disk-0"}] if self.restored and not self.destroyed else []
         if path.startswith("/nodes/pve/tasks/"):
@@ -137,7 +138,7 @@ def options(**overrides):
     values = dict(node="pve", endpoint="https://pve.invalid:8006", token_file="", ca_file="",
                   insecure=True, archive=ARCHIVE, vmid=190, storage="local-lvm", source_vmid=106,
                   no_boot=False, boot=True, keep=False, execute=True, timeout=5.0, agent_timeout=5.0,
-                  shutdown_timeout=60.0)
+                  shutdown_timeout=60.0, latest_archive_for=None, archive_storage="xeonolab-backup")
     values.update(overrides)
     return type("Options", (), values)()
 
@@ -281,6 +282,45 @@ def test_failed_acpi_shutdown_falls_back_to_hard_stop():
     assert report["cleanup"]["vmid_absent"] is True
     assert report["ok"] is True
     assert client.destroyed is True
+
+
+def test_select_latest_archive_picks_newest_for_vmid():
+    volids = [
+        "xeonolab-backup:backup/vzdump-qemu-106-2026_11_04-08_17_19.vma.zst",
+        "xeonolab-backup:backup/vzdump-qemu-106-2026_11_07-19_00_00.vma.zst",
+        "xeonolab-backup:backup/vzdump-qemu-109-2026_11_03-22_16_56.vma.zst",
+        "xeonolab-backup:backup/not-a-vzdump-file.vma.zst",
+    ]
+    assert drill.select_latest_archive(volids, 106) == (
+        "xeonolab-backup:backup/vzdump-qemu-106-2026_11_07-19_00_00.vma.zst"
+    )
+    assert drill.select_latest_archive(volids, 109).endswith("vzdump-qemu-109-2026_11_03-22_16_56.vma.zst")
+    with pytest.raises(drill.SafetyRefused):
+        drill.select_latest_archive(volids, 105)
+    with pytest.raises(drill.SafetyRefused):
+        drill.select_latest_archive([], 106)
+
+
+def test_dry_run_with_latest_archive_selection():
+    client = FakeClient()
+    client.archives = [
+        "xeonolab-backup:backup/vzdump-qemu-106-2026_11_04-08_17_19.vma.zst",
+        "xeonolab-backup:backup/vzdump-qemu-106-2026_11_07-19_00_00.vma.zst",
+    ]
+    report = drill.run_drill(options(execute=False, archive="", latest_archive_for=106), client=client,
+                             sleep=no_sleep)
+    assert report["archive"].endswith("vzdump-qemu-106-2026_11_07-19_00_00.vma.zst")
+    assert report["archive_origin"] == "latest-for-vmid-106"
+    assert report["plan"] and client.restored is False
+
+
+def test_parse_args_requires_exactly_one_archive_source():
+    with pytest.raises(SystemExit):
+        drill.parse_args(["--vmid", "190"])
+    with pytest.raises(SystemExit):
+        drill.parse_args(["--vmid", "190", "--archive", ARCHIVE, "--latest-archive-for", "106"])
+    parsed = drill.parse_args(["--vmid", "190", "--latest-archive-for", "106"])
+    assert parsed.archive == "" and parsed.latest_archive_for == 106
 
 
 def test_main_prints_refusal_and_exit_code(tmp_path, monkeypatch, capsys):

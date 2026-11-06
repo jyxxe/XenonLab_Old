@@ -1,0 +1,14 @@
+[Unit]
+Description=Monthly isolated PVE VM restore drill from the newest vzdump archive (issue #113)
+Documentation=docs/runbooks/backup-drills.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=devagent
+Group=devagent
+ExecStart=/usr/local/libexec/xeonolab-pve-restore-drill
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1800

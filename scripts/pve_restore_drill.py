@@ -145,6 +145,34 @@ def validate_archive(volid: str) -> str:
         raise SafetyRefused(f"not a VMA archive volume: {volid!r}")
     return volid
 
+VZDUMP_NAME = re.compile(
+    r"^(?:[A-Za-z0-9][A-Za-z0-9._-]*):[a-z]+/"
+    r"vzdump-qemu-(?P<vmid>\d+)-(?P<stamp>\d{4}_\d{2}_\d{2}-\d{2}_\d{2}_\d{2})"
+    r"\.vma(?:\.(?:zst|gz|lzo))?$"
+)
+
+
+def select_latest_archive(volids: list[str], vmid: int) -> str:
+    """Pick the newest ``vzdump-qemu-<vmid>`` VMA archive from a content listing."""
+    matches = []
+    for volid in volids:
+        if not isinstance(volid, str):
+            continue
+        match = VZDUMP_NAME.fullmatch(volid)
+        if match and int(match.group("vmid")) == vmid:
+            matches.append((match.group("stamp"), volid))
+    if not matches:
+        raise SafetyRefused(f"no VMA archive found for vmid {vmid} on the archive storage")
+    matches.sort()
+    return validate_archive(matches[-1][1])
+
+
+def resolve_archive(client: PveClient, node: str, archive_storage: str, vmid: int) -> str:
+    """Resolve ``--latest-archive-for`` by listing the archive storage (read-only)."""
+    backups = client.get(f"/nodes/{node}/storage/{archive_storage}/content?content=backup") or []
+    volids = [entry.get("volid") for entry in backups if isinstance(entry, dict)]
+    return select_latest_archive(volids, vmid)
+
 
 def force_link_down(net0: str) -> str:
     """Return a net0 definition with ``link_down=1`` (replacing any existing value)."""
@@ -347,10 +375,18 @@ def _stop_and_destroy(client: PveClient, node: str, storage: str, vmid: int, *, 
 
 def run_drill(options: argparse.Namespace, *, client: PveClient, sleep=time.sleep) -> dict:
     """Execute (or plan) one restore drill; returns a JSON-serialisable report."""
-    archive = validate_archive(options.archive)
+    if options.archive:
+        archive = validate_archive(options.archive)
+        archive_origin = "explicit"
+    else:
+        if options.latest_archive_for is None:
+            raise SafetyRefused("either --archive or --latest-archive-for is required")
+        archive = resolve_archive(client, options.node, options.archive_storage, options.latest_archive_for)
+        archive_origin = f"latest-for-vmid-{options.latest_archive_for}"
     context = preflight(client, options.node, options.storage, options.vmid, archive, options.source_vmid)
     report: dict = {
         "archive": archive,
+        "archive_origin": archive_origin,
         "vmid": options.vmid,
         "storage": options.storage,
         "node": options.node,
@@ -427,7 +463,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="file with one 'tokenid=secret' PVE API token (mode 0600)")
     parser.add_argument("--ca-file", default="", help="CA bundle for the PVE endpoint (optional)")
     parser.add_argument("--insecure", action="store_true", help="accept the self-signed PVE certificate")
-    parser.add_argument("--archive", required=True, help="backup volume id, e.g. storage:backup/file.vma.zst")
+    parser.add_argument("--archive", default="", help="backup volume id, e.g. storage:backup/file.vma.zst")
+    parser.add_argument("--latest-archive-for", type=int, default=None,
+                        help="auto-select the newest vzdump archive of this production VMID")
+    parser.add_argument("--archive-storage", default="xeonolab-backup",
+                        help="storage holding the vzdump archives for --latest-archive-for")
     parser.add_argument("--vmid", type=int, required=True, help="scratch VMID (112..989)")
     parser.add_argument("--storage", default="local-lvm", help="target image storage (default: local-lvm)")
     parser.add_argument("--source-vmid", type=int, default=None,
@@ -441,6 +481,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--shutdown-timeout", type=float, default=60.0,
                         help="seconds to wait for ACPI shutdown before hard stop (default: 60)")
     options = parser.parse_args(argv)
+    if bool(options.archive) == (options.latest_archive_for is not None):
+        parser.error("exactly one of --archive or --latest-archive-for is required")
     options.boot = not options.no_boot
     return options
 
