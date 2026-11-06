@@ -371,5 +371,5 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 与 `--archive` 互斥、必须二选一。新增 `infra/systemd/xeonolab-pve-restore-drill.{service,timer}` +
 `pve-restore-drill.sh`：VM111 每月 1 日 05:30 UTC 自动执行一次完整隔离演练（恢复→断网启动→guest 校验→
 销毁），JSON 证据追加 `/var/lib/devagent/logs/pve-restore-drill.jsonl`；失败令 unit failed（真实告警信号）。
-测试新增 3 项（归档选择、dry-run 自动选择、参数互斥），全量 pytest 1619 passed。安装/操作步骤写入
+测试新增 3 项（归档选择、dry-run 自动选择、参数互斥），全量 pytest 1619 passed；定时器 wrapper 使用 `--compact` 产出单行 JSONL。安装/操作步骤写入
 `docs/runbooks/backup-drills.md` §2.6。

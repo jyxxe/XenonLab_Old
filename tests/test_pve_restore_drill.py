@@ -321,6 +321,8 @@ def test_parse_args_requires_exactly_one_archive_source():
         drill.parse_args(["--vmid", "190", "--archive", ARCHIVE, "--latest-archive-for", "106"])
     parsed = drill.parse_args(["--vmid", "190", "--latest-archive-for", "106"])
     assert parsed.archive == "" and parsed.latest_archive_for == 106
+    compact = drill.parse_args(["--vmid", "190", "--latest-archive-for", "106", "--compact"])
+    assert compact.compact is True and drill.parse_args(["--vmid", "190", "--archive", ARCHIVE]).compact is False
 
 
 def test_main_prints_refusal_and_exit_code(tmp_path, monkeypatch, capsys):

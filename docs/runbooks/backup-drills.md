@@ -130,7 +130,8 @@ sudo systemctl start xeonolab-pve-restore-drill.service   # 立即演练一次
 
 - 使用 `--latest-archive-for 106` 自动选择 `xeonolab-backup` 上最新的 VM106 归档（新增参数，也可 `--archive` 指定）；
   默认 scratch VMID 190、`local-lvm`，可用环境变量 `XEL_RESTORE_*` 覆盖；
-- 成功/失败 JSON 追加到 `/var/lib/devagent/logs/pve-restore-drill.jsonl`（>2 MiB 轮转 `.1`），
+- 成功/失败报告以**单行 JSON**（`--compact`）追加到 `/var/lib/devagent/logs/pve-restore-drill.jsonl`
+  （>2 MiB 轮转 `.1`），
   stderr 记录在 `pve-restore-drill.err`；**失败会让 unit 进入 failed 状态**（真实告警信号，不同于采样类 timer）；
 - 安全约束不变：scratch VMID 112–989、非生产、启动强制 `link_down=1`、成功自动销毁；若 190 被占用则安全拒绝。
 
