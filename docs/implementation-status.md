@@ -421,3 +421,10 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 不可见路径返回 404 `PATH_NOT_FOUND`（不泄露存在性）；`parent` 相对路径 422 `INVALID_PATH`。
 复用新增的 `visible_table_rows()` helper，列表/详情共用 ACL 语义。测试补充 2 项（根/嵌套/叶子计数与祖先、
 隐藏路径 404 + 路径 ACL 授权后可见 + 401/422），OpenAPI 重新导出；全量 pytest 1633 passed。
+
+### 2026-11-06 公网入口故障处置手册
+
+新增 `docs/runbooks/public-edge-incident.md`：把 #67/#126/#284 累积的判定与证据流程固化为值班手册——
+三分钟只读判定（LAN/公网/连接器）、症状分支（530 账号侧、间歇 TLS 超时=上游晚高峰丢包（含 2026-11-06
+逐小时实测）、502 源站、连接器故障/回滚、证书/域名）、证据采集命令、升级与边界、事后记录；
+`monitoring.md` 增加交叉引用。纯文档，无代码/契约变化。
