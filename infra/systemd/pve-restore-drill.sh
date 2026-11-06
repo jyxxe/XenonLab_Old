@@ -30,7 +30,7 @@ fi
     --vmid "${XEL_RESTORE_SCRATCH_VMID:-190}" \
     --storage "${XEL_RESTORE_STORAGE:-local-lvm}" \
     --source-vmid "${XEL_RESTORE_SOURCE_VMID:-106}" \
-    --token-file "$token_file" --insecure --execute \
+    --token-file "$token_file" --insecure --compact --execute \
     >>"$log" 2>>"$log_dir/pve-restore-drill.err"
 status=$?
 echo "pve-restore-drill exit=$status at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2

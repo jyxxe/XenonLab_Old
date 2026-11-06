@@ -480,6 +480,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="guest-agent boot timeout in seconds")
     parser.add_argument("--shutdown-timeout", type=float, default=60.0,
                         help="seconds to wait for ACPI shutdown before hard stop (default: 60)")
+    parser.add_argument("--compact", action="store_true",
+                        help="print the report as one-line JSON (JSONL-friendly; used by the timer wrapper)")
     options = parser.parse_args(argv)
     if bool(options.archive) == (options.latest_archive_for is not None):
         parser.error("exactly one of --archive or --latest-archive-for is required")
@@ -499,7 +501,10 @@ def main(argv: list[str] | None = None) -> int:
     except DrillError as error:
         print(json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False))
         return 1
-    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    if options.compact:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     if not options.execute:
         return 0
     return 0 if report.get("ok") else 1
