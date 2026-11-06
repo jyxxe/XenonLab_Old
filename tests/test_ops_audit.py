@@ -239,3 +239,49 @@ def test_remote_commands_ignore_in_progress_temp_directories():
     from scripts import backup_verify
     assert "-name '[!.]*'" in backup_verify.REMOTE_COMMAND
     assert "-name '[!.]*'" in ops_audit.REMOTE_COMMAND
+
+
+CLOUDFLARED_SAMPLE = """###hostname
+web-server
+###df
+/dev/sda1 39748564 7340032 30441232 20% /
+###failed
+###timers
+###release
+/opt/xeonolab/releases/8d8a3667f994d69ed6c7abfd288af90fedee26d2
+4
+###backup
+none
+###monitoring
+###cloudflared
+version 2026.10.7
+active active
+restarts 0
+drops 0
+ha 4
+###errors
+"""
+
+
+def test_parse_host_output_extracts_cloudflared_state():
+    report = ops_audit.parse_host_output(CLOUDFLARED_SAMPLE)
+    assert report["cloudflared"] == {
+        "present": True, "version": "2026.10.7", "active": "active",
+        "restarts": 0, "drops_since_start": 0, "ha_connections": 4,
+    }
+    absent = ops_audit.parse_host_output("###hostname\nh\n###cloudflared\nabsent\n")
+    assert absent["cloudflared"]["present"] is False
+
+
+def test_evaluate_cloudflared_healthy_and_findings():
+    healthy = {"present": True, "active": "active", "ha_connections": 4, "drops_since_start": 0}
+    assert ops_audit.evaluate_cloudflared(healthy, "web-server") == []
+    assert ops_audit.evaluate_cloudflared({"present": False}, "web-server") == []
+    down = {"present": True, "active": "failed", "ha_connections": 0, "drops_since_start": 30}
+    joined = "\n".join(ops_audit.evaluate_cloudflared(down, "web-server"))
+    assert "cloudflared is failed" in joined
+    assert "no active HA connections" in joined
+    assert "lost the edge 30 times since start" in joined
+    # Explicitly disabling the threshold keeps only the other checks.
+    only_down = ops_audit.evaluate_cloudflared(down, "web-server", max_drops_24h=-1)
+    assert not any("lost the edge" in item for item in only_down)

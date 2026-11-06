@@ -48,6 +48,7 @@ echo '###backupdomains'; for d in xelibrary forgejo keycloak desktop data; do p=
 echo '###backupunits'; for u in xeonolab-xelibrary-backup.timer xeonolab-forgejo-backup.timer xeonolab-postgres-backup.timer xeonolab-desktop-backup.timer xeonolab-data-backup.timer xeonolab-xelibrary-backup.service xeonolab-forgejo-backup.service xeonolab-postgres-backup.service xeonolab-desktop-backup.service xeonolab-data-backup.service; do load=$(systemctl show -p LoadState --value "$u" 2>/dev/null); [ "$load" = "not-found" ] && continue; echo "$u $(systemctl is-active "$u" 2>/dev/null || true) $(systemctl is-enabled "$u" 2>/dev/null || true) $(systemctl show -p Result --value "$u" 2>/dev/null)"; done
 echo '###monitoring'; for u in xeonolab-public-probe.timer xeonolab-pve-restore-drill.timer; do load=$(systemctl show -p LoadState --value "$u" 2>/dev/null); [ "$load" = "not-found" ] && continue; echo "$u $(systemctl is-active "$u" 2>/dev/null || true) $(systemctl is-enabled "$u" 2>/dev/null || true) $(systemctl show -p Result --value "$u" 2>/dev/null)"; done
 for f in /var/lib/devagent/logs/public-probe.jsonl /var/lib/devagent/logs/pve-restore-drill.jsonl; do sudo -n test -f "$f" || continue; echo "$f|$(sudo -n stat -c %Y "$f" 2>/dev/null)|$(sudo -n sh -c "wc -l < \"$f\"" 2>/dev/null)"; done
+echo '###cloudflared'; if systemctl show -p LoadState --value cloudflared.service 2>/dev/null | grep -q not-found; then echo absent; else echo "version $(/usr/bin/cloudflared --version 2>/dev/null | head -1 | cut -d' ' -f3)"; echo "active $(systemctl is-active cloudflared 2>/dev/null || true)"; echo "restarts $(systemctl show -p NRestarts --value cloudflared 2>/dev/null || echo 0)"; start=$(systemctl show -p ActiveEnterTimestamp --value cloudflared.service 2>/dev/null); echo "drops $(sudo -n journalctl -u cloudflared --since \"$start\" --no-pager 2>/dev/null | grep -c 'Lost connection with the edge')"; echo "ha $(sudo -n curl -s --max-time 5 http://127.0.0.1:20241/metrics 2>/dev/null | grep '^cloudflared_tunnel_ha_connections ' | tail -1 | awk '{print $2}')"; fi
 echo '###errors'; sudo -n journalctl --since '24 hours ago' -p err --no-pager -o cat 2>/dev/null | sort | uniq -c | sort -rn | head -6
 """
 
@@ -133,6 +134,27 @@ def parse_host_output(text: str) -> dict:
                 "result": parts[3] if len(parts) > 3 else "",
             })
     report["monitoring"] = {"units": monitoring_units, "logs": monitoring_logs}
+    cloudflared: dict = {"present": False}
+    for line in sections.get("cloudflared", []):
+        stripped = line.strip()
+        if stripped == "absent":
+            continue
+        if " " not in stripped:
+            continue
+        key, value = stripped.split(" ", 1)
+        if key == "version":
+            cloudflared["version"] = value
+        elif key == "active":
+            cloudflared["active"] = value
+        elif key == "restarts":
+            cloudflared["restarts"] = int(value) if value.isdigit() else 0
+        elif key == "drops":
+            cloudflared["drops_since_start"] = int(value) if value.isdigit() else 0
+        elif key == "ha":
+            cloudflared["ha_connections"] = int(value) if value.isdigit() else 0
+        if key in ("version", "active", "restarts", "drops", "ha"):
+            cloudflared["present"] = True
+    report["cloudflared"] = cloudflared
     report["error_lines"] = [line.strip() for line in sections.get("errors", []) if line.strip()]
     return report
 
@@ -239,6 +261,27 @@ def certificate_days_left(host: str, port: int, ca_file: str | None, timeout: fl
     return (expires - datetime.datetime.now(datetime.UTC).replace(tzinfo=None)).days
 
 
+def evaluate_cloudflared(state: dict, name: str, *, max_drops_24h: int = 12) -> list[str]:
+    """Flag a down or flapping public tunnel connector (issue #67).
+
+    Drop counting starts at the current connector's start time so a previous
+    version's incidents cannot mask or inflate the post-upgrade baseline.
+    """
+    if not state.get("present"):
+        return []
+    findings: list[str] = []
+    if state.get("active") != "active":
+        findings.append(f"{name}: cloudflared is {state.get('active') or 'unknown'}")
+    if int(state.get("ha_connections") or 0) < 1:
+        findings.append(f"{name}: cloudflared has no active HA connections")
+    drops = int(state.get("drops_since_start") or 0)
+    if max_drops_24h >= 0 and drops > max_drops_24h:
+        findings.append(
+            f"{name}: cloudflared lost the edge {drops} times since start (> {max_drops_24h}; issue #67)"
+        )
+    return findings
+
+
 MONITORING_TIMERS = ("xeonolab-public-probe.timer", "xeonolab-pve-restore-drill.timer")
 PROBE_LOG = "/var/lib/devagent/logs/public-probe.jsonl"
 DRILL_LOG = "/var/lib/devagent/logs/pve-restore-drill.jsonl"
@@ -285,7 +328,8 @@ def evaluate(reports: dict[str, dict], certificates: dict[str, int | None], *,
              release_tolerance: int = 2, max_backup_age_hours: float = 36.0,
              allowed_failed: tuple[str, ...] = DEFAULT_ALLOWED_FAILED,
              min_cert_days: int = 0, max_probe_age_hours: float = 2.0,
-             max_restore_drill_age_days: float = 45.0) -> list[str]:
+             max_restore_drill_age_days: float = 45.0,
+             max_cloudflared_drops: int = 12) -> list[str]:
     """Return human-readable findings; an empty list means the fleet looks healthy."""
     findings: list[str] = []
     for host, report in sorted(reports.items()):
@@ -316,6 +360,8 @@ def evaluate(reports: dict[str, dict], certificates: dict[str, int | None], *,
                 findings.append(
                     f"{name}: {domain} backup is {entry['age_hours']:.0f}h old (> {max_backup_age_hours:.0f}h)"
                 )
+        findings.extend(evaluate_cloudflared(report.get("cloudflared") or {}, name,
+                                              max_drops_24h=max_cloudflared_drops))
         if name == "dev-agent":
             findings.extend(evaluate_monitoring(
                 report.get("monitoring") or {}, name,
@@ -358,6 +404,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="maximum age of the public-probe log on dev-agent (default: 2)")
     parser.add_argument("--max-restore-drill-age-days", type=float, default=45.0,
                         help="maximum age of the restore-drill log on dev-agent (default: 45)")
+    parser.add_argument("--max-cloudflared-drops", type=int, default=12,
+                        help="maximum cloudflared edge drops since the current start before a finding (default: 12)")
     parser.add_argument("--allow-failed", action="append", default=None,
                         help="failed unit name to tolerate (repeatable; default openipmi.service)")
     parser.add_argument("--pve-token-file", default="",
@@ -418,7 +466,8 @@ def main(argv: list[str] | None = None) -> int:
                         max_backup_age_hours=args.max_backup_age_hours,
                         allowed_failed=allowed_failed,
                         max_probe_age_hours=args.max_probe_age_hours,
-                        max_restore_drill_age_days=args.max_restore_drill_age_days)
+                        max_restore_drill_age_days=args.max_restore_drill_age_days,
+                        max_cloudflared_drops=args.max_cloudflared_drops)
     findings.extend(pve_findings)
     if args.json:
         print(json.dumps({"reports": reports, "certificates": certificates,
