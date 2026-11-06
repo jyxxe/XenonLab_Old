@@ -1151,6 +1151,50 @@ def create_app(settings=None):
             request, visible[:limit], next_cursor=visible[limit - 1]["id"] if len(visible) > limit else None
         )
 
+    @app.get("/api/v1/paths")
+    def list_paths(
+        request: Request, parent: str = "/", limit: int = 100, cursor: str = "",
+        actor=Depends(scope("xelibrary:read")),
+    ):
+        """List visible child paths under ``parent`` (derived from visible tables).
+
+        Paths are aggregated from the tables the caller may read, so a path node
+        never reveals tables that are hidden by table/path ACLs. Read-only: path
+        creation/move still happens through table create/move.
+        """
+        if not 1 <= limit <= 1000:
+            raise APIError(422, "INVALID_LIMIT", "limit outside range")
+        parent_path = clean_path(parent)
+        prefix = "/" if parent_path == "/" else parent_path + "/"
+        with connect(catalogue) as db:
+            tables = [dict(row) for row in db.execute("SELECT id,path,name,owner FROM tables")]
+            visible = [table for table in tables if allowed(actor, table, "read", db=db)]
+        children: dict[str, dict] = {}
+        for table in visible:
+            path = table["path"] or "/"
+            if not path.startswith(prefix):
+                continue
+            rest = path[len(prefix):]
+            if not rest:
+                continue
+            segment = rest.split("/", 1)[0]
+            child_path = prefix + segment
+            node = children.setdefault(child_path, {
+                "path": child_path,
+                "name": segment,
+                "parent": parent_path,
+                "table_count": 0,
+                "has_children": False,
+            })
+            node["table_count"] += 1
+            if "/" in rest:
+                node["has_children"] = True
+        items = sorted(children.values(), key=lambda item: item["path"])
+        if cursor:
+            items = [item for item in items if item["path"] > cursor]
+        page = items[:limit]
+        return response(request, page, next_cursor=page[-1]["path"] if len(items) > limit else None)
+
     @app.get("/api/v1/tables/{tid}")
     @app.get("/api/v1/tables/{tid}/schema")
     def get_table(tid: str, request: Request, actor=Depends(scope("xelibrary:read"))):
