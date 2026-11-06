@@ -42,7 +42,7 @@ echo '###backupverify'
 for d in xelibrary forgejo keycloak desktop data; do
   p=/var/backups/xeonolab/$d
   sudo -n test -d "$p" || continue
-  latest=$(sudo -n find "$p" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+  latest=$(sudo -n find "$p" -maxdepth 1 -mindepth 1 -type d -name '[!.]*' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
   if [ -z "$latest" ]; then
     echo "$d||fail: no snapshot directory"
     continue

@@ -86,6 +86,13 @@ sudo -n systemctl list-timers xeonolab-data-backup.timer --no-pager
 预期：`snapshot ok: ... (attempt 1, N bytes, E entries, skipped S special, pruned 0)`；
 verify 输出字节数/entry 数；timer 下次 04:45 UTC 左右。
 
+## 运行中快照目录
+
+备份进行中会在域目录下创建 `.data-dump-*` 临时目录（写完后原子改名为 `data-<UTCstamp>`）。
+用 `find` 选“最新快照”时必须排除隐藏目录（`-name '[!.]*'`），否则会把半成品当快照而误报校验失败；
+`scripts/backup_verify.py` 与 `scripts/ops_audit.py` 均已按此过滤。2026-11-06 夜间备份窗口曾出现该误判，
+已修复并加契约测试。
+
 ## 恢复演练（隔离目录，不覆盖生产）
 
 ```sh

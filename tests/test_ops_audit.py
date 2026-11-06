@@ -231,3 +231,11 @@ def test_evaluate_only_checks_monitoring_on_dev_agent_host():
     report = ops_audit.parse_host_output(SAMPLE)  # hostname web-server, no monitoring section
     findings = ops_audit.evaluate({"192.168.0.101": report}, {}, allowed_failed=("openipmi.service",))
     assert not any("monitoring" in item or "probe log" in item for item in findings)
+
+
+def test_remote_commands_ignore_in_progress_temp_directories():
+    # A running data backup leaves a `.data-dump-*` temp directory in the domain
+    # directory; it must never be selected as the "latest snapshot".
+    from scripts import backup_verify
+    assert "-name '[!.]*'" in backup_verify.REMOTE_COMMAND
+    assert "-name '[!.]*'" in ops_audit.REMOTE_COMMAND

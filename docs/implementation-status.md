@@ -381,3 +381,10 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 `public-probe.jsonl`（默认 >2h 报 finding）与 `pve-restore-drill.jsonl`（默认 >45 天报 finding）存在且新鲜；
 新增 `--max-probe-age-hours` / `--max-restore-drill-age-days` 阈值参数。4 项新测试（解析、健康/过旧、
 缺失/未启用、仅 dev-agent 生效），全量 pytest 1623 passed。runbook `ops-audit.md` 增加说明与处置表。
+
+### 2026-11-06 备份窗口临时目录误判修复（#390）
+
+2026-11-06 夜间数据盘备份窗口复验时发现：备份进行中生成的 `.data-dump-*` 临时目录会被“取最新快照”的
+`find` 选中，导致 `backup_verify`/`ops_audit` 把半成品当快照并误报 manifest 缺失。两处远程命令改为
+`find ... -type d -name '[!.]*'` 排除隐藏目录，并加契约测试断言；`docs/runbooks/data-disk-backup.md`
+补充说明。全量 pytest 1624 passed。
