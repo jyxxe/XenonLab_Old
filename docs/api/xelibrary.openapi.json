@@ -212,6 +212,44 @@
         }
       }
     },
+    "/api/v1/paths/{path}": {
+      "get": {
+        "summary": "Get Path",
+        "description": "Visible path node detail: subtree counts, direct children and direct tables.\n\nExistence is only revealed through the caller's readable tables, so a\nhidden path returns 404 instead of leaking tables it cannot read.",
+        "operationId": "get_path_api_v1_paths__path__get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/schema": {
       "get": {
         "summary": "Get Table",

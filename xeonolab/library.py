@@ -1151,6 +1151,14 @@ def create_app(settings=None):
             request, visible[:limit], next_cursor=visible[limit - 1]["id"] if len(visible) > limit else None
         )
 
+    def visible_table_rows(actor, db):
+        rows = []
+        for row in db.execute("SELECT id,path,name,owner FROM tables"):
+            table = dict(row)
+            if allowed(actor, table, "read", db=db):
+                rows.append(table)
+        return rows
+
     @app.get("/api/v1/paths")
     def list_paths(
         request: Request, parent: str = "/", limit: int = 100, cursor: str = "",
@@ -1167,8 +1175,7 @@ def create_app(settings=None):
         parent_path = clean_path(parent)
         prefix = "/" if parent_path == "/" else parent_path + "/"
         with connect(catalogue) as db:
-            tables = [dict(row) for row in db.execute("SELECT id,path,name,owner FROM tables")]
-            visible = [table for table in tables if allowed(actor, table, "read", db=db)]
+            visible = visible_table_rows(actor, db)
         children: dict[str, dict] = {}
         for table in visible:
             path = table["path"] or "/"
@@ -1194,6 +1201,67 @@ def create_app(settings=None):
             items = [item for item in items if item["path"] > cursor]
         page = items[:limit]
         return response(request, page, next_cursor=page[-1]["path"] if len(items) > limit else None)
+
+    @app.get("/api/v1/paths/{path:path}")
+    def get_path(path: str, request: Request, actor=Depends(scope("xelibrary:read"))):
+        """Visible path node detail: subtree counts, direct children and direct tables.
+
+        Existence is only revealed through the caller's readable tables, so a
+        hidden path returns 404 instead of leaking tables it cannot read.
+        """
+        node_path = clean_path(path)
+        with connect(catalogue) as db:
+            visible = visible_table_rows(actor, db)
+        prefix = node_path if node_path == "/" else node_path + "/"
+        subtree = [
+            table for table in visible
+            if table["path"] == node_path or table["path"].startswith(prefix)
+        ]
+        if not subtree:
+            raise APIError(404, "PATH_NOT_FOUND", "path not found")
+        children: dict[str, dict] = {}
+        for table in subtree:
+            table_path = table["path"]
+            if table_path == node_path or not table_path.startswith(prefix):
+                continue
+            rest = table_path[len(prefix):]
+            segment = rest.split("/", 1)[0]
+            child_path = prefix + segment
+            node = children.setdefault(child_path, {
+                "path": child_path,
+                "name": segment,
+                "parent": node_path,
+                "table_count": 0,
+                "has_children": False,
+            })
+            node["table_count"] += 1
+            if "/" in rest:
+                node["has_children"] = True
+        direct_tables = sorted(
+            ({"id": table["id"], "name": table["name"]} for table in subtree if table["path"] == node_path),
+            key=lambda item: item["name"],
+        )
+        if node_path == "/":
+            name, parent, ancestors = "/", None, []
+        else:
+            parts = node_path.strip("/").split("/")
+            name = parts[-1]
+            parent = "/" if len(parts) == 1 else "/" + "/".join(parts[:-1])
+            ancestors, accumulated = ["/"], ""
+            for part in parts[:-1]:
+                accumulated += "/" + part
+                ancestors.append(accumulated)
+        data = {
+            "path": node_path,
+            "name": name,
+            "parent": parent,
+            "ancestors": ancestors,
+            "table_count": len(subtree),
+            "has_children": bool(children),
+            "children": sorted(children.values(), key=lambda item: item["path"]),
+            "tables": direct_tables,
+        }
+        return response(request, data)
 
     @app.get("/api/v1/tables/{tid}")
     @app.get("/api/v1/tables/{tid}/schema")

@@ -81,3 +81,49 @@ def test_path_listing_openapi_documents_route(library):
     assert "/api/v1/paths" in schema["paths"]
     operation = schema["paths"]["/api/v1/paths"]["get"]
     assert "parent" in {parameter["name"] for parameter in operation.get("parameters", [])}
+
+
+def test_path_detail_root_and_nested(library):
+    create_table(library, "/数学/分析", "一致收敛")
+    create_table(library, "/数学/代数", "群论")
+    create_table(library, "/物理", "力学")
+
+    root = library.get("/api/v1/paths/%2F", headers=auth("alice"))
+    assert root.status_code == 200, root.text
+    data = root.json()["data"]
+    assert data["path"] == "/" and data["parent"] is None and data["ancestors"] == []
+    assert data["table_count"] == 3 and data["has_children"] is True
+    assert [child["path"] for child in data["children"]] == ["/数学", "/物理"]
+    assert data["tables"] == []
+
+    nested = library.get("/api/v1/paths/%2F%E6%95%B0%E5%AD%A6", headers=auth("alice"))
+    assert nested.status_code == 200, nested.text
+    data = nested.json()["data"]
+    assert data["path"] == "/数学" and data["parent"] == "/" and data["ancestors"] == ["/"]
+    assert data["table_count"] == 2
+    assert [child["path"] for child in data["children"]] == ["/数学/代数", "/数学/分析"]
+    assert data["tables"] == []
+
+    leaf = library.get("/api/v1/paths/%2F%E6%95%B0%E5%AD%A6%2F%E5%88%86%E6%9E%90", headers=auth("alice"))
+    assert leaf.status_code == 200, leaf.text
+    data = leaf.json()["data"]
+    assert data["table_count"] == 1 and data["children"] == []
+    assert data["ancestors"] == ["/", "/数学"]
+    assert [table["name"] for table in data["tables"]] == ["一致收敛"]
+
+
+def test_path_detail_hides_invisible_paths_and_requires_read_scope(library):
+    create_table(library, "/数学/分析", "一致收敛")
+    hidden = library.get("/api/v1/paths/%2F%E6%95%B0%E5%AD%A6", headers=auth("bob"))
+    assert hidden.status_code == 404, hidden.text
+    assert hidden.json()["error"]["code"] == "PATH_NOT_FOUND"
+
+    grant = put_acl(library, "path", "/数学", {"bob": ["read"]})
+    assert grant.status_code == 200, grant.text
+    visible = library.get("/api/v1/paths/%2F%E6%95%B0%E5%AD%A6", headers=auth("bob"))
+    assert visible.status_code == 200, visible.text
+    assert visible.json()["data"]["table_count"] == 1
+
+    assert library.get("/api/v1/paths/%2F").status_code == 401
+    invalid = library.get("/api/v1/paths/relative", headers=auth("alice"))
+    assert invalid.status_code == 422
