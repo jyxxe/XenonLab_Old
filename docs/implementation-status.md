@@ -388,3 +388,11 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 `find` 选中，导致 `backup_verify`/`ops_audit` 把半成品当快照并误报 manifest 缺失。两处远程命令改为
 `find ... -type d -name '[!.]*'` 排除隐藏目录，并加契约测试断言；`docs/runbooks/data-disk-backup.md`
 补充说明。全量 pytest 1624 passed。
+
+### 2026-11-06 cloudflared 连接器受控升级
+
+VM101 `cloudflared` 由 `2026.9.3` 升级到 `2026.10.7`（官方 release，SHA256 `1f99fb51…`），用于观察公网
+`Lost connection with the edge`（升级前 24h 内 24 次）与 TLS 握手超时是否改善。旧二进制备份于
+`/var/backups/cloudflared/cloudflared-2026.9.3`（SHA256 `77e26d8d…`），回滚命令与观察项写入
+`docs/runbooks/monitoring.md`。升级后 service active、HA 连接 4、precheck HTTP/2 通过；公网 probe 6/6 200、
+LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志对比失败率。

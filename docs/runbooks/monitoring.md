@@ -101,6 +101,26 @@ precheck 输出 **`UDP Connectivity ... FAIL` / `Allow outbound QUIC traffic on 
 注意：诊断会短暂增加 HA 连接（不影响现有 service），但不要用临时连接器替代正式 unit；任何 unit/token 变更
 都应走维护窗口并准备回滚（`systemctl restart cloudflared.service`）。
 
+### 2026-11-06 连接器升级（2026.9.3 → 2026.10.7）
+
+因 24h 内观测到 24 次 `Lost connection with the edge` 与公网间歇性 TLS 握手超时，在低峰期对 VM101
+`cloudflared` 做了受控升级：
+
+- 安装前备份旧二进制：`/var/backups/cloudflared/cloudflared-2026.9.3`（SHA256 `77e26d8d…`，0700 目录）；
+- 新二进制来自官方 GitHub release（40,274,445 bytes，SHA256 `1f99fb51…`），`cloudflared --version`
+  为 `2026.10.7 (built 2026-10-30)`；
+- 升级后：service active、`ha_connections=4`、precheck `TCP/HTTP2 pass`、`Cloudflare API reachable`、
+  `suggested_protocol=http2`；公网 probe 6/6 200（中位 859ms）、LAN 6/6（4ms）；
+- **回滚**（如需）：
+  ```sh
+  sudo install -m 755 /var/backups/cloudflared/cloudflared-2026.9.3 /usr/bin/cloudflared
+  sudo systemctl restart cloudflared.service
+  ```
+- 观察项：未来 24–48h 的 `Lost connection with the edge` 次数与 `public-probe` 失败轮次
+  （`scripts/public_probe_report.py --since-hours 48`）对比升级前（24 次/24h、约 4/6 成功窗口）。
+
+
+
 ### 定时采样（VM111，10 分钟窗口）
 
 `infra/systemd/xeonolab-public-probe.{service,timer}` + `/usr/local/libexec/xeonolab-public-probe`
