@@ -159,6 +159,11 @@ uv run python scripts/public_probe_report.py --json --fail-on-errors   # 机读/
 22:10:46 一轮；LAN 桌面 **60/60 (100%)、中位 4ms**；`chat.jyxxe.com` 0/60（530×58）；
 `chat.xenon.jyxxe.com` 0/60（全部证书握手失败）——再次指向公网边缘/链路而非源站。
 
+## 故障处置
+
+公网入口出现 530 / TLS 超时 / 502 / 证书错误时，先按 `public-edge-incident.md` 的三分钟判定区分
+「LAN vs 公网」「连接器 vs 上游/账号侧」，再决定是否重启/回滚；不要直接把账号侧问题当隧道故障处理。
+
 ## 安全边界与依赖
 
 - `/metrics` 保持现有访问边界：仅监听服务节点端口，由防火墙限制到 Prometheus 主机；
