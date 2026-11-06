@@ -413,3 +413,11 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 路径创建/移动仍沿用表的 create/move（不新增写接口）。新增 `tests/test_paths_listing.py` 5 项（树与计数、
 按表可见性过滤+路径 ACL 授权、分页/校验、401、OpenAPI 路由），OpenAPI 已重新导出；全量 pytest 1631 passed。
 这补齐 #5/#6 中“路径浏览”的最小可用 API，但完整路径 CRUD/rename 级联仍按原 Issue 保持 open。
+
+### 2026-11-06 路径详情只读增量（#6）
+
+在 `GET /api/v1/paths` 之后补 `GET /api/v1/paths/{path}`（`xelibrary:read`）：返回可见路径节点详情
+`{path,name,parent,ancestors,table_count,has_children,children,tables}`——借由调用者可读的表聚合，
+不可见路径返回 404 `PATH_NOT_FOUND`（不泄露存在性）；`parent` 相对路径 422 `INVALID_PATH`。
+复用新增的 `visible_table_rows()` helper，列表/详情共用 ACL 语义。测试补充 2 项（根/嵌套/叶子计数与祖先、
+隐藏路径 404 + 路径 ACL 授权后可见 + 401/422），OpenAPI 重新导出；全量 pytest 1633 passed。
