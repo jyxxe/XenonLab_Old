@@ -153,6 +153,65 @@
         }
       }
     },
+    "/api/v1/paths": {
+      "get": {
+        "summary": "List Paths",
+        "description": "List visible child paths under ``parent`` (derived from visible tables).\n\nPaths are aggregated from the tables the caller may read, so a path node\nnever reveals tables that are hidden by table/path ACLs. Read-only: path\ncreation/move still happens through table create/move.",
+        "operationId": "list_paths_api_v1_paths_get",
+        "parameters": [
+          {
+            "name": "parent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "/",
+              "title": "Parent"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tables/{tid}/schema": {
       "get": {
         "summary": "Get Table",

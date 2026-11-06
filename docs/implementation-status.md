@@ -403,3 +403,13 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 重启次数、**当前进程启动以来**的边缘掉线次数与 HA 连接数；service 非 active、HA=0 或掉线超过
 `--max-cloudflared-drops`（默认 12）报 finding。掉线窗口以当前进程启动时间为起点，避免升级前的历史事件
 污染新基线。2 项新测试（解析、健康/失败/阈值关闭），全量 pytest 1626 passed。`ops-audit.md` 增加说明与处置行。
+
+### 2026-11-06 路径树只读列表增量（#5/#6）
+
+此前 `opencode/plan-paths-api` 的路径 API 增量从未合入发布分支（发布分支无 `/api/v1/paths`）。本轮交付
+**只读**增量：`GET /api/v1/paths?parent=/&limit=&cursor=`（`xelibrary:read`）从调用者**可读的表**聚合出
+子路径节点（`path/name/parent/table_count/has_children`），因此不会泄露被表/路径 ACL 隐藏的表；支持游标分页，
+`parent` 需为绝对路径（422 `INVALID_PATH`）、`limit` 1–1000（422 `INVALID_LIMIT`）。
+路径创建/移动仍沿用表的 create/move（不新增写接口）。新增 `tests/test_paths_listing.py` 5 项（树与计数、
+按表可见性过滤+路径 ACL 授权、分页/校验、401、OpenAPI 路由），OpenAPI 已重新导出；全量 pytest 1631 passed。
+这补齐 #5/#6 中“路径浏览”的最小可用 API，但完整路径 CRUD/rename 级联仍按原 Issue 保持 open。
