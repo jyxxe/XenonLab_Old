@@ -396,3 +396,10 @@ VM101 `cloudflared` 由 `2026.9.3` 升级到 `2026.10.7`（官方 release，SHA2
 `/var/backups/cloudflared/cloudflared-2026.9.3`（SHA256 `77e26d8d…`），回滚命令与观察项写入
 `docs/runbooks/monitoring.md`。升级后 service active、HA 连接 4、precheck HTTP/2 通过；公网 probe 6/6 200、
 LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志对比失败率。
+
+### 2026-11-06 ops_audit 公网隧道健康检查（#67）
+
+`scripts/ops_audit.py` 新增 `###cloudflared` 采集与 `evaluate_cloudflared`：报告云隧道连接器版本、active、
+重启次数、**当前进程启动以来**的边缘掉线次数与 HA 连接数；service 非 active、HA=0 或掉线超过
+`--max-cloudflared-drops`（默认 12）报 finding。掉线窗口以当前进程启动时间为起点，避免升级前的历史事件
+污染新基线。2 项新测试（解析、健康/失败/阈值关闭），全量 pytest 1626 passed。`ops-audit.md` 增加说明与处置行。

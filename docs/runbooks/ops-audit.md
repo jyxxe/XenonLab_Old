@@ -10,6 +10,9 @@
 - 上述备份域的 systemd timer/service 状态（timer 未 active、service 上次 run failed 报 finding）；
 - 24h `journalctl -p err` 的 top 来源（帮助识别 agetty 之类噪声：issue #391）；
 - 指定 TLS 端点的证书剩余天数（默认只报告已过期；Caddy 内部证书为短周期（12h）自动轮换，0 天通常正常，需要提前预警时用 `--min-cert-days 7`）；
+- 公网隧道健康（运行 `cloudflared` 的主机，如 VM101）：报告版本、active、重启次数、
+  **当前进程启动以来**的 `Lost connection with the edge` 次数与 `ha_connections`；service 非 active、
+  HA 连接为 0、或启动以来掉线超过 `--max-cloudflared-drops`（默认 12）都报 finding（#67）。
 - 维护主机的监控自检（`dev-agent` 主机）：`xeonolab-public-probe.timer` 与
   `xeonolab-pve-restore-drill.timer` 必须 active+enabled；`public-probe.jsonl` 最新写入超过
   `--max-probe-age-hours`（默认 2h）或缺失、`pve-restore-drill.jsonl` 超过
@@ -62,6 +65,7 @@ uv run python scripts/ops_audit.py \
 | 完全没有任何备份域 | 该主机可能不是数据承载节点；若应承载备份则回到 #390 的 runbook 安装对应 timer |
 | PVE VM 备份 finding（disabled/无归档/过旧） | 查 PVE Web UI → Datacenter → Backup 与 `/var/log/vzdump`；任务定义见 `backup-drills.md` 的 VM 级章节 |
 | 监控 timer 缺失/未启用，或 public-probe / restore-drill 日志过旧 | 按 `monitoring.md` 重新安装/启用对应 timer；检查 `systemctl status` 与 `journalctl`，确认 VM111 发布树包含对应脚本与 wrapper |
+| cloudflared 非 active/HA=0/掉线超阈值 | 查 `journalctl -u cloudflared` 与 `curl 127.0.0.1:20241/metrics`；按 `monitoring.md` 的公网隧道诊断与 2026-11-06 升级/回滚步骤处理（旧二进制 `/var/backups/cloudflared/`） |
 | err 日志 top 源为 agetty | 已知噪声（#391），不作为故障；关注其余来源 |
 | 证书已过期 | Caddy 内部证书为短周期自动轮换；若过期或轮换失败，查 Caddy 日志与系统时间 |
 
