@@ -10,6 +10,10 @@
 - 上述备份域的 systemd timer/service 状态（timer 未 active、service 上次 run failed 报 finding）；
 - 24h `journalctl -p err` 的 top 来源（帮助识别 agetty 之类噪声：issue #391）；
 - 指定 TLS 端点的证书剩余天数（默认只报告已过期；Caddy 内部证书为短周期（12h）自动轮换，0 天通常正常，需要提前预警时用 `--min-cert-days 7`）；
+- 维护主机的监控自检（`dev-agent` 主机）：`xeonolab-public-probe.timer` 与
+  `xeonolab-pve-restore-drill.timer` 必须 active+enabled；`public-probe.jsonl` 最新写入超过
+  `--max-probe-age-hours`（默认 2h）或缺失、`pve-restore-drill.jsonl` 超过
+  `--max-restore-drill-age-days`（默认 45 天）或缺失都会报 finding（防止监控/恢复演练悄悄停摆）。
 - （可选）PVE 的 VM 级 vzdump 巡检：传入 `--pve-token-file` 时，只读查询 `GET /api2/json/cluster/backup` 与备份存储内容，报告任务被禁用、某 VM 无归档、最新归档超过 `--max-vm-backup-age-hours`（默认 192h）。token 只放 HTTP 头、不会写入输出；自签证书需显式 `--pve-insecure` 或 `--pve-ca-file`。
 
   运维循环可以把 PVE API token（`tokenid=secret` 一行）放在 DevAgent 主机的私密文件里，避免每轮重新处理密钥：
@@ -57,6 +61,7 @@ uv run python scripts/ops_audit.py \
 | 某个备份域过旧/无快照，或 timer 未 active / service 上次 failed | 查 `journalctl -u xeonolab-<domain>-backup.service -n 50`；按对应 runbook（xelibrary/forgejo/keycloak/desktop backup-restore、data-disk-backup）修复后手动 `systemctl start` 一次；这是 #390 的备份年龄/失败巡检，不含外部推送告警 |
 | 完全没有任何备份域 | 该主机可能不是数据承载节点；若应承载备份则回到 #390 的 runbook 安装对应 timer |
 | PVE VM 备份 finding（disabled/无归档/过旧） | 查 PVE Web UI → Datacenter → Backup 与 `/var/log/vzdump`；任务定义见 `backup-drills.md` 的 VM 级章节 |
+| 监控 timer 缺失/未启用，或 public-probe / restore-drill 日志过旧 | 按 `monitoring.md` 重新安装/启用对应 timer；检查 `systemctl status` 与 `journalctl`，确认 VM111 发布树包含对应脚本与 wrapper |
 | err 日志 top 源为 agetty | 已知噪声（#391），不作为故障；关注其余来源 |
 | 证书已过期 | Caddy 内部证书为短周期自动轮换；若过期或轮换失败，查 Caddy 日志与系统时间 |
 

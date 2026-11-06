@@ -171,3 +171,63 @@ def test_evaluate_pve_backups_flags_empty_disabled_missing_and_stale():
     )
     assert any("VM101 newest archive is" in line for line in stale)
     assert not any("VM109 newest archive is" in line for line in stale)
+
+MONITORING_SAMPLE = """###hostname
+dev-agent
+###df
+/dev/sda1 39748564 7340032 30441232 20% /
+###failed
+###timers
+###release
+/opt/xeonolab/releases/eb68a8a85f6dbfd6b32b918f212bab98ae93cff4
+4
+###backup
+none
+###monitoring
+xeonolab-public-probe.timer active enabled
+xeonolab-pve-restore-drill.timer active enabled
+/var/lib/devagent/logs/public-probe.jsonl|1793930000|12
+/var/lib/devagent/logs/pve-restore-drill.jsonl|1793928600|1
+###errors
+"""
+
+
+def test_parse_host_output_extracts_monitoring_state():
+    report = ops_audit.parse_host_output(MONITORING_SAMPLE)
+    monitoring = report["monitoring"]
+    assert {unit["name"] for unit in monitoring["units"]} == {
+        "xeonolab-public-probe.timer", "xeonolab-pve-restore-drill.timer",
+    }
+    assert monitoring["logs"]["/var/lib/devagent/logs/public-probe.jsonl"] == {"mtime": 1793930000, "lines": 12}
+
+
+def test_evaluate_monitoring_healthy_and_stale():
+    report = ops_audit.parse_host_output(MONITORING_SAMPLE)
+    now = 1793930300  # 5 minutes after the probe log write
+    healthy = ops_audit.evaluate_monitoring(report["monitoring"], "dev-agent", now=now)
+    assert healthy == []
+    stale = ops_audit.evaluate_monitoring(report["monitoring"], "dev-agent", now=now + 3 * 3600)
+    assert any("public probe log is" in item for item in stale)
+
+
+def test_evaluate_monitoring_flags_missing_timers_and_logs():
+    findings = ops_audit.evaluate_monitoring({}, "dev-agent", now=1793930300)
+    joined = "\n".join(findings)
+    assert "public-probe.timer is missing" in joined
+    assert "pve-restore-drill.timer is missing" in joined
+    assert "public probe log is missing" in joined
+    assert "restore drill log is missing" in joined
+
+    inactive = {"units": [
+        {"name": "xeonolab-public-probe.timer", "active": "inactive", "enabled": "enabled"},
+        {"name": "xeonolab-pve-restore-drill.timer", "active": "active", "enabled": "disabled"},
+    ], "logs": {}}
+    joined = "\n".join(ops_audit.evaluate_monitoring(inactive, "dev-agent", now=1793930300))
+    assert "xeonolab-public-probe.timer is inactive" in joined
+    assert "xeonolab-pve-restore-drill.timer is disabled" in joined
+
+
+def test_evaluate_only_checks_monitoring_on_dev_agent_host():
+    report = ops_audit.parse_host_output(SAMPLE)  # hostname web-server, no monitoring section
+    findings = ops_audit.evaluate({"192.168.0.101": report}, {}, allowed_failed=("openipmi.service",))
+    assert not any("monitoring" in item or "probe log" in item for item in findings)

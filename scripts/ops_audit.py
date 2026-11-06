@@ -46,6 +46,8 @@ echo '###release'; readlink /opt/xeonolab/current 2>/dev/null; ls -1 /opt/xeonol
 echo '###backup'; line=$(sudo -n find /var/backups/xeonolab -maxdepth 1 -mindepth 1 -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1); if [ -n "$line" ]; then set -- $line; echo "$2"; echo "${1%%.*}"; else echo none; fi
 echo '###backupdomains'; for d in xelibrary forgejo keycloak desktop data; do p=/var/backups/xeonolab/$d; sudo -n test -d "$p" || continue; line=$(sudo -n find "$p" -maxdepth 1 -mindepth 1 -type d -printf '%T@ %f\n' 2>/dev/null | sort -rn | head -1); if [ -n "$line" ]; then set -- $line; echo "$d $2 ${1%%.*}"; else echo "$d none 0"; fi; done
 echo '###backupunits'; for u in xeonolab-xelibrary-backup.timer xeonolab-forgejo-backup.timer xeonolab-postgres-backup.timer xeonolab-desktop-backup.timer xeonolab-data-backup.timer xeonolab-xelibrary-backup.service xeonolab-forgejo-backup.service xeonolab-postgres-backup.service xeonolab-desktop-backup.service xeonolab-data-backup.service; do load=$(systemctl show -p LoadState --value "$u" 2>/dev/null); [ "$load" = "not-found" ] && continue; echo "$u $(systemctl is-active "$u" 2>/dev/null || true) $(systemctl is-enabled "$u" 2>/dev/null || true) $(systemctl show -p Result --value "$u" 2>/dev/null)"; done
+echo '###monitoring'; for u in xeonolab-public-probe.timer xeonolab-pve-restore-drill.timer; do load=$(systemctl show -p LoadState --value "$u" 2>/dev/null); [ "$load" = "not-found" ] && continue; echo "$u $(systemctl is-active "$u" 2>/dev/null || true) $(systemctl is-enabled "$u" 2>/dev/null || true) $(systemctl show -p Result --value "$u" 2>/dev/null)"; done
+for f in /var/lib/devagent/logs/public-probe.jsonl /var/lib/devagent/logs/pve-restore-drill.jsonl; do sudo -n test -f "$f" || continue; echo "$f|$(sudo -n stat -c %Y "$f" 2>/dev/null)|$(sudo -n sh -c "wc -l < \"$f\"" 2>/dev/null)"; done
 echo '###errors'; sudo -n journalctl --since '24 hours ago' -p err --no-pager -o cat 2>/dev/null | sort | uniq -c | sort -rn | head -6
 """
 
@@ -111,6 +113,26 @@ def parse_host_output(text: str) -> dict:
             "enabled": parts[2] if len(parts) > 2 else "",
             "result": parts[3] if len(parts) > 3 else "",
         })
+    monitoring_units = []
+    monitoring_logs: dict[str, dict] = {}
+    for line in sections.get("monitoring", []):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if "|" in stripped:
+            parts = stripped.split("|")
+            if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+                monitoring_logs[parts[0]] = {"mtime": int(parts[1]), "lines": int(parts[2])}
+            continue
+        parts = stripped.split()
+        if len(parts) >= 3 and parts[0].endswith(".timer"):
+            monitoring_units.append({
+                "name": parts[0],
+                "active": parts[1],
+                "enabled": parts[2],
+                "result": parts[3] if len(parts) > 3 else "",
+            })
+    report["monitoring"] = {"units": monitoring_units, "logs": monitoring_logs}
     report["error_lines"] = [line.strip() for line in sections.get("errors", []) if line.strip()]
     return report
 
@@ -217,11 +239,53 @@ def certificate_days_left(host: str, port: int, ca_file: str | None, timeout: fl
     return (expires - datetime.datetime.now(datetime.UTC).replace(tzinfo=None)).days
 
 
+MONITORING_TIMERS = ("xeonolab-public-probe.timer", "xeonolab-pve-restore-drill.timer")
+PROBE_LOG = "/var/lib/devagent/logs/public-probe.jsonl"
+DRILL_LOG = "/var/lib/devagent/logs/pve-restore-drill.jsonl"
+
+
+def evaluate_monitoring(monitoring: dict, name: str, *, max_probe_age_hours: float = 2.0,
+                        max_restore_drill_age_days: float = 45.0,
+                        now: float | None = None) -> list[str]:
+    """Check that the maintenance-host sampling and restore-drill timers keep running."""
+    findings: list[str] = []
+    units = {unit.get("name"): unit for unit in monitoring.get("units") or []}
+    for expected in MONITORING_TIMERS:
+        unit = units.get(expected)
+        if unit is None:
+            findings.append(f"{name}: monitoring timer {expected} is missing")
+            continue
+        if unit.get("active") not in ("active", "activating"):
+            findings.append(f"{name}: monitoring timer {expected} is {unit.get('active') or 'unknown'}")
+        if unit.get("enabled") not in ("enabled", "enabled-runtime"):
+            findings.append(f"{name}: monitoring timer {expected} is {unit.get('enabled') or 'unknown'}")
+    logs = monitoring.get("logs") or {}
+    current = now if now is not None else datetime.datetime.now(datetime.UTC).timestamp()
+    probe = logs.get(PROBE_LOG)
+    if probe is None:
+        findings.append(f"{name}: public probe log is missing ({PROBE_LOG})")
+    elif current - probe["mtime"] > max_probe_age_hours * 3600:
+        findings.append(
+            f"{name}: public probe log is {(current - probe['mtime']) / 3600:.1f}h old "
+            f"(> {max_probe_age_hours:.0f}h)"
+        )
+    drill = logs.get(DRILL_LOG)
+    if drill is None:
+        findings.append(f"{name}: restore drill log is missing ({DRILL_LOG})")
+    elif current - drill["mtime"] > max_restore_drill_age_days * 86400:
+        findings.append(
+            f"{name}: restore drill log is {(current - drill['mtime']) / 86400:.0f}d old "
+            f"(> {max_restore_drill_age_days:.0f}d)"
+        )
+    return findings
+
+
 def evaluate(reports: dict[str, dict], certificates: dict[str, int | None], *,
              min_free_mib: int = 5120, max_used_percent: int = 90, keep_releases: int = 4,
              release_tolerance: int = 2, max_backup_age_hours: float = 36.0,
              allowed_failed: tuple[str, ...] = DEFAULT_ALLOWED_FAILED,
-             min_cert_days: int = 0) -> list[str]:
+             min_cert_days: int = 0, max_probe_age_hours: float = 2.0,
+             max_restore_drill_age_days: float = 45.0) -> list[str]:
     """Return human-readable findings; an empty list means the fleet looks healthy."""
     findings: list[str] = []
     for host, report in sorted(reports.items()):
@@ -252,6 +316,12 @@ def evaluate(reports: dict[str, dict], certificates: dict[str, int | None], *,
                 findings.append(
                     f"{name}: {domain} backup is {entry['age_hours']:.0f}h old (> {max_backup_age_hours:.0f}h)"
                 )
+        if name == "dev-agent":
+            findings.extend(evaluate_monitoring(
+                report.get("monitoring") or {}, name,
+                max_probe_age_hours=max_probe_age_hours,
+                max_restore_drill_age_days=max_restore_drill_age_days,
+            ))
         for unit in report.get("backup_units", []):
             if unit.get("enabled") == "not-found":
                 continue
@@ -284,6 +354,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="extra release directories tolerated between deploy and prune")
     parser.add_argument("--max-backup-age-hours", type=float, default=36.0,
                         help="maximum age of the newest snapshot per backup domain")
+    parser.add_argument("--max-probe-age-hours", type=float, default=2.0,
+                        help="maximum age of the public-probe log on dev-agent (default: 2)")
+    parser.add_argument("--max-restore-drill-age-days", type=float, default=45.0,
+                        help="maximum age of the restore-drill log on dev-agent (default: 45)")
     parser.add_argument("--allow-failed", action="append", default=None,
                         help="failed unit name to tolerate (repeatable; default openipmi.service)")
     parser.add_argument("--pve-token-file", default="",
@@ -342,7 +416,9 @@ def main(argv: list[str] | None = None) -> int:
                         max_used_percent=args.max_used_percent, keep_releases=args.keep_releases,
                         release_tolerance=args.release_tolerance,
                         max_backup_age_hours=args.max_backup_age_hours,
-                        allowed_failed=allowed_failed)
+                        allowed_failed=allowed_failed,
+                        max_probe_age_hours=args.max_probe_age_hours,
+                        max_restore_drill_age_days=args.max_restore_drill_age_days)
     findings.extend(pve_findings)
     if args.json:
         print(json.dumps({"reports": reports, "certificates": certificates,
