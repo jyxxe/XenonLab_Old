@@ -373,3 +373,11 @@ restore 到空闲 VMID 190 用时 20.1s，80 GiB OS 盘与恢复后配置（4 co
 销毁），JSON 证据追加 `/var/lib/devagent/logs/pve-restore-drill.jsonl`；失败令 unit failed（真实告警信号）。
 测试新增 3 项（归档选择、dry-run 自动选择、参数互斥），全量 pytest 1619 passed；定时器 wrapper 使用 `--compact` 产出单行 JSONL。安装/操作步骤写入
 `docs/runbooks/backup-drills.md` §2.6。
+
+### 2026-11-06 ops_audit 监控自检（#391/#126/#113）
+
+`scripts/ops_audit.py` 新增 `###monitoring` 检查：在 `dev-agent` 主机上要求
+`xeonolab-public-probe.timer` 与 `xeonolab-pve-restore-drill.timer` 均 active+enabled，并检查
+`public-probe.jsonl`（默认 >2h 报 finding）与 `pve-restore-drill.jsonl`（默认 >45 天报 finding）存在且新鲜；
+新增 `--max-probe-age-hours` / `--max-restore-drill-age-days` 阈值参数。4 项新测试（解析、健康/过旧、
+缺失/未启用、仅 dev-agent 生效），全量 pytest 1623 passed。runbook `ops-audit.md` 增加说明与处置表。
