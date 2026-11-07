@@ -144,6 +144,7 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
       '--remote-debugging-port=0',
       '--remote-debugging-address=127.0.0.1',
       '--remote-allow-origins=*',
+      ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []),
       'about:blank',
     ],
     {stdio: 'ignore'},
@@ -538,6 +539,12 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     await cdp.evaluate(`(${setValue})('.ds-modal input', '/数学/复分析')`);
     await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.includes('移动知识表')).click()");
     await waitFor(() => cdp.evaluate("window.libraryFixture.state.moved==='/数学/复分析'"), 'move request recorded');
+
+    await cdp.evaluate("[...document.querySelectorAll('.library-table-actions button')].find(button=>button.innerText.trim()==='重命名').click()");
+    await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-modal'))"), 'rename dialog');
+    await cdp.evaluate(`(${setValue})('.ds-modal input', '重命名后的表')`);
+    await cdp.evaluate("[...document.querySelectorAll('.ds-modal-foot button')].find(button=>button.innerText.includes('重命名知识表')).click()");
+    await waitFor(() => cdp.evaluate("window.libraryFixture.state.renamed==='重命名后的表'"), 'rename request recorded');
 
     await cdp.evaluate("[...document.querySelectorAll('.library-table-actions button')].find(button=>button.innerText.trim()==='删除表').click()");
     await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.ds-modal'))"), 'delete dialog');
