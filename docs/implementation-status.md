@@ -449,3 +449,9 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 “打开重命名对话框 → 输入新名 → 提交 → fixture 记录”的断言，并把该文件**重新接入**
 `run-browser-regression.mjs`（此前未在任何 runner 列表中，属覆盖缺口）。TypeScript `tsc --noEmit` 通过，
 本地单测 browser-acceptance-library 1/1 通过。
+
+### 2026-11-07 定时 vzdump 首次运行复核清单
+
+`docs/runbooks/backup-drills.md` 增加 §2.5.1：首次定时 vzdump（2026-11-07 19:00Z）后的只读复核步骤——
+7 个归档出现检查、`ops_audit` 新鲜度巡检、`pve_restore_drill --latest-archive-for` 再演练、存储/保留与
+记录要求。纯文档，便于维护循环当晚按清单执行。
