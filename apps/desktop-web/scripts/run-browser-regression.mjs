@@ -52,6 +52,7 @@ const tests = [
   'tests/browser-acceptance-search-limit.test.mjs',
   'tests/browser-acceptance-system-audit.test.mjs',
   'tests/browser-acceptance-theorem-recents.test.mjs',
+  'tests/browser-acceptance-library.test.mjs',
 ];
 const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...tests], {
   cwd: appRoot,

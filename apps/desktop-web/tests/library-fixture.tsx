@@ -59,6 +59,7 @@ const state = {
   calls,
   saved: [] as Array<{rowId: string; values: Record<string, any>; revision: number}>,
   moved: '',
+  renamed: '',
   created: [] as any[],
   chatKind: 'iframe' as 'iframe' | 'native',
   openedApp: '',
@@ -172,6 +173,10 @@ async function route(path: string, init: RequestInit = {}): Promise<{data: any; 
   if (clean === '/tables/t1/move') {
     state.moved = body.path;
     return {data: {table_id: 't1', path: body.path}, meta: {}};
+  }
+  if (clean === '/tables/t1' && method === 'PATCH') {
+    state.renamed = body.name;
+    return {data: {table_id: 't1', path: '/数学/分析', name: body.name, table_revision: 14}, meta: {}};
   }
   if (clean === '/tables/t1' && method === 'DELETE') {
     throw new APIRequestError('purge every row before deleting the table', 409, 'TABLE_NOT_EMPTY');

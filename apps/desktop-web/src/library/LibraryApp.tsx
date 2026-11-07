@@ -96,12 +96,13 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('overview');
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const [notice, setNotice] = useState<{tone: 'info' | 'danger' | 'success'; message: string; code?: string; requestId?: string} | null>(null);
-  const [dialog, setDialog] = useState<null | 'new' | 'move' | 'schema' | 'delete'>(null);
+  const [dialog, setDialog] = useState<null | 'new' | 'move' | 'rename' | 'schema' | 'delete'>(null);
   const [askAI, setAskAI] = useState<SelectionAIAction | null>(null);
   const [pendingAIHandoff, setPendingAIHandoff] = useState<string | null>(null);
   const [schemaDraft, setSchemaDraft] = useState<Column[]>([]);
   const [destructiveConfirmed, setDestructiveConfirmed] = useState(false);
   const [movePath, setMovePath] = useState('');
+  const [renameName, setRenameName] = useState('');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const rowNavigation = useRef(0);
@@ -458,6 +459,32 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
     }
   }
 
+  async function renameTable() {
+    if (!table || !Number.isInteger(table.table_revision)) return;
+    const name = renameName.trim();
+    if (!name) {
+      setActionError(new Error('请输入新的表名。'));
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      await apiPage(`/tables/${table.id}`, {
+        method: 'PATCH',
+        headers: {'If-Match': `"revision:${table.table_revision}"`},
+        body: stringifyExactJSON({name}),
+      });
+      setDialog(null);
+      await catalogue.load();
+      await session.refreshMetadata();
+      setNotice({tone: 'success', message: '知识表已重命名。'});
+    } catch (cause) {
+      setActionError(cause);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveSchema() {
     if (!table || !Number.isInteger(table.table_revision)) return;
     const change = classifySchemaChange(table.columns || [], schemaDraft);
@@ -755,6 +782,7 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
               <div className="library-table-actions">
                 <Button size="sm" disabled={!tableWritable} onClick={() => { setInspectorOpen(true); setInspectorTab('fields'); setActiveRowId(null); setSelection(new Set()); }}>新增记录</Button>
                 <Button size="sm" onClick={() => setDialog('move')} disabled={!tableWritable}>移动</Button>
+                <Button size="sm" onClick={() => { setRenameName(table.name); setActionError(null); setDialog('rename'); }} disabled={!tableWritable}>重命名</Button>
                 <Button size="sm" onClick={() => { setSchemaDraft((table.columns || []).map(column => ({...column}))); setDestructiveConfirmed(false); setDialog('schema'); }} disabled={!canAdmin}>字段定义</Button>
                 <Button size="sm" variant="danger" onClick={() => setDialog('delete')} disabled={!canAdmin}>删除表</Button>
                 <Button size="sm" variant="ghost" onClick={() => setInspectorOpen(value => !value)}>{inspectorOpen ? '隐藏 Inspector' : '显示 Inspector'}</Button>
@@ -874,6 +902,20 @@ function LibraryWorkspace({api: sourceAPI, apiPage: sourceAPIPage, apiRaw: sourc
           目标路径
           <Input value={movePath} onChange={event => setMovePath(event.target.value)} placeholder="/数学/分析" />
           <small className="muted">移动需要目标路径的写权限；会清除该表已发布的向量点，需要重新索引。</small>
+        </label>
+      </Modal>
+
+      <Modal
+        open={dialog === 'rename'}
+        title={`重命名 ${table?.name || ''}`}
+        onClose={() => setDialog(null)}
+        footer={<><Button variant="ghost" onClick={() => setDialog(null)}>取消</Button><Button variant="primary" disabled={busy || !renameName.trim() || renameName.trim() === table?.name} onClick={() => void renameTable()}>重命名知识表</Button></>}
+      >
+        {actionError ? <ErrorState title={describeError(actionError, '重命名表').title} requestId={describeError(actionError, '重命名表').requestId} errorCode={describeError(actionError, '重命名表').code} message={describeError(actionError, '重命名表').message} /> : null}
+        <label>
+          新表名
+          <Input value={renameName} onChange={event => setRenameName(event.target.value)} placeholder="新的表名" />
+          <small className="muted">仅修改显示名，路径与 ACL 不变；会清除该表已发布的向量点，需要重新索引。</small>
         </label>
       </Modal>
 

@@ -440,3 +440,12 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 - 测试 `tests/test_table_rename.py` 3 项（成功改名并 bump ETag/权限不变；缺 If-Match 412、重名 409；
   空名 422、无写权限 403、未知表 404）；OpenAPI 重新导出；全量 pytest 1636 passed。
 - UI 暂无“重命名”入口；如需可在后续把该 API 接到表标题操作菜单。
+
+### 2026-11-07 知识库表重命名 UI（#6/#48）
+
+前端把新 `PATCH /api/v1/tables/{tid}` 接到知识库表操作栏：新增“重命名”按钮 + 对话框（预填当前名字、
+空名/未变禁用、`If-Match` 当前 `table_revision`），成功后刷新 catalogue/metadata 并提示；密码/路径/ACL 不变。
+`tests/library-fixture.tsx` 增加 PATCH 处理与 `state.renamed`；`browser-acceptance-library.test.mjs` 增加
+“打开重命名对话框 → 输入新名 → 提交 → fixture 记录”的断言，并把该文件**重新接入**
+`run-browser-regression.mjs`（此前未在任何 runner 列表中，属覆盖缺口）。TypeScript `tsc --noEmit` 通过，
+本地单测 browser-acceptance-library 1/1 通过。
