@@ -455,3 +455,10 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 `docs/runbooks/backup-drills.md` 增加 §2.5.1：首次定时 vzdump（2026-11-07 19:00Z）后的只读复核步骤——
 7 个归档出现检查、`ops_audit` 新鲜度巡检、`pve_restore_drill --latest-archive-for` 再演练、存储/保留与
 记录要求。纯文档，便于维护循环当晚按清单执行。
+
+### 2026-11-07 ops_audit 校验最近一次恢复演练结果（#67/#113）
+
+`ops_audit` 的 dev-agent 监控自检新增对 `pve-restore-drill.jsonl` **最新记录**的解析：要求 `ok=true` 且
+`cleanup.vmid_absent=true`、`volumes_remaining` 为空；演练失败或清理残留会直接报 finding（此前只检查日志新鲜度，
+无法发现“跑过但失败/留残留”）。2 项新测试（记录解析、失败/残留 finding），全量 pytest 1638 passed；
+`ops-audit.md` 更新说明。实测 VM111 最新记录 `ok=true`、今晚新归档、163.0s、清理干净，无 finding。
