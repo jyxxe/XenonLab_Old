@@ -285,3 +285,37 @@ def test_evaluate_cloudflared_healthy_and_findings():
     # Explicitly disabling the threshold keeps only the other checks.
     only_down = ops_audit.evaluate_cloudflared(down, "web-server", max_drops_24h=-1)
     assert not any("lost the edge" in item for item in only_down)
+
+
+DRILL_RECORD = {
+    "ok": True,
+    "archive": "xeonolab-backup:backup/vzdump-qemu-106-2026_11_08-03_01_58.vma.zst",
+    "archive_origin": "latest-for-vmid-106",
+    "seconds": 163.0,
+    "cleanup": {"vmid_absent": True, "volumes_remaining": []},
+}
+
+
+def test_parse_host_output_extracts_last_drill_record():
+    sample = MONITORING_SAMPLE.replace(
+        "###errors",
+        "drill " + __import__("json").dumps(DRILL_RECORD) + "\n###errors",
+    )
+    report = ops_audit.parse_host_output(sample)
+    assert report["drill"]["ok"] is True
+    assert report["drill"]["archive_origin"] == "latest-for-vmid-106"
+    assert report["drill"]["seconds"] == 163.0
+    assert report["drill"]["vmid_absent"] is True
+    assert report["drill"]["volumes_remaining"] == 0
+
+
+def test_evaluate_monitoring_flags_failed_drill_and_leftover_cleanup():
+    monitoring = ops_audit.parse_host_output(MONITORING_SAMPLE)["monitoring"]
+    now = 1793930300
+    healthy = dict(monitoring, drill={"ok": True, "archive": "a", "vmid_absent": True, "volumes_remaining": 0})
+    assert ops_audit.evaluate_monitoring(healthy, "dev-agent", now=now) == []
+    failed = dict(monitoring, drill={"ok": False, "archive": "a", "vmid_absent": True, "volumes_remaining": 0})
+    assert any("last restore drill failed" in item for item in ops_audit.evaluate_monitoring(failed, "dev-agent", now=now))
+    leftover = dict(monitoring, drill={"ok": True, "archive": "a", "vmid_absent": False, "volumes_remaining": 2})
+    joined = "\n".join(ops_audit.evaluate_monitoring(leftover, "dev-agent", now=now))
+    assert "cleanup left a VMID or volumes" in joined

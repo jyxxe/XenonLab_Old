@@ -17,6 +17,8 @@
   `xeonolab-pve-restore-drill.timer` 必须 active+enabled；`public-probe.jsonl` 最新写入超过
   `--max-probe-age-hours`（默认 2h）或缺失、`pve-restore-drill.jsonl` 超过
   `--max-restore-drill-age-days`（默认 45 天）或缺失都会报 finding（防止监控/恢复演练悄悄停摆）。
+  另外会解析**最近一次恢复演练记录**：`ok` 必须为 true，且 `cleanup.vmid_absent=true`、
+  `volumes_remaining` 为空；失败或清理残留都会报 finding。
 - （可选）PVE 的 VM 级 vzdump 巡检：传入 `--pve-token-file` 时，只读查询 `GET /api2/json/cluster/backup` 与备份存储内容，报告任务被禁用、某 VM 无归档、最新归档超过 `--max-vm-backup-age-hours`（默认 192h）。token 只放 HTTP 头、不会写入输出；自签证书需显式 `--pve-insecure` 或 `--pve-ca-file`。
 
   运维循环可以把 PVE API token（`tokenid=secret` 一行）放在 DevAgent 主机的私密文件里，避免每轮重新处理密钥：

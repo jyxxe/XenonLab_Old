@@ -48,6 +48,7 @@ echo '###backupdomains'; for d in xelibrary forgejo keycloak desktop data; do p=
 echo '###backupunits'; for u in xeonolab-xelibrary-backup.timer xeonolab-forgejo-backup.timer xeonolab-postgres-backup.timer xeonolab-desktop-backup.timer xeonolab-data-backup.timer xeonolab-xelibrary-backup.service xeonolab-forgejo-backup.service xeonolab-postgres-backup.service xeonolab-desktop-backup.service xeonolab-data-backup.service; do load=$(systemctl show -p LoadState --value "$u" 2>/dev/null); [ "$load" = "not-found" ] && continue; echo "$u $(systemctl is-active "$u" 2>/dev/null || true) $(systemctl is-enabled "$u" 2>/dev/null || true) $(systemctl show -p Result --value "$u" 2>/dev/null)"; done
 echo '###monitoring'; for u in xeonolab-public-probe.timer xeonolab-pve-restore-drill.timer; do load=$(systemctl show -p LoadState --value "$u" 2>/dev/null); [ "$load" = "not-found" ] && continue; echo "$u $(systemctl is-active "$u" 2>/dev/null || true) $(systemctl is-enabled "$u" 2>/dev/null || true) $(systemctl show -p Result --value "$u" 2>/dev/null)"; done
 for f in /var/lib/devagent/logs/public-probe.jsonl /var/lib/devagent/logs/pve-restore-drill.jsonl; do sudo -n test -f "$f" || continue; echo "$f|$(sudo -n stat -c %Y "$f" 2>/dev/null)|$(sudo -n sh -c "wc -l < \"$f\"" 2>/dev/null)"; done
+drill_line=$(sudo -n tail -n 1 /var/lib/devagent/logs/pve-restore-drill.jsonl 2>/dev/null); [ -n "$drill_line" ] && echo "drill $drill_line"
 echo '###cloudflared'; if systemctl show -p LoadState --value cloudflared.service 2>/dev/null | grep -q not-found; then echo absent; else echo "version $(/usr/bin/cloudflared --version 2>/dev/null | head -1 | cut -d' ' -f3)"; echo "active $(systemctl is-active cloudflared 2>/dev/null || true)"; echo "restarts $(systemctl show -p NRestarts --value cloudflared 2>/dev/null || echo 0)"; start=$(systemctl show -p ActiveEnterTimestamp --value cloudflared.service 2>/dev/null); echo "drops $(sudo -n journalctl -u cloudflared --since \"$start\" --no-pager 2>/dev/null | grep -c 'Lost connection with the edge')"; echo "ha $(sudo -n curl -s --max-time 5 http://127.0.0.1:20241/metrics 2>/dev/null | grep '^cloudflared_tunnel_ha_connections ' | tail -1 | awk '{print $2}')"; fi
 echo '###errors'; sudo -n journalctl --since '24 hours ago' -p err --no-pager -o cat 2>/dev/null | sort | uniq -c | sort -rn | head -6
 """
@@ -134,6 +135,25 @@ def parse_host_output(text: str) -> dict:
                 "result": parts[3] if len(parts) > 3 else "",
             })
     report["monitoring"] = {"units": monitoring_units, "logs": monitoring_logs}
+    drill = None
+    for line in sections.get("monitoring", []):
+        stripped = line.strip()
+        if not stripped.startswith("drill "):
+            continue
+        try:
+            record = json.loads(stripped[len("drill "):])
+        except ValueError:
+            continue
+        cleanup = record.get("cleanup") or {}
+        drill = {
+            "ok": bool(record.get("ok")),
+            "archive": record.get("archive"),
+            "archive_origin": record.get("archive_origin"),
+            "seconds": record.get("seconds"),
+            "vmid_absent": bool(cleanup.get("vmid_absent")),
+            "volumes_remaining": len(cleanup.get("volumes_remaining") or []),
+        }
+    report["drill"] = drill
     cloudflared: dict = {"present": False}
     for line in sections.get("cloudflared", []):
         stripped = line.strip()
@@ -320,6 +340,15 @@ def evaluate_monitoring(monitoring: dict, name: str, *, max_probe_age_hours: flo
             f"{name}: restore drill log is {(current - drill['mtime']) / 86400:.0f}d old "
             f"(> {max_restore_drill_age_days:.0f}d)"
         )
+    record = monitoring.get("drill")
+    if isinstance(record, dict):
+        if not record.get("ok"):
+            findings.append(f"{name}: last restore drill failed ({record.get('archive') or 'unknown archive'})")
+        if record.get("vmid_absent") is not True or record.get("volumes_remaining"):
+            findings.append(
+                f"{name}: last restore drill cleanup left a VMID or volumes "
+                f"(vmid_absent={record.get('vmid_absent')}, volumes={record.get('volumes_remaining')})"
+            )
     return findings
 
 
