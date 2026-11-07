@@ -427,6 +427,52 @@
           }
         },
         "description": "Requires `xelibrary:admin` scope and the current table ETag. Deletes empty tables only; rows, attachments, vector references, active index jobs, and active uploads must be cleared first."
+      },
+      "patch": {
+        "summary": "Rename",
+        "description": "Rename a table without changing its path or ACL; bumps the table revision.",
+        "operationId": "rename_api_v1_tables__tid__patch",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Rename"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/tables/{tid}/move": {
@@ -4393,6 +4439,21 @@
         },
         "type": "object",
         "title": "RebuildIndexesRequest"
+      },
+      "Rename": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "Rename"
       },
       "RepairRequest": {
         "properties": {
