@@ -428,3 +428,15 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 三分钟只读判定（LAN/公网/连接器）、症状分支（530 账号侧、间歇 TLS 超时=上游晚高峰丢包（含 2026-11-06
 逐小时实测）、502 源站、连接器故障/回滚、证书/域名）、证据采集命令、升级与边界、事后记录；
 `monitoring.md` 增加交叉引用。纯文档，无代码/契约变化。
+
+### 2026-11-07 表重命名 API 增量（#6）
+
+此前后端只能移动表路径，不能改显示名（无 `PATCH /api/v1/tables/{tid}`）。新增：
+
+- `PATCH /api/v1/tables/{tid}`（`xelibrary:write`，body `{"name": ...}`，需 `If-Match` 当前 ETag）：
+  仅更新 catalogue 显示名并把 `table_revision` +1（路径/ACL 资源不变，路径 ACL 继续生效）；
+  同路径重名返回 409 `TABLE_EXISTS`；重命名会同步清除该表已发布向量点（与 move 一致，需重新索引）；
+  操作写 journal `table.rename` 与 `table.renamed` 审计。
+- 测试 `tests/test_table_rename.py` 3 项（成功改名并 bump ETag/权限不变；缺 If-Match 412、重名 409；
+  空名 422、无写权限 403、未知表 404）；OpenAPI 重新导出；全量 pytest 1636 passed。
+- UI 暂无“重命名”入口；如需可在后续把该 API 接到表标题操作菜单。

@@ -343,6 +343,10 @@ class Move(BaseModel):
     path: str
 
 
+class Rename(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
 class Restore(BaseModel):
     revision: int = Field(ge=1)
 
@@ -1479,6 +1483,39 @@ def create_app(settings=None):
             raise
         audit(actor, "table.moved", tid)
         return response(request, {"table_id": tid, "path": path})
+
+    @app.patch("/api/v1/tables/{tid}")
+    def rename(tid: str, body: Rename, request: Request, actor=Depends(scope("xelibrary:write"))):
+        """Rename a table without changing its path or ACL; bumps the table revision."""
+        table = authorize(actor, tid, "write")
+        name = body.name
+        operation_id = begin_operation("table.rename", tid, {"from": table["name"], "to": name})
+        new_revision = None
+        try:
+            with table_transaction(tid) as db, transaction(catalogue) as catalog:
+                meta = metadata(db)
+                precondition(request, meta["table_revision"])
+                # Renaming changes derived search metadata, so drop points like move does.
+                remove_qdrant_points(tid)
+                try:
+                    catalog.execute("UPDATE tables SET name=? WHERE id=?", (name, tid))
+                except Exception:
+                    raise APIError(409, "TABLE_EXISTS", "table name already exists in path") from None
+                db.execute(
+                    "UPDATE __xl_meta SET table_revision=table_revision+1,updated_at=?",
+                    (now(),),
+                )
+                new_revision = db.execute("SELECT table_revision FROM __xl_meta").fetchone()[0]
+            finish_operation(operation_id)
+        except BaseException as exc:
+            abort_operation(operation_id, exc)
+            raise
+        audit(actor, "table.renamed", tid)
+        return JSONResponse(
+            response(request, {"table_id": tid, "path": table["path"], "name": name,
+                               "table_revision": new_revision}),
+            headers={"ETag": etag(new_revision)},
+        )
 
     @app.post("/api/v1/tables/{tid}/rows", status_code=201)
     def create_row(tid: str, body: RowWrite, request: Request, actor=Depends(scope("xelibrary:write"))):
