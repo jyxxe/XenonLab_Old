@@ -65,6 +65,32 @@ VM104 2×8T、VM100 200G、VM103 2T 仍未纳入任何 VM 级归档。
 该存储与 PVE 同宿主，因此**不是 offsite**；容量：7 台 OS-only 归档约 20 GiB/轮（实测 VM106 1.67 GiB），
 quota 200G 下 keep-last 2 余量充足（当前 used 61.2G / avail 153.5G）。
 
+### 2.5.1 定时 vzdump 运行后复核（首次 2026-11-07 19:00Z）
+
+任务 `751ca682-95ab-4900-b0bb-ed6deaa427b6` 在 **PVE 本地周日 03:00（周六 19:00 UTC）** 自动备份
+VM101/105/106/107/109/110/111。首次运行后按以下只读步骤复核（约 30–40 分钟内 7 个归档应全部出现）：
+
+```sh
+# 1) 归档与存储（PVE API token；期望 7 个新 ctime 的 vzdump-qemu-<vmid>-*.vma.zst）
+curl -s -k -H "Authorization: PVEAPIToken=..." \
+  'https://192.168.0.10:8006/api2/json/nodes/pve/storage/xeonolab-backup/content?content=backup' \
+  | python3 -c 'import json,sys; [print(x["volid"].split("/")[-1], x.get("size")) for x in json.load(sys.stdin)["data"]]'
+# 2) 新鲜度巡检（7 台应在 24h 内；keep-last 2 生效后旧归档应减少）
+cd /var/lib/devagent/checkout && uv run python scripts/ops_audit.py \
+  --hosts 192.168.0.101,192.168.0.104,192.168.0.106,192.168.0.107,192.168.0.109,192.168.0.110,192.168.0.111 \
+  --key ~/.ssh/... --known-hosts ~/.ssh/known_hosts \
+  --pve-token-file /var/lib/devagent/.config/devagent/pve-api-token --pve-insecure
+# 3) 用最新归档再跑一次隔离恢复演练（dry-run 先看计划，加 --execute 实跑）
+uv run python scripts/pve_restore_drill.py --latest-archive-for 106 --vmid 190 \
+  --storage local-lvm --source-vmid 106 \
+  --token-file /var/lib/devagent/.config/devagent/pve-api-token --insecure --execute
+```
+
+- 归档未出现：先看 PVE 任务日志（`/var/log/vzdump`）与 `xeonolab-backup` 剩余空间；不要手动删除旧归档，
+  `keep-last 2` 由任务自身执行；
+- 存储余量：首次运行前 used 61.2G / avail 153.5G（约 +20G/轮，估算充足）；
+- 记录：把 7 台归档列表与演练结果评论到 #113，并写入 `admin-runlog.md`。
+
 ## 2.6 VM 级恢复演练（2026-11-04，VM106）
 
 对 2026-11-04 手动 vzdump 的 VM106 归档做了一次**完全不触碰生产**的恢复演练：只用 PVE API token，
