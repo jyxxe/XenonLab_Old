@@ -462,3 +462,10 @@ LAN 6/6 4ms。后续 24–48h 用 `public_probe_report` 与 cloudflared 日志�
 `cleanup.vmid_absent=true`、`volumes_remaining` 为空；演练失败或清理残留会直接报 finding（此前只检查日志新鲜度，
 无法发现“跑过但失败/留残留”）。2 项新测试（记录解析、失败/残留 finding），全量 pytest 1638 passed；
 `ops-audit.md` 更新说明。实测 VM111 最新记录 `ok=true`、今晚新归档、163.0s、清理干净，无 finding。
+
+### 2026-11-08 cloudflared 2026.10.7 升级 48h 结论
+
+48h 观察（2026-11-06 06:19Z–11-08 06:19Z）：连接器边缘掉线 **6 次/48h**（升级前 24 次/24h）、NRestarts=0；
+公网桌面 probe 48h 1566/1686（92.9%）、最近 24h 829/864（95.9%），失败仍为握手/读超时（无 5xx），LAN 100%；
+判断剩余握手窗口属上游/WAN 到边缘路径问题。**决定保留 2026.10.7**，回滚路径与观察/升级方法写入
+`docs/runbooks/monitoring.md`。`/var/backups/cloudflared/cloudflared-2026.9.3`（SHA256 `77e26d8d…`）保留。
