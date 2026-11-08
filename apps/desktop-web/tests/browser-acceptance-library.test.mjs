@@ -315,10 +315,11 @@ test('XeLibrary application acceptance: navigation, table, inspector, search, qu
     assert.equal(await cdp.evaluate("[...document.querySelectorAll('.attachment-panel li')].find(li=>li.innerText.includes('proof.pdf')).innerText.includes('预览')"), false, 'PDF preview stays unsupported');
     await cdp.evaluate("(() => {const li=[...document.querySelectorAll('.attachment-panel li')].find(item=>item.innerText.includes('image.png'));li.querySelector('button[data-preview]').click();})()");
     try { await waitFor(() => cdp.evaluate("Boolean(document.querySelector('.attachment-preview img'))"), 'PNG preview image', 3000); } catch (error) { const diag = await cdp.evaluate(`(() => ({panel:document.querySelector('.attachment-panel')?.innerText, buttons:[...document.querySelectorAll('.attachment-panel button')].map(b=>b.innerText), calls:window.libraryFixture.calls.filter(c=>c.path.includes('attachments')).map(c=>c.path), overlay:Boolean(document.querySelector('.attachment-preview-overlay'))}))()`); throw new Error('preview diagnostics: '+JSON.stringify(diag)); }
+    await waitFor(() => cdp.evaluate("(() => {const image=document.querySelector('.attachment-preview img');return Boolean(image && image.complete && image.naturalWidth >= 1);})()"), 'PNG preview image decoded', 5000);
     const previewState = await cdp.evaluate(`(() => {const image=document.querySelector('.attachment-preview img');return {src:image.getAttribute('src'),complete:image.complete,naturalWidth:image.naturalWidth,dialog:document.querySelector('.attachment-preview-overlay')?.getAttribute('role')};})()`);
     assert.ok(previewState.src.startsWith('blob:'), 'preview uses a local blob URL');
-    assert.equal(previewState.complete, true);
-    assert.ok(previewState.naturalWidth >= 1, 'preview image decoded');
+    assert.ok(previewState.complete, 'preview image decoded');
+    assert.ok(previewState.naturalWidth >= 1, 'preview image natural width non-zero');
     assert.equal(previewState.dialog, 'dialog');
     assert.ok(await cdp.evaluate("window.libraryFixture.calls.some(call=>call.path.includes('/attachments/att-2/preview'))"), 'preview requested the isolated endpoint');
     await cdp.evaluate("document.querySelector('.attachment-preview button').click()");
