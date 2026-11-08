@@ -119,6 +119,19 @@ precheck 输出 **`UDP Connectivity ... FAIL` / `Allow outbound QUIC traffic on 
 - 观察项：未来 24–48h 的 `Lost connection with the edge` 次数与 `public-probe` 失败轮次
   （`scripts/public_probe_report.py --since-hours 48`）对比升级前（24 次/24h、约 4/6 成功窗口）。
 
+**48h 结论（2026-11-08 06:19Z，保留 2026.10.7）**：
+
+- 连接器：48h 内 `Lost connection with the edge` 共 **6 次**（升级前 24 次/24h），NRestarts=0，无进程重启；
+- 公网桌面 probe：48h **1566/1686（92.9%）**、最近 24h **829/864（95.9%）**，失败仍集中在
+  `handshake timeout`（106）/`read timeout`（13）/连接被关（1），**没有 5xx**；LAN 1686/1686（4ms）；
+- 逐小时仍呈“坏窗口↔100% 窗口”交替（多为 1–2 小时窗口，最差单小时约 43–83%，随后恢复 100%），
+  与 A 记录直连正常、连接器不掉线的事实一起，判断为**上游/WAN 到 Cloudflare 边缘的握手问题**，
+  不是隧道或源站故障；
+- 处置：保留 2026.10.7；回滚路径继续可用（旧二进制 `/var/backups/cloudflared/cloudflared-2026.9.3`，
+  SHA256 `77e26d8d…`）；`ops_audit` 的 cloudflared 检查（启动以来掉线 >12、HA=0、非 active）继续告警，
+  probe 报告用于跟踪握手窗口；不在本机做进一步网络改动，若用户侧同窗口异常再按
+  `public-edge-incident.md` 升级 WAN/账号侧。
+
 
 
 ### 定时采样（VM111，10 分钟窗口）
