@@ -194,7 +194,12 @@
 }
 @media (max-width:767px){
   .knowledge{flex-direction:column}
-  .knowledge-sidebar{width:100%;max-height:38vh;border-right:0;border-bottom:1px solid var(--border)}
+  /* The sidebar is the scroll container on compact screens; letting the inner
+     tree flex inside a max-height column previously collapsed it to 0px,
+     which made every knowledge table unreachable. */
+  .knowledge-sidebar{width:100%;max-height:38vh;overflow:auto;border-right:0;border-bottom:1px solid var(--border)}
+  .library-tree-section{flex:0 0 auto;min-height:0}
+  .library-tree-section .library-tree{flex:0 0 auto;overflow:visible}
   .knowledge-inspector{width:min(320px,92vw)}
   .history-diff{grid-template-columns:1fr}
   .library-query-history li{grid-template-columns:minmax(0,1fr) auto}
